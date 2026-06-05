@@ -14,7 +14,7 @@
       "min_defect_area_px": 120,
       "max_bad_sector_ratio": 0.18,
       "algorithm": "hybrid_patchcore_padim",
-      "image_size": 512
+      "image_size": 384
     },
     {
       "id": "BF-002",
@@ -29,7 +29,7 @@
       "min_defect_area_px": 120,
       "max_bad_sector_ratio": 0.18,
       "algorithm": "hybrid_patchcore_padim",
-      "image_size": 512
+      "image_size": 384
     },
     {
       "id": "BF-003",
@@ -44,7 +44,7 @@
       "min_defect_area_px": 140,
       "max_bad_sector_ratio": 0.18,
       "algorithm": "hybrid_patchcore_padim",
-      "image_size": 512
+      "image_size": 384
     },
     {
       "id": "BF-004",
@@ -59,7 +59,7 @@
       "min_defect_area_px": 140,
       "max_bad_sector_ratio": 0.18,
       "algorithm": "hybrid_patchcore_padim",
-      "image_size": 512
+      "image_size": 384
     }
   ]
 }

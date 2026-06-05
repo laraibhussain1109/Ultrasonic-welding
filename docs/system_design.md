@@ -20,13 +20,14 @@ The deployed anomaly model is a hybrid of PatchCore and PaDiM.
 ### PaDiM branch
 
 - Use the same CNN patch grid.
-- Fit a per-patch multivariate Gaussian distribution over normal embeddings.
+- Fit a per-patch multivariate Gaussian distribution over a memory-bounded random projection of normal embeddings.
 - Score each inspection patch with Mahalanobis distance.
 
 ### Hybrid decision
 
 - Normalize both score maps robustly.
 - Fuse maps using configurable weights.
+- Bound RAM use by pooling CNN features to a 28×28 grid, projecting to 256 dimensions, fitting PaDiM on 128 selected components, sampling up to 300 training images, and limiting PatchCore memory/candidate patches.
 - Resize to the camera display size and smooth.
 - Restrict analysis to the annular fin/weld region.
 - Fail parts by defect area or abnormal fin-sector distribution.

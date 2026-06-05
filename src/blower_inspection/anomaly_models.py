@@ -33,17 +33,21 @@ import numpy as np
 from .config import PartModelConfig
 from .trainer import InspectionResult, clean_mask, fan_ring_mask, list_images, sector_statistics
 
-HYBRID_MODEL_VERSION = 2
+HYBRID_MODEL_VERSION = 3
 
 
 @dataclass(frozen=True)
 class HybridTrainingSettings:
-    image_size: int = 512
+    image_size: int = 384
     backbone: str = "wide_resnet50_2"
     embedding_layers: tuple[str, ...] = ("layer2", "layer3")
+    embedding_grid_size: int = 28
+    projection_dim: int = 256
+    max_training_images: int = 300
     coreset_ratio: float = 0.10
-    max_coreset_patches: int = 25000
-    padim_components: int = 384
+    max_coreset_patches: int = 4096
+    coreset_candidate_patches: int = 20000
+    padim_components: int = 128
     patchcore_weight: float = 0.55
     padim_weight: float = 0.45
     batch_size: int = 4
@@ -110,8 +114,9 @@ class HybridPatchcorePadimInspector:
                 f"Industrial hybrid training needs at least 20 normal images in {config.normal_image_dir}; "
                 f"found {len(image_paths)}. Use 100+ per model for production validation."
             )
+        used_image_paths = self._select_training_images(image_paths)
         torch = require_module("torch")
-        embeddings, grid_shape = self._extract_dataset_embeddings(image_paths)
+        embeddings, grid_shape = self._extract_dataset_embeddings(used_image_paths)
         embeddings_np = embeddings.cpu().numpy().astype(np.float32)
         rng = np.random.default_rng(self.settings.random_seed)
         if embeddings_np.shape[1] > self.settings.padim_components:
@@ -129,6 +134,7 @@ class HybridPatchcorePadimInspector:
                 "model_config": asdict(config),
                 "trained_at": datetime.now().isoformat(),
                 "source_count": len(image_paths),
+                "used_source_count": len(used_image_paths),
                 "grid_shape": grid_shape,
                 "feature_dim": embeddings_np.shape[1],
                 "padim_dims": selected_dims.tolist(),
@@ -229,8 +235,34 @@ class HybridPatchcorePadimInspector:
                     fmap = torch.nn.functional.interpolate(fmap, size=target_hw, mode="bilinear", align_corners=False)
                 maps.append(fmap)
             embedding = torch.cat(maps, dim=1)
+            embedding = torch.nn.functional.adaptive_avg_pool2d(
+                embedding,
+                (self.settings.embedding_grid_size, self.settings.embedding_grid_size),
+            )
+            embedding = self._project_embedding(embedding, torch)
             embedding = torch.nn.functional.normalize(embedding, p=2, dim=1)
             return embedding.cpu(), tuple(int(v) for v in embedding.shape[-2:])
+
+    def _select_training_images(self, image_paths: list[Path]) -> list[Path]:
+        if len(image_paths) <= self.settings.max_training_images:
+            return image_paths
+        rng = random.Random(self.settings.random_seed)
+        selected = sorted(rng.sample(image_paths, self.settings.max_training_images))
+        return selected
+
+    def _projection_matrix(self, in_channels: int, torch: Any) -> Any:
+        out_channels = min(self.settings.projection_dim, in_channels)
+        if out_channels == in_channels:
+            return torch.eye(in_channels, dtype=torch.float32)
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(self.settings.random_seed + in_channels + out_channels)
+        matrix = torch.randn(out_channels, in_channels, generator=generator, dtype=torch.float32)
+        matrix = matrix / torch.sqrt(torch.tensor(float(out_channels), dtype=torch.float32))
+        return matrix
+
+    def _project_embedding(self, embedding: Any, torch: Any) -> Any:
+        matrix = self._projection_matrix(embedding.shape[1], torch).to(embedding.device)
+        return torch.einsum("oc,bchw->bohw", matrix, embedding)
 
     def _preprocess_path(self, path: Path) -> Any:
         image = cv2.imread(str(path))
@@ -252,15 +284,21 @@ class HybridPatchcorePadimInspector:
     def _build_patchcore_memory(self, embeddings: Any, torch: Any) -> Any:
         total = embeddings.shape[0]
         target = min(max(1, int(total * self.settings.coreset_ratio)), self.settings.max_coreset_patches, total)
-        random.seed(self.settings.random_seed)
-        selected = [random.randrange(total)]
-        distances = torch.cdist(embeddings[selected], embeddings).squeeze(0)
+        candidate_count = min(total, max(target, self.settings.coreset_candidate_patches))
+        rng = random.Random(self.settings.random_seed)
+        if candidate_count < total:
+            candidate_indices = torch.tensor(rng.sample(range(total), candidate_count), dtype=torch.long)
+            candidates = embeddings[candidate_indices]
+        else:
+            candidates = embeddings
+        selected = [rng.randrange(candidate_count)]
+        distances = torch.cdist(candidates[selected], candidates).squeeze(0)
         while len(selected) < target:
             idx = int(torch.argmax(distances).item())
             selected.append(idx)
-            new_distance = torch.cdist(embeddings[idx:idx + 1], embeddings).squeeze(0)
+            new_distance = torch.cdist(candidates[idx:idx + 1], candidates).squeeze(0)
             distances = torch.minimum(distances, new_distance)
-        return embeddings[selected].contiguous()
+        return candidates[selected].contiguous()
 
     def _fit_padim(self, embeddings: np.ndarray, grid_shape: tuple[int, int], selected_dims: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         h, w = grid_shape

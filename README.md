@@ -70,7 +70,7 @@ data/training/BF-004/normal
 For each part model:
 
 1. Mount the camera rigidly and lock exposure, gain, focus, white balance, and lighting.
-2. Capture at least 100 known-good parts; the software enforces a minimum of 20 images for hybrid training.
+2. Capture at least 100 known-good parts; the software enforces a minimum of 20 images and uses a deterministic, memory-bounded sample of up to 300 images for hybrid training.
 3. Put images in the model's `normal_image_dir`.
 4. Login as `admin`.
 5. Select the model and press **TRAIN SELECTED MODEL**.
@@ -92,4 +92,5 @@ python -m blower_inspection.cli inspect BF-001 path/to/test_image.png
 - Use diffuse ring/coaxial lighting for weld consistency and a low-angle secondary light for hairline cracks.
 - Keep a master set of golden PASS/FAIL samples for every model and re-run them after any threshold or lighting change.
 - Store failed overlays and JSON reports for process engineering review.
+- The hybrid trainer pools deep features to a 28×28 patch grid, projects them to 256 dimensions, caps PaDiM at 128 components, and caps PatchCore memory to prevent multi-gigabyte covariance allocations on line PCs.
 - Use line PLC handshaking before enabling automatic reject gates.
