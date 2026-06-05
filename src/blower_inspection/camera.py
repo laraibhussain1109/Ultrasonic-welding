@@ -4,9 +4,17 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import sys
 
 import cv2
 import numpy as np
+
+
+def _preferred_capture_backend() -> int:
+    """Return an OpenCV backend suitable for the current operating system."""
+    if sys.platform.startswith("win") and hasattr(cv2, "CAP_DSHOW"):
+        return cv2.CAP_DSHOW
+    return cv2.CAP_ANY
 
 
 class USBCamera:
@@ -19,7 +27,7 @@ class USBCamera:
         self.capture: cv2.VideoCapture | None = None
 
     def open(self) -> None:
-        self.capture = cv2.VideoCapture(self.index, cv2.CAP_DSHOW if hasattr(cv2, "CAP_DSHOW") else 0)
+        self.capture = cv2.VideoCapture(self.index, _preferred_capture_backend())
         if not self.capture.isOpened():
             raise RuntimeError(f"Unable to open camera index {self.index}")
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)

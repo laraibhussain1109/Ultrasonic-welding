@@ -111,6 +111,26 @@ class TrainWorker(QThread):
             self.failed.emit(f"TRAINING FAILED {self.model.id}: {exc}")
 
 
+class InspectionWorker(QThread):
+    finished_result = pyqtSignal(object, float)
+    failed = pyqtSignal(str)
+
+    def __init__(self, inspector: HybridPatchcorePadimInspector, model: PartModelConfig, frame) -> None:
+        super().__init__()
+        self.inspector = inspector
+        self.model = model
+        self.frame = frame.copy()
+
+    def run(self) -> None:
+        start = time.perf_counter()
+        try:
+            result = self.inspector.inspect(self.model, self.frame, save_outputs=False)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        self.finished_result.emit(result, (time.perf_counter() - start) * 1000.0)
+
+
 class InspectionWindow(QWidget):
     def __init__(self, user: User) -> None:
         super().__init__()
@@ -120,6 +140,12 @@ class InspectionWindow(QWidget):
         self.inspector = HybridPatchcorePadimInspector()
         self.camera = USBCamera(width=3840, height=2160)
         self.frame = None
+        self.inspection_running = False
+        self.inference_worker: InspectionWorker | None = None
+        self.last_inference_at = 0.0
+        self.inference_interval_s = 0.05
+        self.fps_frame_count = 0
+        self.fps_started_at = time.perf_counter()
         self.stats = {"inspected": 0, "passed": 0, "failed": 0}
         self.started_at = time.time()
         self.train_worker: TrainWorker | None = None
@@ -129,6 +155,8 @@ class InspectionWindow(QWidget):
         self.clock = QTimer(self)
         self.clock.timeout.connect(self._tick)
         self.clock.start(500)
+        self.live_timer = QTimer(self)
+        self.live_timer.timeout.connect(self._process_live_frame)
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -178,7 +206,7 @@ class InspectionWindow(QWidget):
         layout.addWidget(self.model_combo)
         start = QPushButton("▶   START INSPECTION")
         start.setObjectName("primary")
-        start.clicked.connect(self.inspect_current)
+        start.clicked.connect(self.start_inspection)
         layout.addWidget(start)
         calibrate = QPushButton("⊕   CALIBRATE")
         calibrate.clicked.connect(self.load_image)
@@ -307,22 +335,52 @@ class InspectionWindow(QWidget):
         self.show_frame(frame)
         self.log.addItem(f"LOADED {Path(path).name}")
 
-    def inspect_current(self) -> None:
-        if self.frame is None:
-            try:
-                self.camera.open()
-                self.frame = self.camera.read()
-                self.online_label.setText("● ONLINE")
-            except Exception as exc:
-                QMessageBox.critical(self, "Camera error", str(exc))
-                return
-        start = time.perf_counter()
-        try:
-            result = self.inspector.inspect(self.selected_model(), self.frame)
-        except Exception as exc:
-            QMessageBox.critical(self, "Inspection error", str(exc))
+    def start_inspection(self) -> None:
+        if self.inspection_running:
             return
-        latency_ms = (time.perf_counter() - start) * 1000.0
+        try:
+            self.camera.open()
+        except Exception as exc:
+            QMessageBox.critical(self, "Camera error", str(exc))
+            return
+        self.inspection_running = True
+        self.online_label.setText("● ONLINE")
+        self.status_badge.setObjectName("statusStandby")
+        self.status_badge.setText("RUNNING")
+        self.status_badge.style().unpolish(self.status_badge)
+        self.status_badge.style().polish(self.status_badge)
+        self.fps_frame_count = 0
+        self.fps_started_at = time.perf_counter()
+        self.last_inference_at = 0.0
+        self.log.addItem(f"LIVE INSPECTION STARTED {self.selected_model().id}")
+        self.live_timer.start(33)
+
+    def _process_live_frame(self) -> None:
+        if not self.inspection_running:
+            return
+        try:
+            frame = self.camera.read()
+        except Exception as exc:
+            self._handle_live_error(f"Camera frame error: {exc}")
+            return
+        self.frame = frame
+        self.show_frame(frame)
+        self.fps_frame_count += 1
+        now = time.perf_counter()
+        if (
+            self.inference_worker is None
+            and now - self.last_inference_at >= self.inference_interval_s
+        ):
+            self.last_inference_at = now
+            self.inference_worker = InspectionWorker(self.inspector, self.selected_model(), frame)
+            self.inference_worker.finished_result.connect(self._handle_inspection_result)
+            self.inference_worker.failed.connect(lambda message: self._handle_live_error(f"Inspection error: {message}"))
+            self.inference_worker.finished.connect(self._clear_inference_worker)
+            self.inference_worker.start()
+
+    def _handle_inspection_result(self, result, latency_ms: float) -> None:
+        if not self.inspection_running:
+            return
         self.stats["inspected"] += 1
         self.stats["passed" if result.is_pass else "failed"] += 1
         self.update_stats()
@@ -338,10 +396,20 @@ class InspectionWindow(QWidget):
         )
         self.latency_top.setText(f"LATENCY:  {latency_ms:.0f} ms")
         self.log.addItem(f"{result.status} | {self.selected_model().id} | score={result.anomaly_score:.3f}")
-        if result.overlay_path:
-            overlay = cv2.imread(str(result.overlay_path))
-            if overlay is not None:
-                self.show_frame(overlay)
+
+    def _clear_inference_worker(self) -> None:
+        if self.inference_worker is not None:
+            self.inference_worker.deleteLater()
+            self.inference_worker = None
+
+    def _handle_live_error(self, message: str) -> None:
+        if not self.inspection_running:
+            return
+        self.stop_camera()
+        QMessageBox.critical(self, "Live inspection stopped", message)
+
+    def inspect_current(self) -> None:
+        self.start_inspection()
 
     def show_frame(self, frame) -> None:
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) if frame.ndim == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
@@ -362,7 +430,10 @@ class InspectionWindow(QWidget):
         self.train_worker.start()
 
     def stop_camera(self) -> None:
+        self.inspection_running = False
+        self.live_timer.stop()
         self.camera.close()
+        self.fps_top.setText("FPS:  -")
         self.online_label.setText("● OFFLINE")
         self.status_badge.setObjectName("statusStandby")
         self.status_badge.setText("STANDBY")
@@ -389,6 +460,9 @@ class InspectionWindow(QWidget):
     def _tick(self) -> None:
         self.time_label.setText(time.strftime("%H:%M:%S"))
         self.speed_top.setText(f"SURFACE SPEED:  {self.speed_slider.value() / 10:.1f} m/s")
+        if self.inspection_running:
+            elapsed = max(time.perf_counter() - self.fps_started_at, 0.001)
+            self.fps_top.setText(f"FPS:  {self.fps_frame_count / elapsed:.1f}")
 
 
 def main() -> None:
