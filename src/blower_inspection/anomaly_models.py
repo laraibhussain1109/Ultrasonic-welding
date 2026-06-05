@@ -1,0 +1,332 @@
+"""Industrial anomaly models for blower fan inspection.
+
+This module implements a production-oriented hybrid of PatchCore and PaDiM:
+
+- PatchCore keeps a coreset memory bank of normal deep patch embeddings and uses
+  nearest-neighbour distance at inspection time.
+- PaDiM fits a per-patch Gaussian distribution over normal embeddings and uses
+  Mahalanobis distance at inspection time.
+- Hybrid inference normalizes and fuses both score maps, then applies the same
+  fin/weld ROI and sector logic used by the rest of the application.
+
+The implementation intentionally loads heavyweight AI dependencies lazily inside
+methods. This lets authentication/configuration tests run on machines that do not
+have the GPU stack installed, while deployment environments can install the full
+`industrial` extra from `pyproject.toml`.
+"""
+
+from __future__ import annotations
+
+import importlib
+import importlib.util
+import json
+import math
+import random
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import cv2
+import numpy as np
+
+from .config import PartModelConfig
+from .trainer import InspectionResult, clean_mask, fan_ring_mask, list_images, sector_statistics
+
+HYBRID_MODEL_VERSION = 2
+
+
+@dataclass(frozen=True)
+class HybridTrainingSettings:
+    image_size: int = 512
+    backbone: str = "wide_resnet50_2"
+    embedding_layers: tuple[str, ...] = ("layer2", "layer3")
+    coreset_ratio: float = 0.10
+    max_coreset_patches: int = 25000
+    padim_components: int = 384
+    patchcore_weight: float = 0.55
+    padim_weight: float = 0.45
+    batch_size: int = 4
+    random_seed: int = 42
+
+
+def require_module(module_name: str) -> Any:
+    spec = importlib.util.find_spec(module_name)
+    if spec is None:
+        raise RuntimeError(
+            f"Missing dependency '{module_name}'. Install the industrial stack with "
+            "`pip install -e .[industrial]` on the deployment PC."
+        )
+    return importlib.import_module(module_name)
+
+
+def robust_normalize(score_map: np.ndarray) -> np.ndarray:
+    score = score_map.astype(np.float32)
+    lo = float(np.percentile(score, 1.0))
+    hi = float(np.percentile(score, 99.5))
+    if hi <= lo + 1e-6:
+        return np.zeros_like(score, dtype=np.float32)
+    return np.clip((score - lo) / (hi - lo), 0.0, 1.0)
+
+
+class _FeatureHook:
+    def __init__(self, layers: tuple[str, ...]) -> None:
+        self.layers = layers
+        self.features: dict[str, Any] = {}
+        self.handles: list[Any] = []
+
+    def attach(self, model: Any) -> None:
+        modules = dict(model.named_modules())
+        for layer in self.layers:
+            if layer not in modules:
+                raise KeyError(f"Backbone layer '{layer}' not found")
+            self.handles.append(modules[layer].register_forward_hook(self._capture(layer)))
+
+    def clear(self) -> None:
+        self.features.clear()
+
+    def close(self) -> None:
+        for handle in self.handles:
+            handle.remove()
+        self.handles.clear()
+
+    def _capture(self, layer: str):
+        def hook(_module: Any, _inputs: Any, output: Any) -> None:
+            self.features[layer] = output.detach()
+        return hook
+
+
+class HybridPatchcorePadimInspector:
+    """Train and inspect with a PatchCore + PaDiM hybrid model."""
+
+    def __init__(self, settings: HybridTrainingSettings | None = None, device: str | None = None) -> None:
+        self.settings = settings or HybridTrainingSettings()
+        self.device = device
+
+    def train(self, config: PartModelConfig) -> Path:
+        image_paths = list_images(config.normal_image_dir)
+        if len(image_paths) < 20:
+            raise ValueError(
+                f"Industrial hybrid training needs at least 20 normal images in {config.normal_image_dir}; "
+                f"found {len(image_paths)}. Use 100+ per model for production validation."
+            )
+        torch = require_module("torch")
+        embeddings, grid_shape = self._extract_dataset_embeddings(image_paths)
+        embeddings_np = embeddings.cpu().numpy().astype(np.float32)
+        rng = np.random.default_rng(self.settings.random_seed)
+        if embeddings_np.shape[1] > self.settings.padim_components:
+            selected_dims = np.sort(rng.choice(embeddings_np.shape[1], self.settings.padim_components, replace=False))
+        else:
+            selected_dims = np.arange(embeddings_np.shape[1])
+        memory_bank = self._build_patchcore_memory(embeddings, torch)
+        padim_mean, padim_inv_cov = self._fit_padim(embeddings_np, grid_shape, selected_dims)
+        config.model_file.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                "version": HYBRID_MODEL_VERSION,
+                "algorithm": "hybrid_patchcore_padim",
+                "settings": asdict(self.settings),
+                "model_config": asdict(config),
+                "trained_at": datetime.now().isoformat(),
+                "source_count": len(image_paths),
+                "grid_shape": grid_shape,
+                "feature_dim": embeddings_np.shape[1],
+                "padim_dims": selected_dims.tolist(),
+                "memory_bank": memory_bank.cpu(),
+                "padim_mean": padim_mean,
+                "padim_inv_cov": padim_inv_cov,
+            },
+            config.model_file,
+        )
+        return config.model_file
+
+    def inspect(self, config: PartModelConfig, image: np.ndarray, *, save_outputs: bool = True) -> InspectionResult:
+        torch = require_module("torch")
+        if not config.model_file.exists():
+            raise FileNotFoundError(f"Hybrid model has not been trained: {config.model_file}")
+        checkpoint = torch.load(config.model_file, map_location="cpu")
+        if checkpoint.get("algorithm") != "hybrid_patchcore_padim":
+            raise ValueError(f"Model file is not a hybrid PatchCore/PaDiM checkpoint: {config.model_file}")
+        tensor = self._preprocess_image(image)
+        features, _grid_shape = self._extract_embeddings_from_tensor(tensor)
+        feature_map = features.squeeze(0).cpu().numpy().astype(np.float32)
+        patchcore_map = self._patchcore_score_map(features, checkpoint["memory_bank"], torch)
+        padim_map = self._padim_score_map(feature_map, checkpoint["padim_mean"], checkpoint["padim_inv_cov"], checkpoint["padim_dims"])
+        fused_small = (
+            self.settings.patchcore_weight * robust_normalize(patchcore_map)
+            + self.settings.padim_weight * robust_normalize(padim_map)
+        )
+        fused = cv2.resize(fused_small, (self.settings.image_size, self.settings.image_size), interpolation=cv2.INTER_CUBIC)
+        fused = cv2.GaussianBlur(fused, (9, 9), 0)
+        ring_mask = fan_ring_mask(fused.shape, config.inner_radius_ratio, config.outer_radius_ratio)
+        threshold = min(max(config.anomaly_threshold / 10.0, 0.05), 0.95)
+        candidate_mask = clean_mask((fused > threshold) & ring_mask)
+        defect_area = int(candidate_mask.sum())
+        ring_scores = fused[ring_mask]
+        anomaly_score = float(np.max(ring_scores)) if ring_scores.size else 0.0
+        bad_sector_ratio, bad_sectors = sector_statistics(ring_mask, fused * 10.0, config.expected_fins)
+        fail_area = max(config.min_defect_area_px, int(0.0004 * fused.size))
+        status = "FAIL" if defect_area >= fail_area or bad_sector_ratio >= config.max_bad_sector_ratio else "PASS"
+        overlay_path = report_path = None
+        if save_outputs:
+            overlay_path, report_path = self._save_outputs(
+                config, image, fused, candidate_mask, status, anomaly_score, defect_area, bad_sector_ratio, bad_sectors
+            )
+        return InspectionResult(status, anomaly_score, defect_area, bad_sector_ratio, bad_sectors, overlay_path, report_path)
+
+    def _device(self, torch: Any) -> Any:
+        if self.device:
+            return torch.device(self.device)
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    def _build_backbone(self) -> tuple[Any, _FeatureHook, Any]:
+        torch = require_module("torch")
+        models = require_module("torchvision.models")
+        weights_name = "Wide_ResNet50_2_Weights"
+        if self.settings.backbone == "resnet18":
+            weights_name = "ResNet18_Weights"
+        weights = getattr(models, weights_name).DEFAULT
+        backbone = getattr(models, self.settings.backbone)(weights=weights)
+        backbone.eval().to(self._device(torch))
+        hook = _FeatureHook(self.settings.embedding_layers)
+        hook.attach(backbone)
+        return backbone, hook, torch
+
+    def _extract_dataset_embeddings(self, image_paths: list[Path]) -> tuple[Any, tuple[int, int]]:
+        torch = require_module("torch")
+        backbone, hook, _torch = self._build_backbone()
+        chunks: list[Any] = []
+        grid_shape = (0, 0)
+        try:
+            for start in range(0, len(image_paths), self.settings.batch_size):
+                batch_paths = image_paths[start:start + self.settings.batch_size]
+                batch = torch.cat([self._preprocess_path(path) for path in batch_paths], dim=0)
+                batch_features, grid_shape = self._extract_embeddings_with_backbone(batch, backbone, hook, torch)
+                chunks.append(batch_features.flatten(2).permute(0, 2, 1).reshape(-1, batch_features.shape[1]).cpu())
+        finally:
+            hook.close()
+        return torch.cat(chunks, dim=0), grid_shape
+
+    def _extract_embeddings_from_tensor(self, tensor: Any) -> tuple[Any, tuple[int, int]]:
+        torch = require_module("torch")
+        backbone, hook, _torch = self._build_backbone()
+        try:
+            return self._extract_embeddings_with_backbone(tensor, backbone, hook, torch)
+        finally:
+            hook.close()
+
+    def _extract_embeddings_with_backbone(self, tensor: Any, backbone: Any, hook: _FeatureHook, torch: Any) -> tuple[Any, tuple[int, int]]:
+        with torch.no_grad():
+            hook.clear()
+            backbone(tensor.to(self._device(torch)))
+            maps = []
+            target_hw = None
+            for layer in self.settings.embedding_layers:
+                fmap = hook.features[layer]
+                if target_hw is None:
+                    target_hw = fmap.shape[-2:]
+                elif fmap.shape[-2:] != target_hw:
+                    fmap = torch.nn.functional.interpolate(fmap, size=target_hw, mode="bilinear", align_corners=False)
+                maps.append(fmap)
+            embedding = torch.cat(maps, dim=1)
+            embedding = torch.nn.functional.normalize(embedding, p=2, dim=1)
+            return embedding.cpu(), tuple(int(v) for v in embedding.shape[-2:])
+
+    def _preprocess_path(self, path: Path) -> Any:
+        image = cv2.imread(str(path))
+        if image is None:
+            raise ValueError(f"Unable to read training image: {path}")
+        return self._preprocess_image(image)
+
+    def _preprocess_image(self, image: np.ndarray) -> Any:
+        torch = require_module("torch")
+        if image.ndim == 2:
+            rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        else:
+            rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        resized = cv2.resize(rgb, (self.settings.image_size, self.settings.image_size), interpolation=cv2.INTER_AREA)
+        arr = resized.astype(np.float32) / 255.0
+        arr = (arr - np.array([0.485, 0.456, 0.406], dtype=np.float32)) / np.array([0.229, 0.224, 0.225], dtype=np.float32)
+        return torch.from_numpy(arr.transpose(2, 0, 1)).unsqueeze(0).float()
+
+    def _build_patchcore_memory(self, embeddings: Any, torch: Any) -> Any:
+        total = embeddings.shape[0]
+        target = min(max(1, int(total * self.settings.coreset_ratio)), self.settings.max_coreset_patches, total)
+        random.seed(self.settings.random_seed)
+        selected = [random.randrange(total)]
+        distances = torch.cdist(embeddings[selected], embeddings).squeeze(0)
+        while len(selected) < target:
+            idx = int(torch.argmax(distances).item())
+            selected.append(idx)
+            new_distance = torch.cdist(embeddings[idx:idx + 1], embeddings).squeeze(0)
+            distances = torch.minimum(distances, new_distance)
+        return embeddings[selected].contiguous()
+
+    def _fit_padim(self, embeddings: np.ndarray, grid_shape: tuple[int, int], selected_dims: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        h, w = grid_shape
+        patch_count = h * w
+        sample_count = embeddings.shape[0] // patch_count
+        reshaped = embeddings.reshape(sample_count, patch_count, embeddings.shape[1])[:, :, selected_dims]
+        mean = reshaped.mean(axis=0).astype(np.float32)
+        inv_cov = np.empty((patch_count, len(selected_dims), len(selected_dims)), dtype=np.float32)
+        eye = np.eye(len(selected_dims), dtype=np.float32) * 0.01
+        for patch in range(patch_count):
+            cov = np.cov(reshaped[:, patch, :], rowvar=False).astype(np.float32) + eye
+            inv_cov[patch] = np.linalg.pinv(cov).astype(np.float32)
+        return mean, inv_cov
+
+    def _patchcore_score_map(self, features: Any, memory_bank: Any, torch: Any) -> np.ndarray:
+        b, c, h, w = features.shape
+        flat = features.flatten(2).permute(0, 2, 1).reshape(-1, c)
+        distances = torch.cdist(flat, memory_bank.to(flat.device))
+        nearest = distances.min(dim=1).values.reshape(h, w).cpu().numpy().astype(np.float32)
+        return nearest
+
+    def _padim_score_map(self, feature_map: np.ndarray, mean: np.ndarray, inv_cov: np.ndarray, dims: list[int]) -> np.ndarray:
+        c, h, w = feature_map.shape
+        flat = feature_map.reshape(c, h * w).T[:, dims]
+        delta = flat - mean
+        distances = np.empty(flat.shape[0], dtype=np.float32)
+        for idx in range(flat.shape[0]):
+            distances[idx] = math.sqrt(max(float(delta[idx] @ inv_cov[idx] @ delta[idx].T), 0.0))
+        return distances.reshape(h, w)
+
+    def _save_outputs(
+        self,
+        config: PartModelConfig,
+        image: np.ndarray,
+        score_map: np.ndarray,
+        defect_mask: np.ndarray,
+        status: str,
+        anomaly_score: float,
+        defect_area: int,
+        bad_sector_ratio: float,
+        bad_sectors: list[int],
+    ) -> tuple[Path, Path]:
+        config.result_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        base = config.result_dir / f"{stamp}_{status.lower()}_hybrid"
+        display = cv2.resize(image, (self.settings.image_size, self.settings.image_size), interpolation=cv2.INTER_AREA)
+        if display.ndim == 2:
+            display = cv2.cvtColor(display, cv2.COLOR_GRAY2BGR)
+        heat = cv2.applyColorMap(np.clip(score_map * 255, 0, 255).astype(np.uint8), cv2.COLORMAP_TURBO)
+        blended = cv2.addWeighted(display, 0.58, heat, 0.42, 0)
+        blended[defect_mask] = (0, 0, 255)
+        overlay_path = base.with_suffix(".png")
+        cv2.imwrite(str(overlay_path), blended)
+        report = {
+            "algorithm": "hybrid_patchcore_padim",
+            "model_id": config.id,
+            "status": status,
+            "anomaly_score": anomaly_score,
+            "defect_area_px": defect_area,
+            "bad_sector_ratio": bad_sector_ratio,
+            "bad_sectors": bad_sectors,
+            "created_at": datetime.now().isoformat(),
+            "overlay_path": str(overlay_path),
+        }
+        report_path = base.with_suffix(".json")
+        with report_path.open("w", encoding="utf-8") as handle:
+            json.dump(report, handle, indent=2)
+            handle.write("\n")
+        return overlay_path, report_path
