@@ -10,7 +10,7 @@ import cv2
 
 from .auth import AuthStore
 from .config import ModelRegistry, ensure_model_folders
-from .trainer import NormalTemplateTrainer
+from .anomaly_models import HybridPatchcorePadimInspector
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     registry = ModelRegistry(args.models)
     ensure_model_folders(registry)
-    trainer = NormalTemplateTrainer()
+    inspector = HybridPatchcorePadimInspector()
 
     if args.command == "list-models":
         for model in registry.all():
@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "train":
         model = registry.get(args.model_id)
-        output = trainer.train(model)
+        output = inspector.train(model)
         print(f"Trained {model.id}: {output}")
         return 0
 
@@ -58,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
         image = cv2.imread(str(Path(args.image)))
         if image is None:
             raise SystemExit(f"Unable to read image: {args.image}")
-        result = trainer.inspect(model, image)
+        result = inspector.inspect(model, image)
         print(
             f"{result.status} score={result.anomaly_score:.2f} "
             f"area={result.defect_area_px} bad_sector_ratio={result.bad_sector_ratio:.3f} "

@@ -1,18 +1,27 @@
-# Blower Fan Vision Inspection System
+# NeuroIris Blower Fan Industrial Vision Inspection
 
-Python-based inspection software for ultrasonic-welded blower fan parts. It supports four configured fan models, login roles, normal-image training, USB3 camera capture, and defect detection for cracks or wrongly welded fins.
+Python/PyQt6 inspection software for ultrasonic-welded blower fan parts. The system is designed for an industrial line PC with an RTX 5070 12 GB GPU, 32 GB RAM, Intel Ultra i7 265K, and an 8.3 MP USB3 camera.
 
-## Why this design
+## What changed for industry deployment
 
-The available RTX 5070 12 GB GPU is suitable for future CNN/autoencoder upgrades, but the first production baseline should be reliable with the existing normal photos. This project implements a normal-only anomaly inspection workflow:
+This is no longer a simple template-difference demo. The production path uses a **hybrid PatchCore + PaDiM anomaly detector** trained from normal images:
 
-1. Capture many known-good images for each part model under controlled lighting and fixture position.
-2. Train a per-model normal appearance template from those images.
-3. During inspection, align the incoming image to the learned normal template.
-4. Detect abnormal local deviations as cracks, missing welds, wrong welds, damaged fins, or contamination.
-5. Validate fin/weld sector consistency against the configured expected fin count.
+1. A pretrained CNN extracts multi-scale patch embeddings from known-good blower fan images.
+2. **PatchCore** stores a coreset memory bank of representative normal patches.
+3. **PaDiM** fits per-location Gaussian distributions over normal patch features.
+4. Inspection fuses PatchCore nearest-neighbour distance and PaDiM Mahalanobis distance into a robust anomaly heatmap.
+5. The heatmap is restricted to the fin/weld ring and checked by fin sector to catch cracks, missing welds, wrongly welded fins, and abnormal local surface changes.
 
-This is intentionally camera/fixture friendly: the 8.3 MP USB3 camera should be mounted rigidly with diffuse coaxial or ring lighting, fixed exposure, and a mechanical nest so every fan appears in the same pose.
+This is a practical normal-only approach for factories because it does not require thousands of defect examples before first deployment.
+
+## UI
+
+The operator interface is built with **PyQt6** and follows the supplied dark neon NeuroIris layout:
+
+- top status bar with online state, speed, tolerance, FPS, latency, and clock,
+- left system-control panel with model selection, start, calibrate/load image, stop, reset, tolerance, surface speed, and admin training,
+- large central camera/overlay viewer with anomaly score bar,
+- right panel with PASS/FAIL/STANDBY badge, session statistics, last result, and inspection log.
 
 ## Default logins
 
@@ -21,31 +30,35 @@ This is intentionally camera/fixture friendly: the 8.3 MP USB3 camera should be 
 | `admin` | `admin123` | Admin | Visible/enabled |
 | `operator` | `operator123` | User | Hidden/disabled |
 
-Change these before production with:
+Change these before production:
 
 ```bash
 blower-inspection add-user admin --role admin --password "new-strong-password"
 ```
 
-## Quick start
+## Installation on the deployment PC
+
+Install NVIDIA drivers and a CUDA-compatible PyTorch build for the RTX 5070 first, then install the app:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .[dev]
+pip install -e .[industrial]
 python -m blower_inspection.app
 ```
 
-For CLI training and inspection:
+For Windows PowerShell:
 
-```bash
-python -m blower_inspection.cli train BF-001
-python -m blower_inspection.cli inspect BF-001 path/to/test_image.png
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e .[industrial]
+python -m blower_inspection.app
 ```
 
-## Folder workflow
+## Training workflow
 
-Each of the four supplied models has a normal-image training folder in `config/models.json`:
+Each configured model has its own normal-image folder:
 
 ```text
 data/training/BF-001/normal
@@ -54,24 +67,29 @@ data/training/BF-003/normal
 data/training/BF-004/normal
 ```
 
-For a new model, add a block to `config/models.json`, capture/put normal images in the folder, login as admin, then press **Train New/Selected Model**. Training runs in a background thread and saves `normal_model.npz` under `data/models/<model-id>/`.
+For each part model:
+
+1. Mount the camera rigidly and lock exposure, gain, focus, white balance, and lighting.
+2. Capture at least 100 known-good parts; the software enforces a minimum of 20 images for hybrid training.
+3. Put images in the model's `normal_image_dir`.
+4. Login as `admin`.
+5. Select the model and press **TRAIN SELECTED MODEL**.
+6. Validate thresholds with known-good and golden bad samples before automatic rejection.
+
+For a new part, add a new record to `config/models.json`, create its normal-image folder, collect normal samples, then train from the admin UI.
+
+## CLI
+
+```bash
+python -m blower_inspection.cli list-models
+python -m blower_inspection.cli train BF-001
+python -m blower_inspection.cli inspect BF-001 path/to/test_image.png
+```
 
 ## Production recommendations
 
-- Use a rigid nest with part-present sensing and a repeatable angular key.
-- Lock camera exposure, gain, focus, white balance, and USB bandwidth.
-- Use diffuse lighting for surface cracks and a low-angle secondary light if weld edge cracks are subtle.
-- Start with at least 100 normal images per model, including accepted process variation.
-- Keep rejected images with masks for later threshold tuning and supervised AI upgrades.
-- Validate thresholds with golden good/bad samples before enabling automatic reject.
-
-## Project layout
-
-```text
-config/models.json          Four model definitions and thresholds
-config/users.json           Role-based login users
-src/blower_inspection/app.py  Tkinter operator/admin UI
-src/blower_inspection/cli.py  CLI train/inspect/user tools
-src/blower_inspection/trainer.py Normal-only model training and inspection
-docs/system_design.md       Detailed design and deployment guide
-```
+- Use a mechanical nest with angular keying; do not rely on software alignment for large pose variation.
+- Use diffuse ring/coaxial lighting for weld consistency and a low-angle secondary light for hairline cracks.
+- Keep a master set of golden PASS/FAIL samples for every model and re-run them after any threshold or lighting change.
+- Store failed overlays and JSON reports for process engineering review.
+- Use line PLC handshaking before enabling automatic reject gates.

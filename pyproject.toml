@@ -10,11 +10,26 @@ requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.24",
   "opencv-python>=4.8",
-  "Pillow>=10.0"
+  "Pillow>=10.0",
+  "PyQt6>=6.6",
+  "torch>=2.2",
+  "torchvision>=0.17",
+  "scipy>=1.11",
+  "scikit-learn>=1.3"
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+industrial = [
+  "PyQt6>=6.6",
+  "torch>=2.2",
+  "torchvision>=0.17",
+  "opencv-python>=4.8",
+  "numpy>=1.24",
+  "Pillow>=10.0",
+  "scipy>=1.11",
+  "scikit-learn>=1.3"
+]
 
 [project.scripts]
 blower-inspection = "blower_inspection.cli:main"
