@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# Runtime inspection data
+data/models/*
+data/captures/*
+data/training/*
+data/results/*
+!data/models/.gitkeep
+!data/captures/.gitkeep
+!data/training/.gitkeep
+!data/results/.gitkeep
