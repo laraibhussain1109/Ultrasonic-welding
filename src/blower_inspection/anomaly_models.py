@@ -21,6 +21,7 @@ import importlib
 import importlib.util
 import json
 import math
+import pickle
 import random
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -131,7 +132,7 @@ class HybridPatchcorePadimInspector:
                 "version": HYBRID_MODEL_VERSION,
                 "algorithm": "hybrid_patchcore_padim",
                 "settings": asdict(self.settings),
-                "model_config": asdict(config),
+                "model_config": self._serializable_model_config(config),
                 "trained_at": datetime.now().isoformat(),
                 "source_count": len(image_paths),
                 "used_source_count": len(used_image_paths),
@@ -139,8 +140,8 @@ class HybridPatchcorePadimInspector:
                 "feature_dim": embeddings_np.shape[1],
                 "padim_dims": selected_dims.tolist(),
                 "memory_bank": memory_bank.cpu(),
-                "padim_mean": padim_mean,
-                "padim_inv_cov": padim_inv_cov,
+                "padim_mean": torch.as_tensor(padim_mean, dtype=torch.float32),
+                "padim_inv_cov": torch.as_tensor(padim_inv_cov, dtype=torch.float32),
             },
             config.model_file,
         )
@@ -150,14 +151,17 @@ class HybridPatchcorePadimInspector:
         torch = require_module("torch")
         if not config.model_file.exists():
             raise FileNotFoundError(f"Hybrid model has not been trained: {config.model_file}")
-        checkpoint = torch.load(config.model_file, map_location="cpu")
+        checkpoint = self._load_hybrid_checkpoint(torch, config.model_file)
         if checkpoint.get("algorithm") != "hybrid_patchcore_padim":
             raise ValueError(f"Model file is not a hybrid PatchCore/PaDiM checkpoint: {config.model_file}")
         tensor = self._preprocess_image(image)
         features, _grid_shape = self._extract_embeddings_from_tensor(tensor)
         feature_map = features.squeeze(0).cpu().numpy().astype(np.float32)
         patchcore_map = self._patchcore_score_map(features, checkpoint["memory_bank"], torch)
-        padim_map = self._padim_score_map(feature_map, checkpoint["padim_mean"], checkpoint["padim_inv_cov"], checkpoint["padim_dims"])
+        padim_mean = self._checkpoint_array(checkpoint["padim_mean"])
+        padim_inv_cov = self._checkpoint_array(checkpoint["padim_inv_cov"])
+        padim_dims = self._checkpoint_dims(checkpoint["padim_dims"])
+        padim_map = self._padim_score_map(feature_map, padim_mean, padim_inv_cov, padim_dims)
         fused_small = (
             self.settings.patchcore_weight * robust_normalize(patchcore_map)
             + self.settings.padim_weight * robust_normalize(padim_map)
@@ -179,6 +183,52 @@ class HybridPatchcorePadimInspector:
                 config, image, fused, candidate_mask, status, anomaly_score, defect_area, bad_sector_ratio, bad_sectors
             )
         return InspectionResult(status, anomaly_score, defect_area, bad_sector_ratio, bad_sectors, overlay_path, report_path)
+
+    @staticmethod
+    def _serializable_model_config(config: PartModelConfig) -> dict[str, Any]:
+        """Return checkpoint metadata without pickled ``Path`` objects.
+
+        PyTorch 2.6 defaults ``torch.load`` to ``weights_only=True``. Keeping
+        checkpoint metadata to primitives and tensors lets newly trained models
+        load with the safer default path instead of requiring arbitrary pickle
+        globals such as ``pathlib.WindowsPath``.
+        """
+        data = asdict(config)
+        for key in ("normal_image_dir", "model_file", "result_dir"):
+            data[key] = str(data[key])
+        return data
+
+    @staticmethod
+    def _load_hybrid_checkpoint(torch: Any, model_file: Path) -> dict[str, Any]:
+        """Load app-created hybrid checkpoints across PyTorch versions.
+
+        New checkpoints are saved with only tensors and primitive metadata and
+        therefore load with ``weights_only=True``. Older checkpoints may contain
+        dataclass metadata with ``pathlib.WindowsPath``/``Path`` objects, which
+        PyTorch 2.6 rejects in weights-only mode. For those legacy files we
+        retry with ``weights_only=False`` so operators can keep using models
+        trained by previous versions of this application.
+        """
+        try:
+            return torch.load(model_file, map_location="cpu", weights_only=True)
+        except TypeError:
+            return torch.load(model_file, map_location="cpu")
+        except pickle.UnpicklingError as exc:
+            if "weights_only" not in str(exc).lower():
+                raise
+            return torch.load(model_file, map_location="cpu", weights_only=False)
+
+    @staticmethod
+    def _checkpoint_array(value: Any) -> np.ndarray:
+        if hasattr(value, "detach"):
+            value = value.detach().cpu().numpy()
+        return np.asarray(value, dtype=np.float32)
+
+    @staticmethod
+    def _checkpoint_dims(value: Any) -> list[int]:
+        if hasattr(value, "detach"):
+            value = value.detach().cpu().numpy()
+        return [int(dim) for dim in np.asarray(value).tolist()]
 
     def _device(self, torch: Any) -> Any:
         if self.device:
