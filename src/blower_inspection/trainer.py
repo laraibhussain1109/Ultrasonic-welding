@@ -8,7 +8,7 @@ sectors at inspection time.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -30,6 +30,8 @@ class InspectionResult:
     bad_sectors: list[int]
     overlay_path: Path | None = None
     report_path: Path | None = None
+    display_image: np.ndarray | None = None
+    defect_boxes: list[tuple[int, int, int, int]] = field(default_factory=list)
 
     @property
     def is_pass(self) -> bool:
@@ -86,6 +88,16 @@ def align_to_reference(image: np.ndarray, reference: np.ndarray) -> np.ndarray:
         return image
 
 
+def robust_normalize(score_map: np.ndarray) -> np.ndarray:
+    """Normalize score maps with percentile clipping so heatmaps stay visible."""
+    score = score_map.astype(np.float32)
+    lo = float(np.percentile(score, 1.0))
+    hi = float(np.percentile(score, 99.5))
+    if hi <= lo + 1e-6:
+        return np.zeros_like(score, dtype=np.float32)
+    return np.clip((score - lo) / (hi - lo), 0.0, 1.0)
+
+
 def fan_ring_mask(shape: tuple[int, int], inner_ratio: float, outer_ratio: float) -> np.ndarray:
     h, w = shape
     yy, xx = np.ogrid[:h, :w]
@@ -100,6 +112,59 @@ def clean_mask(mask: np.ndarray) -> np.ndarray:
     cleaned = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, kernel, iterations=1)
     cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel, iterations=2)
     return cleaned.astype(bool)
+
+
+def defect_bounding_boxes(defect_mask: np.ndarray, min_area_px: int) -> list[tuple[int, int, int, int]]:
+    """Return bounding boxes around connected defect regions."""
+    mask_uint8 = defect_mask.astype(np.uint8) * 255
+    contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    boxes: list[tuple[int, int, int, int]] = []
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        if w * h >= min_area_px:
+            boxes.append((int(x), int(y), int(w), int(h)))
+    return boxes
+
+
+def inspection_overlay(
+    image: np.ndarray,
+    score_map: np.ndarray,
+    defect_mask: np.ndarray,
+    *,
+    status: str,
+    anomaly_score: float,
+    min_box_area_px: int,
+    score_normalizer: float = 1.0,
+) -> tuple[np.ndarray, list[tuple[int, int, int, int]]]:
+    """Build a live-display heatmap overlay with defect contours and boxes.
+
+    The model score map is often computed on a square inference grid. This helper
+    stretches it back to the camera frame, exactly like the standalone live
+    scripts operators use, so the main viewer always shows the detailed
+    inspection instead of a raw feed.
+    """
+    if image.ndim == 2:
+        base = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    else:
+        base = image.copy()
+    height, width = base.shape[:2]
+    normalized = robust_normalize(score_map / max(score_normalizer, 1e-6))
+    score_full = cv2.resize(normalized, (width, height), interpolation=cv2.INTER_CUBIC)
+    score_full = cv2.GaussianBlur(score_full, (9, 9), 0)
+    mask_full_uint8 = cv2.resize(defect_mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST)
+    mask_full = mask_full_uint8.astype(bool)
+    heatmap = cv2.applyColorMap(np.clip(score_full * 255, 0, 255).astype(np.uint8), cv2.COLORMAP_JET)
+    annotated = cv2.addWeighted(base, 0.62, heatmap, 0.38, 0)
+    contours, _ = cv2.findContours(mask_full_uint8 * 255, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(annotated, contours, -1, (0, 0, 255), 2)
+    area_scale = (width * height) / max(defect_mask.size, 1)
+    boxes = defect_bounding_boxes(mask_full, max(1, int(min_box_area_px * area_scale)))
+    font_scale = max(0.45, min(0.85, width / 3840.0 * 0.75))
+    thickness = max(1, int(round(width / 1920.0)))
+    for x, y, w, h in boxes:
+        cv2.rectangle(annotated, (x, y), (x + w, y + h), (0, 0, 255), max(2, thickness))
+        cv2.putText(annotated, "ANOMALY", (x, max(y - 6, 18)), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 255), max(1, thickness))
+    return annotated, boxes
 
 
 def sector_statistics(mask: np.ndarray, score_map: np.ndarray, expected_fins: int) -> tuple[float, list[int]]:
@@ -180,6 +245,15 @@ class NormalTemplateTrainer:
         status = "FAIL" if (
             defect_area >= config.min_defect_area_px or bad_sector_ratio >= config.max_bad_sector_ratio
         ) else "PASS"
+        display_image, defect_boxes = inspection_overlay(
+            image,
+            score_map,
+            candidate_mask,
+            status=status,
+            anomaly_score=anomaly_score,
+            min_box_area_px=config.min_defect_area_px,
+            score_normalizer=max(config.anomaly_threshold, 1.0),
+        )
         overlay_path = report_path = None
         if save_outputs:
             overlay_path, report_path = self._save_outputs(config, aligned, score_map, candidate_mask, status, anomaly_score, defect_area, bad_sector_ratio, bad_sectors)
@@ -191,6 +265,8 @@ class NormalTemplateTrainer:
             bad_sectors=bad_sectors,
             overlay_path=overlay_path,
             report_path=report_path,
+            display_image=display_image,
+            defect_boxes=defect_boxes,
         )
 
     def _save_outputs(

@@ -32,22 +32,22 @@ import cv2
 import numpy as np
 
 from .config import PartModelConfig
-from .trainer import InspectionResult, clean_mask, fan_ring_mask, list_images, sector_statistics
+from .trainer import InspectionResult, clean_mask, fan_ring_mask, inspection_overlay, list_images, sector_statistics
 
 HYBRID_MODEL_VERSION = 3
 
 
 @dataclass(frozen=True)
 class HybridTrainingSettings:
-    image_size: int = 384
+    image_size: int = 512
     backbone: str = "wide_resnet50_2"
-    embedding_layers: tuple[str, ...] = ("layer2", "layer3")
-    embedding_grid_size: int = 28
+    embedding_layers: tuple[str, ...] = ("layer1", "layer2", "layer3")
+    embedding_grid_size: int = 56
     projection_dim: int = 256
     max_training_images: int = 300
-    coreset_ratio: float = 0.10
+    coreset_ratio: float = 0.08
     max_coreset_patches: int = 4096
-    coreset_candidate_patches: int = 20000
+    coreset_candidate_patches: int = 80000
     padim_components: int = 128
     patchcore_weight: float = 0.55
     padim_weight: float = 0.45
@@ -124,7 +124,7 @@ class HybridPatchcorePadimInspector:
             selected_dims = np.sort(rng.choice(embeddings_np.shape[1], self.settings.padim_components, replace=False))
         else:
             selected_dims = np.arange(embeddings_np.shape[1])
-        memory_bank = self._build_patchcore_memory(embeddings, torch)
+        memory_bank, memory_candidate_count = self._build_patchcore_memory(embeddings, torch)
         padim_mean, padim_inv_cov = self._fit_padim(embeddings_np, grid_shape, selected_dims)
         config.model_file.parent.mkdir(parents=True, exist_ok=True)
         torch.save(
@@ -139,6 +139,9 @@ class HybridPatchcorePadimInspector:
                 "grid_shape": grid_shape,
                 "feature_dim": embeddings_np.shape[1],
                 "padim_dims": selected_dims.tolist(),
+                "patch_count": int(embeddings_np.shape[0]),
+                "memory_candidate_count": int(memory_candidate_count),
+                "memory_bank_size": int(memory_bank.shape[0]),
                 "memory_bank": memory_bank.cpu(),
                 "padim_mean": torch.as_tensor(padim_mean, dtype=torch.float32),
                 "padim_inv_cov": torch.as_tensor(padim_inv_cov, dtype=torch.float32),
@@ -177,12 +180,30 @@ class HybridPatchcorePadimInspector:
         bad_sector_ratio, bad_sectors = sector_statistics(ring_mask, fused * 10.0, config.expected_fins)
         fail_area = max(config.min_defect_area_px, int(0.0004 * fused.size))
         status = "FAIL" if defect_area >= fail_area or bad_sector_ratio >= config.max_bad_sector_ratio else "PASS"
+        display_image, defect_boxes = inspection_overlay(
+            image,
+            fused,
+            candidate_mask,
+            status=status,
+            anomaly_score=anomaly_score,
+            min_box_area_px=config.min_defect_area_px,
+        )
         overlay_path = report_path = None
         if save_outputs:
             overlay_path, report_path = self._save_outputs(
                 config, image, fused, candidate_mask, status, anomaly_score, defect_area, bad_sector_ratio, bad_sectors
             )
-        return InspectionResult(status, anomaly_score, defect_area, bad_sector_ratio, bad_sectors, overlay_path, report_path)
+        return InspectionResult(
+            status,
+            anomaly_score,
+            defect_area,
+            bad_sector_ratio,
+            bad_sectors,
+            overlay_path,
+            report_path,
+            display_image,
+            defect_boxes,
+        )
 
     @staticmethod
     def _serializable_model_config(config: PartModelConfig) -> dict[str, Any]:
@@ -331,7 +352,7 @@ class HybridPatchcorePadimInspector:
         arr = (arr - np.array([0.485, 0.456, 0.406], dtype=np.float32)) / np.array([0.229, 0.224, 0.225], dtype=np.float32)
         return torch.from_numpy(arr.transpose(2, 0, 1)).unsqueeze(0).float()
 
-    def _build_patchcore_memory(self, embeddings: Any, torch: Any) -> Any:
+    def _build_patchcore_memory(self, embeddings: Any, torch: Any) -> tuple[Any, int]:
         total = embeddings.shape[0]
         target = min(max(1, int(total * self.settings.coreset_ratio)), self.settings.max_coreset_patches, total)
         candidate_count = min(total, max(target, self.settings.coreset_candidate_patches))
@@ -341,6 +362,7 @@ class HybridPatchcorePadimInspector:
             candidates = embeddings[candidate_indices]
         else:
             candidates = embeddings
+        candidates = candidates.contiguous()
         selected = [rng.randrange(candidate_count)]
         distances = torch.cdist(candidates[selected], candidates).squeeze(0)
         while len(selected) < target:
@@ -348,7 +370,7 @@ class HybridPatchcorePadimInspector:
             selected.append(idx)
             new_distance = torch.cdist(candidates[idx:idx + 1], candidates).squeeze(0)
             distances = torch.minimum(distances, new_distance)
-        return candidates[selected].contiguous()
+        return candidates[selected].contiguous(), candidate_count
 
     def _fit_padim(self, embeddings: np.ndarray, grid_shape: tuple[int, int], selected_dims: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         h, w = grid_shape
