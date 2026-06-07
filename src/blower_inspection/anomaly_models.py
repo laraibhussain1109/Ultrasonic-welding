@@ -32,7 +32,7 @@ import cv2
 import numpy as np
 
 from .config import PartModelConfig
-from .trainer import InspectionResult, clean_mask, fan_ring_mask, list_images, sector_statistics
+from .trainer import InspectionResult, clean_mask, fan_ring_mask, inspection_overlay, list_images, sector_statistics
 
 HYBRID_MODEL_VERSION = 3
 
@@ -177,12 +177,30 @@ class HybridPatchcorePadimInspector:
         bad_sector_ratio, bad_sectors = sector_statistics(ring_mask, fused * 10.0, config.expected_fins)
         fail_area = max(config.min_defect_area_px, int(0.0004 * fused.size))
         status = "FAIL" if defect_area >= fail_area or bad_sector_ratio >= config.max_bad_sector_ratio else "PASS"
+        display_image, defect_boxes = inspection_overlay(
+            image,
+            fused,
+            candidate_mask,
+            status=status,
+            anomaly_score=anomaly_score,
+            min_box_area_px=config.min_defect_area_px,
+        )
         overlay_path = report_path = None
         if save_outputs:
             overlay_path, report_path = self._save_outputs(
                 config, image, fused, candidate_mask, status, anomaly_score, defect_area, bad_sector_ratio, bad_sectors
             )
-        return InspectionResult(status, anomaly_score, defect_area, bad_sector_ratio, bad_sectors, overlay_path, report_path)
+        return InspectionResult(
+            status,
+            anomaly_score,
+            defect_area,
+            bad_sector_ratio,
+            bad_sectors,
+            overlay_path,
+            report_path,
+            display_image,
+            defect_boxes,
+        )
 
     @staticmethod
     def _serializable_model_config(config: PartModelConfig) -> dict[str, Any]:

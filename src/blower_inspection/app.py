@@ -144,6 +144,7 @@ class InspectionWindow(QWidget):
         self.inference_worker: InspectionWorker | None = None
         self.last_inference_at = 0.0
         self.inference_interval_s = 0.05
+        self.latest_annotated_frame = None
         self.fps_frame_count = 0
         self.fps_started_at = time.perf_counter()
         self.stats = {"inspected": 0, "passed": 0, "failed": 0}
@@ -352,6 +353,7 @@ class InspectionWindow(QWidget):
         self.fps_frame_count = 0
         self.fps_started_at = time.perf_counter()
         self.last_inference_at = 0.0
+        self.latest_annotated_frame = None
         self.log.addItem(f"LIVE INSPECTION STARTED {self.selected_model().id}")
         self.live_timer.start(33)
 
@@ -364,7 +366,10 @@ class InspectionWindow(QWidget):
             self._handle_live_error(f"Camera frame error: {exc}")
             return
         self.frame = frame
-        self.show_frame(frame)
+        if self.latest_annotated_frame is None:
+            self.show_frame(frame)
+        else:
+            self.show_frame(self.latest_annotated_frame)
         self.fps_frame_count += 1
         now = time.perf_counter()
         if (
@@ -390,9 +395,17 @@ class InspectionWindow(QWidget):
         self.status_badge.setText(result.status)
         self.status_badge.style().unpolish(self.status_badge)
         self.status_badge.style().polish(self.status_badge)
+        if result.display_image is not None:
+            self.latest_annotated_frame = result.display_image
+            self.show_frame(result.display_image)
+        bad_sector_text = ",".join(str(sector) for sector in result.bad_sectors[:8]) if result.bad_sectors else "-"
+        if len(result.bad_sectors) > 8:
+            bad_sector_text += ",..."
         self.last_result.setText(
             f"FRAME:  {self.stats['inspected']}\nSCORE:  {result.anomaly_score:.3f}\n"
-            f"COVERAGE:  {result.defect_area_px}px\nLATENCY:  {latency_ms:.1f} ms"
+            f"COVERAGE:  {result.defect_area_px}px\nBOXES:  {len(result.defect_boxes)}\n"
+            f"BAD SECTORS:  {bad_sector_text}\nSECTOR RATIO:  {result.bad_sector_ratio:.2%}\n"
+            f"LATENCY:  {latency_ms:.1f} ms"
         )
         self.latency_top.setText(f"LATENCY:  {latency_ms:.0f} ms")
         self.log.addItem(f"{result.status} | {self.selected_model().id} | score={result.anomaly_score:.3f}")
@@ -433,6 +446,7 @@ class InspectionWindow(QWidget):
         self.inspection_running = False
         self.live_timer.stop()
         self.camera.close()
+        self.latest_annotated_frame = None
         self.fps_top.setText("FPS:  -")
         self.online_label.setText("● OFFLINE")
         self.status_badge.setObjectName("statusStandby")
