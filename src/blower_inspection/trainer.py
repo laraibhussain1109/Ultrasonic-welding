@@ -136,7 +136,7 @@ def inspection_overlay(
     min_box_area_px: int,
     score_normalizer: float = 1.0,
 ) -> tuple[np.ndarray, list[tuple[int, int, int, int]]]:
-    """Build a live-display heatmap overlay with boxes and inspection text.
+    """Build a live-display heatmap overlay with defect contours and boxes.
 
     The model score map is often computed on a square inference grid. This helper
     stretches it back to the camera frame, exactly like the standalone live
@@ -151,19 +151,19 @@ def inspection_overlay(
     normalized = robust_normalize(score_map / max(score_normalizer, 1e-6))
     score_full = cv2.resize(normalized, (width, height), interpolation=cv2.INTER_CUBIC)
     score_full = cv2.GaussianBlur(score_full, (9, 9), 0)
-    mask_full = cv2.resize(defect_mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST).astype(bool)
+    mask_full_uint8 = cv2.resize(defect_mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST)
+    mask_full = mask_full_uint8.astype(bool)
     heatmap = cv2.applyColorMap(np.clip(score_full * 255, 0, 255).astype(np.uint8), cv2.COLORMAP_JET)
-    annotated = cv2.addWeighted(base, 0.60, heatmap, 0.40, 0)
-    annotated[mask_full] = (0, 0, 255)
+    annotated = cv2.addWeighted(base, 0.62, heatmap, 0.38, 0)
+    contours, _ = cv2.findContours(mask_full_uint8 * 255, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(annotated, contours, -1, (0, 0, 255), 2)
     area_scale = (width * height) / max(defect_mask.size, 1)
     boxes = defect_bounding_boxes(mask_full, max(1, int(min_box_area_px * area_scale)))
+    font_scale = max(0.45, min(0.85, width / 3840.0 * 0.75))
+    thickness = max(1, int(round(width / 1920.0)))
     for x, y, w, h in boxes:
-        cv2.rectangle(annotated, (x, y), (x + w, y + h), (0, 0, 255), 2)
-        cv2.putText(annotated, "ANOMALY", (x, max(y - 6, 18)), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
-    badge_color = (0, 255, 0) if status == "PASS" else (0, 0, 255)
-    cv2.rectangle(annotated, (8, 8), (330, 82), (0, 0, 0), -1)
-    cv2.putText(annotated, f"STATUS: {status}", (18, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.8, badge_color, 2)
-    cv2.putText(annotated, f"SCORE: {anomaly_score:.3f}  BOXES: {len(boxes)}", (18, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+        cv2.rectangle(annotated, (x, y), (x + w, y + h), (0, 0, 255), max(2, thickness))
+        cv2.putText(annotated, "ANOMALY", (x, max(y - 6, 18)), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 255), max(1, thickness))
     return annotated, boxes
 
 

@@ -145,6 +145,7 @@ class InspectionWindow(QWidget):
         self.last_inference_at = 0.0
         self.inference_interval_s = 0.05
         self.latest_annotated_frame = None
+        self.current_display_frame = None
         self.fps_frame_count = 0
         self.fps_started_at = time.perf_counter()
         self.stats = {"inspected": 0, "passed": 0, "failed": 0}
@@ -256,7 +257,9 @@ class InspectionWindow(QWidget):
         self.viewer = QLabel("NO CAMERA FRAME")
         self.viewer.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.viewer.setStyleSheet("background:#000000; border:2px solid #00bdea; color:#1c4c65; font-size:24px; letter-spacing:6px;")
-        self.viewer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.viewer.setMinimumSize(640, 360)
+        self.viewer.setScaledContents(False)
+        self.viewer.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         layout.addWidget(self.viewer, 1)
         bottom = QFrame(objectName="bottomPanel")
         bottom_layout = QHBoxLayout(bottom)
@@ -354,6 +357,7 @@ class InspectionWindow(QWidget):
         self.fps_started_at = time.perf_counter()
         self.last_inference_at = 0.0
         self.latest_annotated_frame = None
+        self.current_display_frame = None
         self.log.addItem(f"LIVE INSPECTION STARTED {self.selected_model().id}")
         self.live_timer.start(33)
 
@@ -425,11 +429,26 @@ class InspectionWindow(QWidget):
         self.start_inspection()
 
     def show_frame(self, frame) -> None:
+        self.current_display_frame = frame.copy()
+        self._paint_frame_to_viewer()
+
+    def _paint_frame_to_viewer(self) -> None:
+        if self.current_display_frame is None:
+            return
+        frame = self.current_display_frame
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) if frame.ndim == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+        rgb = rgb.copy()
         h, w, ch = rgb.shape
-        qimage = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
-        pixmap = QPixmap.fromImage(qimage).scaled(self.viewer.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        qimage = QImage(rgb.data, w, h, rgb.strides[0], QImage.Format.Format_RGB888)
+        target_size = self.viewer.contentsRect().size()
+        if target_size.width() <= 0 or target_size.height() <= 0:
+            target_size = self.viewer.size()
+        pixmap = QPixmap.fromImage(qimage).scaled(target_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         self.viewer.setPixmap(pixmap)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._paint_frame_to_viewer()
 
     def train_selected(self) -> None:
         if not self.user.is_admin:
@@ -447,6 +466,9 @@ class InspectionWindow(QWidget):
         self.live_timer.stop()
         self.camera.close()
         self.latest_annotated_frame = None
+        self.current_display_frame = None
+        self.viewer.clear()
+        self.viewer.setText("NO CAMERA FRAME")
         self.fps_top.setText("FPS:  -")
         self.online_label.setText("● OFFLINE")
         self.status_badge.setObjectName("statusStandby")
