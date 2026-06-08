@@ -17,10 +17,12 @@ have the GPU stack installed, while deployment environments can install the full
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import importlib.util
 import json
 import math
+import os
 import pickle
 import random
 from dataclasses import asdict, dataclass
@@ -106,7 +108,10 @@ class HybridPatchcorePadimInspector:
 
     def __init__(self, settings: HybridTrainingSettings | None = None, device: str | None = None) -> None:
         self.settings = settings or HybridTrainingSettings()
-        self.device = device
+        self.device = device or os.environ.get("BLOWER_INSPECTION_DEVICE")
+        self._device_cache: Any | None = None
+        self._backbone_cache: tuple[Any, _FeatureHook, Any] | None = None
+        self._checkpoint_cache: dict[Path, tuple[float, dict[str, Any]]] = {}
 
     def train(self, config: PartModelConfig) -> Path:
         image_paths = list_images(config.normal_image_dir)
@@ -154,17 +159,20 @@ class HybridPatchcorePadimInspector:
         torch = require_module("torch")
         if not config.model_file.exists():
             raise FileNotFoundError(f"Hybrid model has not been trained: {config.model_file}")
-        checkpoint = self._load_hybrid_checkpoint(torch, config.model_file)
+        checkpoint = self._load_runtime_checkpoint(torch, config.model_file)
         if checkpoint.get("algorithm") != "hybrid_patchcore_padim":
             raise ValueError(f"Model file is not a hybrid PatchCore/PaDiM checkpoint: {config.model_file}")
         tensor = self._preprocess_image(image)
         features, _grid_shape = self._extract_embeddings_from_tensor(tensor)
-        feature_map = features.squeeze(0).cpu().numpy().astype(np.float32)
         patchcore_map = self._patchcore_score_map(features, checkpoint["memory_bank"], torch)
-        padim_mean = self._checkpoint_array(checkpoint["padim_mean"])
-        padim_inv_cov = self._checkpoint_array(checkpoint["padim_inv_cov"])
         padim_dims = self._checkpoint_dims(checkpoint["padim_dims"])
-        padim_map = self._padim_score_map(feature_map, padim_mean, padim_inv_cov, padim_dims)
+        padim_map = self._padim_score_map_torch(
+            features.squeeze(0),
+            checkpoint["padim_mean"],
+            checkpoint["padim_inv_cov"],
+            padim_dims,
+            torch,
+        )
         fused_small = (
             self.settings.patchcore_weight * robust_normalize(patchcore_map)
             + self.settings.padim_weight * robust_normalize(padim_map)
@@ -220,7 +228,7 @@ class HybridPatchcorePadimInspector:
         return data
 
     @staticmethod
-    def _load_hybrid_checkpoint(torch: Any, model_file: Path) -> dict[str, Any]:
+    def _load_hybrid_checkpoint(torch: Any, model_file: Path, map_location: Any = "cpu") -> dict[str, Any]:
         """Load app-created hybrid checkpoints across PyTorch versions.
 
         New checkpoints are saved with only tensors and primitive metadata and
@@ -231,13 +239,13 @@ class HybridPatchcorePadimInspector:
         trained by previous versions of this application.
         """
         try:
-            return torch.load(model_file, map_location="cpu", weights_only=True)
+            return torch.load(model_file, map_location=map_location, weights_only=True)
         except TypeError:
-            return torch.load(model_file, map_location="cpu")
+            return torch.load(model_file, map_location=map_location)
         except pickle.UnpicklingError as exc:
             if "weights_only" not in str(exc).lower():
                 raise
-            return torch.load(model_file, map_location="cpu", weights_only=False)
+            return torch.load(model_file, map_location=map_location, weights_only=False)
 
     @staticmethod
     def _checkpoint_array(value: Any) -> np.ndarray:
@@ -252,11 +260,27 @@ class HybridPatchcorePadimInspector:
         return [int(dim) for dim in np.asarray(value).tolist()]
 
     def _device(self, torch: Any) -> Any:
-        if self.device:
-            return torch.device(self.device)
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if self._device_cache is not None:
+            return self._device_cache
+        requested = (self.device or "").lower()
+        if requested in {"dml", "directml"}:
+            torch_directml = require_module("torch_directml")
+            self._device_cache = torch_directml.device()
+        elif self.device:
+            self._device_cache = torch.device(self.device)
+        elif torch.cuda.is_available():
+            self._device_cache = torch.device("cuda")
+        else:
+            self._device_cache = torch.device("cpu")
+        if getattr(self._device_cache, "type", None) == "cuda":
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+        return self._device_cache
 
     def _build_backbone(self) -> tuple[Any, _FeatureHook, Any]:
+        if self._backbone_cache is not None:
+            return self._backbone_cache
         torch = require_module("torch")
         models = require_module("torchvision.models")
         weights_name = "Wide_ResNet50_2_Weights"
@@ -267,35 +291,49 @@ class HybridPatchcorePadimInspector:
         backbone.eval().to(self._device(torch))
         hook = _FeatureHook(self.settings.embedding_layers)
         hook.attach(backbone)
-        return backbone, hook, torch
+        self._backbone_cache = (backbone, hook, torch)
+        return self._backbone_cache
+
+    def _load_runtime_checkpoint(self, torch: Any, model_file: Path) -> dict[str, Any]:
+        stamp = model_file.stat().st_mtime
+        cached = self._checkpoint_cache.get(model_file)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+        checkpoint = self._load_hybrid_checkpoint(torch, model_file, map_location=self._device(torch))
+        for key in ("memory_bank", "padim_mean", "padim_inv_cov"):
+            value = checkpoint.get(key)
+            if hasattr(value, "to"):
+                checkpoint[key] = value.to(self._device(torch), non_blocking=True).float().contiguous()
+        self._checkpoint_cache[model_file] = (stamp, checkpoint)
+        return checkpoint
 
     def _extract_dataset_embeddings(self, image_paths: list[Path]) -> tuple[Any, tuple[int, int]]:
         torch = require_module("torch")
         backbone, hook, _torch = self._build_backbone()
         chunks: list[Any] = []
         grid_shape = (0, 0)
-        try:
-            for start in range(0, len(image_paths), self.settings.batch_size):
-                batch_paths = image_paths[start:start + self.settings.batch_size]
-                batch = torch.cat([self._preprocess_path(path) for path in batch_paths], dim=0)
-                batch_features, grid_shape = self._extract_embeddings_with_backbone(batch, backbone, hook, torch)
-                chunks.append(batch_features.flatten(2).permute(0, 2, 1).reshape(-1, batch_features.shape[1]).cpu())
-        finally:
-            hook.close()
+        for start in range(0, len(image_paths), self.settings.batch_size):
+            batch_paths = image_paths[start:start + self.settings.batch_size]
+            batch = torch.cat([self._preprocess_path(path) for path in batch_paths], dim=0)
+            batch_features, grid_shape = self._extract_embeddings_with_backbone(batch, backbone, hook, torch)
+            chunks.append(batch_features.flatten(2).permute(0, 2, 1).reshape(-1, batch_features.shape[1]).cpu())
         return torch.cat(chunks, dim=0), grid_shape
 
     def _extract_embeddings_from_tensor(self, tensor: Any) -> tuple[Any, tuple[int, int]]:
         torch = require_module("torch")
         backbone, hook, _torch = self._build_backbone()
-        try:
-            return self._extract_embeddings_with_backbone(tensor, backbone, hook, torch)
-        finally:
-            hook.close()
+        return self._extract_embeddings_with_backbone(tensor, backbone, hook, torch)
 
     def _extract_embeddings_with_backbone(self, tensor: Any, backbone: Any, hook: _FeatureHook, torch: Any) -> tuple[Any, tuple[int, int]]:
-        with torch.no_grad():
+        device = self._device(torch)
+        autocast = (
+            torch.autocast(device_type="cuda")
+            if getattr(device, "type", None) == "cuda"
+            else contextlib.nullcontext()
+        )
+        with torch.inference_mode(), autocast:
             hook.clear()
-            backbone(tensor.to(self._device(torch)))
+            backbone(tensor.to(device, non_blocking=True))
             maps = []
             target_hw = None
             for layer in self.settings.embedding_layers:
@@ -310,9 +348,9 @@ class HybridPatchcorePadimInspector:
                 embedding,
                 (self.settings.embedding_grid_size, self.settings.embedding_grid_size),
             )
-            embedding = self._project_embedding(embedding, torch)
+            embedding = self._project_embedding(embedding.float(), torch)
             embedding = torch.nn.functional.normalize(embedding, p=2, dim=1)
-            return embedding.cpu(), tuple(int(v) for v in embedding.shape[-2:])
+            return embedding.contiguous(), tuple(int(v) for v in embedding.shape[-2:])
 
     def _select_training_images(self, image_paths: list[Path]) -> list[Path]:
         if len(image_paths) <= self.settings.max_training_images:
@@ -350,7 +388,8 @@ class HybridPatchcorePadimInspector:
         resized = cv2.resize(rgb, (self.settings.image_size, self.settings.image_size), interpolation=cv2.INTER_AREA)
         arr = resized.astype(np.float32) / 255.0
         arr = (arr - np.array([0.485, 0.456, 0.406], dtype=np.float32)) / np.array([0.229, 0.224, 0.225], dtype=np.float32)
-        return torch.from_numpy(arr.transpose(2, 0, 1)).unsqueeze(0).float()
+        tensor = torch.from_numpy(arr.transpose(2, 0, 1)).unsqueeze(0).float()
+        return tensor.pin_memory() if torch.cuda.is_available() else tensor
 
     def _build_patchcore_memory(self, embeddings: Any, torch: Any) -> tuple[Any, int]:
         total = embeddings.shape[0]
@@ -388,9 +427,19 @@ class HybridPatchcorePadimInspector:
     def _patchcore_score_map(self, features: Any, memory_bank: Any, torch: Any) -> np.ndarray:
         b, c, h, w = features.shape
         flat = features.flatten(2).permute(0, 2, 1).reshape(-1, c)
-        distances = torch.cdist(flat, memory_bank.to(flat.device))
-        nearest = distances.min(dim=1).values.reshape(h, w).cpu().numpy().astype(np.float32)
+        distances = torch.cdist(flat, memory_bank.to(flat.device, non_blocking=True))
+        nearest = distances.min(dim=1).values.reshape(h, w).detach().cpu().numpy().astype(np.float32)
         return nearest
+
+    def _padim_score_map_torch(self, feature_map: Any, mean: Any, inv_cov: Any, dims: list[int], torch: Any) -> np.ndarray:
+        c, h, w = feature_map.shape
+        dim_index = torch.as_tensor(dims, dtype=torch.long, device=feature_map.device)
+        flat = feature_map.reshape(c, h * w).T.index_select(1, dim_index)
+        mean = mean.to(flat.device, non_blocking=True)
+        inv_cov = inv_cov.to(flat.device, non_blocking=True)
+        delta = flat - mean
+        dist_sq = torch.einsum("pd,pde,pe->p", delta, inv_cov, delta).clamp_min(0.0)
+        return torch.sqrt(dist_sq).reshape(h, w).detach().cpu().numpy().astype(np.float32)
 
     def _padim_score_map(self, feature_map: np.ndarray, mean: np.ndarray, inv_cov: np.ndarray, dims: list[int]) -> np.ndarray:
         c, h, w = feature_map.shape

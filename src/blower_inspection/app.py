@@ -138,7 +138,7 @@ class InspectionWindow(QWidget):
         self.registry = ModelRegistry()
         ensure_model_folders(self.registry)
         self.inspector = HybridPatchcorePadimInspector()
-        self.camera = USBCamera(width=3840, height=2160)
+        self.camera = USBCamera(width=3840, height=2160, fps=30)
         self.frame = None
         self.inspection_running = False
         self.inference_worker: InspectionWorker | None = None
@@ -372,8 +372,6 @@ class InspectionWindow(QWidget):
         self.frame = frame
         if self.latest_annotated_frame is None:
             self.show_frame(frame)
-        else:
-            self.show_frame(self.latest_annotated_frame)
         self.fps_frame_count += 1
         now = time.perf_counter()
         if (
@@ -443,7 +441,7 @@ class InspectionWindow(QWidget):
         target_size = self.viewer.contentsRect().size()
         if target_size.width() <= 0 or target_size.height() <= 0:
             target_size = self.viewer.size()
-        pixmap = QPixmap.fromImage(qimage).scaled(target_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        pixmap = QPixmap.fromImage(qimage).scaled(target_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)
         self.viewer.setPixmap(pixmap)
 
     def resizeEvent(self, event) -> None:
