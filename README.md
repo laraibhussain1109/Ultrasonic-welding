@@ -56,6 +56,15 @@ pip install -e .[industrial]
 python -m blower_inspection.app
 ```
 
+## Runtime acceleration
+
+The live inspector automatically selects CUDA when a CUDA-capable PyTorch build and NVIDIA driver are available. You can override the runtime device with `BLOWER_INSPECTION_DEVICE` (`cuda`, `cpu`, or `directml`/`dml` when `torch-directml` is installed). During live inspection the CNN backbone, PatchCore distance search, and PaDiM scoring stay cached on the selected accelerator instead of being rebuilt on every frame.
+
+```powershell
+$env:BLOWER_INSPECTION_DEVICE = "cuda"
+python -m blower_inspection.app
+```
+
 ## Training workflow
 
 Each configured model has its own normal-image folder:

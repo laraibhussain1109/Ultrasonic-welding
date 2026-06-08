@@ -20,18 +20,24 @@ def _preferred_capture_backend() -> int:
 class USBCamera:
     """Small wrapper around OpenCV VideoCapture for an 8.3 MP USB3 camera."""
 
-    def __init__(self, index: int = 0, width: int = 3840, height: int = 2160) -> None:
+    def __init__(self, index: int = 0, width: int = 3840, height: int = 2160, fps: int = 30) -> None:
         self.index = index
         self.width = width
         self.height = height
+        self.fps = fps
         self.capture: cv2.VideoCapture | None = None
 
     def open(self) -> None:
         self.capture = cv2.VideoCapture(self.index, _preferred_capture_backend())
         if not self.capture.isOpened():
             raise RuntimeError(f"Unable to open camera index {self.index}")
+        if hasattr(cv2, "CAP_PROP_FOURCC"):
+            self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        self.capture.set(cv2.CAP_PROP_FPS, self.fps)
+        if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
+            self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self.capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0)
 
     def read(self) -> np.ndarray:
