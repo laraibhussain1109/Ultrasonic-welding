@@ -78,6 +78,8 @@ data/training/BF-004/normal
 
 For each part model:
 
+> The camera may see the whole table during capture. Live inspection, calibration image loading, CLI inspection, and training now automatically crop each frame to the long dark blower component ROI before the anomaly model runs, so keyboards, rails, cables, and bench clutter are excluded from scoring.
+
 1. Mount the camera rigidly and lock exposure, gain, focus, white balance, and lighting.
 2. Capture at least 100 known-good parts; the software enforces a minimum of 20 images and uses a deterministic, memory-bounded sample of up to 300 images for hybrid training.
 3. Put images in the model's `normal_image_dir`.

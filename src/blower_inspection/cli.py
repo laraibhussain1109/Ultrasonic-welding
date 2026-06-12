@@ -11,6 +11,7 @@ import cv2
 from .auth import AuthStore
 from .config import ModelRegistry, ensure_model_folders
 from .anomaly_models import HybridPatchcorePadimInspector
+from .camera import crop_component_roi
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -58,6 +59,7 @@ def main(argv: list[str] | None = None) -> int:
         image = cv2.imread(str(Path(args.image)))
         if image is None:
             raise SystemExit(f"Unable to read image: {args.image}")
+        image = crop_component_roi(image)
         result = inspector.inspect(model, image)
         print(
             f"{result.status} score={result.anomaly_score:.2f} "

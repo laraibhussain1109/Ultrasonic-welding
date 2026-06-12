@@ -33,6 +33,7 @@ from typing import Any
 import cv2
 import numpy as np
 
+from .camera import crop_component_roi
 from .config import PartModelConfig
 from .trainer import InspectionResult, clean_mask, fan_ring_mask, inspection_overlay, list_images, sector_statistics
 
@@ -157,6 +158,7 @@ class HybridPatchcorePadimInspector:
 
     def inspect(self, config: PartModelConfig, image: np.ndarray, *, save_outputs: bool = True) -> InspectionResult:
         torch = require_module("torch")
+        image = crop_component_roi(image)
         if not config.model_file.exists():
             raise FileNotFoundError(f"Hybrid model has not been trained: {config.model_file}")
         checkpoint = self._load_runtime_checkpoint(torch, config.model_file)
@@ -377,7 +379,7 @@ class HybridPatchcorePadimInspector:
         image = cv2.imread(str(path))
         if image is None:
             raise ValueError(f"Unable to read training image: {path}")
-        return self._preprocess_image(image)
+        return self._preprocess_image(crop_component_roi(image))
 
     def _preprocess_image(self, image: np.ndarray) -> Any:
         torch = require_module("torch")

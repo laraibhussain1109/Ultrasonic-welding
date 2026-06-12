@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
 
 from .anomaly_models import HybridPatchcorePadimInspector
 from .auth import AuthStore, User
-from .camera import USBCamera, save_capture
+from .camera import USBCamera, crop_component_roi, save_capture
 from .config import ModelRegistry, PartModelConfig, ensure_model_folders
 
 
@@ -335,9 +335,10 @@ class InspectionWindow(QWidget):
         if frame is None:
             QMessageBox.critical(self, "Image error", f"Unable to read {path}")
             return
+        frame = crop_component_roi(frame)
         self.frame = frame
         self.show_frame(frame)
-        self.log.addItem(f"LOADED {Path(path).name}")
+        self.log.addItem(f"LOADED ROI {Path(path).name}")
 
     def start_inspection(self) -> None:
         if self.inspection_running:
@@ -365,7 +366,7 @@ class InspectionWindow(QWidget):
         if not self.inspection_running:
             return
         try:
-            frame = self.camera.read()
+            frame = crop_component_roi(self.camera.read())
         except Exception as exc:
             self._handle_live_error(f"Camera frame error: {exc}")
             return
