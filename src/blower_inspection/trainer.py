@@ -15,6 +15,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .camera import crop_component_roi
 from .config import PartModelConfig
 
 IMAGE_EXTENSIONS = {".bmp", ".jpg", ".jpeg", ".png", ".tif", ".tiff"}
@@ -49,6 +50,7 @@ def read_gray(path: str | Path, image_size: tuple[int, int] | None = None) -> np
     image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
     if image is None:
         raise ValueError(f"Unable to read image: {path}")
+    image = crop_component_roi(image)
     if image_size is not None:
         image = cv2.resize(image, image_size, interpolation=cv2.INTER_AREA)
     return image.astype(np.float32) / 255.0
@@ -227,6 +229,7 @@ class NormalTemplateTrainer:
         return config.model_file
 
     def inspect(self, config: PartModelConfig, image: np.ndarray, *, save_outputs: bool = True) -> InspectionResult:
+        image = crop_component_roi(image)
         if not config.model_file.exists():
             raise FileNotFoundError(f"Model has not been trained: {config.model_file}")
         loaded = np.load(config.model_file, allow_pickle=False)
