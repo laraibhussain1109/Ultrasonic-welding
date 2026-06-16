@@ -40,6 +40,22 @@ def test_component_roi_bounds_crops_wide_table_to_blower_component():
     assert y > 450
 
 
+def test_component_roi_bounds_prefers_operator_red_roi_annotation():
+    frame = np.full((900, 1800, 3), 185, dtype=np.uint8)
+    # Dark objects outside the marked ROI should be ignored when an operator
+    # supplies a red full-FOV reference box.
+    cv2.rectangle(frame, (50, 60), (1750, 180), (20, 20, 30), -1)
+    cv2.rectangle(frame, (300, 500), (1300, 680), (35, 35, 45), -1)
+    cv2.rectangle(frame, (260, 460), (1360, 720), (0, 0, 255), 8)
+
+    x, y, w, h = camera.component_roi_bounds(frame)
+
+    assert 260 < x < 275
+    assert 460 < y < 475
+    assert 1070 < w < 1100
+    assert 245 < h < 260
+
+
 def test_crop_component_roi_returns_component_only_from_wide_frame():
     frame = np.full((500, 1000, 3), 190, dtype=np.uint8)
     cv2.rectangle(frame, (20, 300), (920, 405), (20, 20, 30), -1)
