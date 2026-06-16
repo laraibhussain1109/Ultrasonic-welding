@@ -17,6 +17,57 @@ def _preferred_capture_backend() -> int:
     return cv2.CAP_ANY
 
 
+def _red_annotation_roi_bounds(image: np.ndarray) -> tuple[int, int, int, int] | None:
+    """Return bounds inside a red ROI annotation rectangle, when one is present.
+
+    Some calibration/reference images are shared with the desired inspection ROI
+    drawn as a red bounding box over the full camera field of view. Detecting
+    that annotation first lets the application use the operator-marked region
+    exactly instead of accidentally scoring keyboard/table/background pixels.
+    """
+    if image.ndim != 3 or image.shape[0] < 8 or image.shape[1] < 8:
+        return None
+
+    height, width = image.shape[:2]
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    lower_red = cv2.inRange(hsv, (0, 80, 80), (12, 255, 255))
+    upper_red = cv2.inRange(hsv, (168, 80, 80), (180, 255, 255))
+    red_mask = cv2.bitwise_or(lower_red, upper_red)
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+    contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    candidates: list[tuple[float, tuple[int, int, int, int]]] = []
+    frame_area = float(width * height)
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        if w < width * 0.15 or h < height * 0.05:
+            continue
+        rect_area = float(w * h)
+        if rect_area < frame_area * 0.01:
+            continue
+        red_area = float(cv2.countNonZero(red_mask[y : y + h, x : x + w]))
+        border_ratio = red_area / max(rect_area, 1.0)
+        # A drawn box has a small red area compared with its bounding rectangle;
+        # this rejects filled red objects while accepting thick annotation lines.
+        if not 0.002 <= border_ratio <= 0.25:
+            continue
+        aspect = w / max(h, 1)
+        candidates.append((rect_area * aspect, (x, y, w, h)))
+
+    if not candidates:
+        return None
+
+    _score, (x, y, w, h) = max(candidates, key=lambda item: item[0])
+    inset = max(2, min(w, h) // 100)
+    x0 = min(width - 1, x + inset)
+    y0 = min(height - 1, y + inset)
+    x1 = max(x0 + 1, min(width, x + w - inset))
+    y1 = max(y0 + 1, min(height, y + h - inset))
+    return x0, y0, x1 - x0, y1 - y0
+
+
 def component_roi_bounds(image: np.ndarray, *, padding_ratio: float = 0.035) -> tuple[int, int, int, int]:
     """Return ``(x, y, w, h)`` bounds for the blower component inside a wide camera frame.
 
@@ -27,6 +78,10 @@ def component_roi_bounds(image: np.ndarray, *, padding_ratio: float = 0.035) -> 
     """
     if image.size == 0:
         raise ValueError("Cannot crop an empty image")
+
+    annotated_bounds = _red_annotation_roi_bounds(image)
+    if annotated_bounds is not None:
+        return annotated_bounds
 
     height, width = image.shape[:2]
     if height < 4 or width < 4:
