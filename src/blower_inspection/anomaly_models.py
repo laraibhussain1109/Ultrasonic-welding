@@ -288,6 +288,15 @@ class HybridPatchcorePadimInspector:
             torch.backends.cudnn.allow_tf32 = True
         return self._device_cache
 
+    def runtime_device_name(self) -> str:
+        """Return the active inference device for operator diagnostics."""
+        torch = require_module("torch")
+        device = self._device(torch)
+        if getattr(device, "type", None) == "cuda":
+            index = getattr(device, "index", None)
+            return f"cuda:{index or 0} ({torch.cuda.get_device_name(index or 0)})"
+        return str(device)
+
     def _build_backbone(self) -> tuple[Any, _FeatureHook, Any]:
         if self._backbone_cache is not None:
             return self._backbone_cache

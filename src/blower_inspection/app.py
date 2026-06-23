@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import time
+import os
 from pathlib import Path
 
 import cv2
@@ -55,6 +56,13 @@ QListWidget { background: #060e1b; border: 1px solid #0b314a; color: #8fb7df; }
 QSlider::groove:horizontal { height: 7px; background: #10283d; border-radius: 3px; }
 QSlider::handle:horizontal { background: #ffc400; border: 1px solid #ffb000; width: 12px; margin: -5px 0; border-radius: 6px; }
 """
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, str(default))))
+    except ValueError:
+        return default
 
 
 class LoginDialog(QDialog):
@@ -138,7 +146,11 @@ class InspectionWindow(QWidget):
         self.registry = ModelRegistry()
         ensure_model_folders(self.registry)
         self.inspector = HybridPatchcorePadimInspector()
-        self.camera = USBCamera(width=3840, height=2160, fps=30)
+        self.camera = USBCamera(
+            width=_env_int("BLOWER_INSPECTION_CAMERA_WIDTH", 1920),
+            height=_env_int("BLOWER_INSPECTION_CAMERA_HEIGHT", 1080),
+            fps=_env_int("BLOWER_INSPECTION_CAMERA_FPS", 30),
+        )
         self.frame = None
         self.inspection_running = False
         self.inference_worker: InspectionWorker | None = None
@@ -361,7 +373,14 @@ class InspectionWindow(QWidget):
         self.latest_annotated_frame = None
         self.current_display_frame = None
         self.live_roi_bounds = None
-        self.log.addItem(f"LIVE INSPECTION STARTED {self.selected_model().id}")
+        try:
+            device_name = self.inspector.runtime_device_name()
+        except Exception as exc:
+            device_name = f"unavailable ({exc})"
+        self.log.addItem(
+            f"LIVE INSPECTION STARTED {self.selected_model().id} | "
+            f"CAMERA {self.camera.width}x{self.camera.height}@{self.camera.fps} | DEVICE {device_name}"
+        )
         self.live_timer.start(1)
 
     def _process_live_frame(self) -> None:
