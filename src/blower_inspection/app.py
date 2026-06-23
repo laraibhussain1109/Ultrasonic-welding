@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
 
 from .anomaly_models import HybridPatchcorePadimInspector
 from .auth import AuthStore, User
-from .camera import USBCamera, crop_component_roi, save_capture
+from .camera import USBCamera, component_roi_bounds, crop_bounds, crop_component_roi, save_capture
 from .config import ModelRegistry, PartModelConfig, ensure_model_folders
 
 
@@ -124,7 +124,7 @@ class InspectionWorker(QThread):
     def run(self) -> None:
         start = time.perf_counter()
         try:
-            result = self.inspector.inspect(self.model, self.frame, save_outputs=False)
+            result = self.inspector.inspect(self.model, self.frame, save_outputs=False, crop_to_component=False)
         except Exception as exc:
             self.failed.emit(str(exc))
             return
@@ -146,6 +146,7 @@ class InspectionWindow(QWidget):
         self.inference_interval_s = 0.05
         self.latest_annotated_frame = None
         self.current_display_frame = None
+        self.live_roi_bounds = None
         self.fps_frame_count = 0
         self.fps_started_at = time.perf_counter()
         self.stats = {"inspected": 0, "passed": 0, "failed": 0}
@@ -359,14 +360,18 @@ class InspectionWindow(QWidget):
         self.last_inference_at = 0.0
         self.latest_annotated_frame = None
         self.current_display_frame = None
+        self.live_roi_bounds = None
         self.log.addItem(f"LIVE INSPECTION STARTED {self.selected_model().id}")
-        self.live_timer.start(33)
+        self.live_timer.start(1)
 
     def _process_live_frame(self) -> None:
         if not self.inspection_running:
             return
         try:
-            frame = crop_component_roi(self.camera.read())
+            raw_frame = self.camera.read()
+            if self.live_roi_bounds is None:
+                self.live_roi_bounds = component_roi_bounds(raw_frame)
+            frame = crop_bounds(raw_frame, self.live_roi_bounds)
         except Exception as exc:
             self._handle_live_error(f"Camera frame error: {exc}")
             return
@@ -466,6 +471,7 @@ class InspectionWindow(QWidget):
         self.camera.close()
         self.latest_annotated_frame = None
         self.current_display_frame = None
+        self.live_roi_bounds = None
         self.viewer.clear()
         self.viewer.setText("NO CAMERA FRAME")
         self.fps_top.setText("FPS:  -")

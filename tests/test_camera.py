@@ -67,7 +67,15 @@ def test_crop_component_roi_returns_component_only_from_wide_frame():
     assert cropped.mean() < frame.mean()
 
 
-def test_component_roi_bounds_falls_back_to_full_frame_when_no_part_found():
-    frame = np.full((120, 240, 3), 180, dtype=np.uint8)
+def test_component_roi_bounds_falls_back_to_fixed_production_roi_when_no_part_found():
+    frame = np.full((1000, 2000, 3), 180, dtype=np.uint8)
 
-    assert camera.component_roi_bounds(frame) == (0, 0, 240, 120)
+    assert camera.component_roi_bounds(frame) == (160, 370, 1540, 220)
+
+
+def test_crop_bounds_clamps_cached_roi_to_image():
+    frame = np.full((100, 200, 3), 180, dtype=np.uint8)
+
+    cropped = camera.crop_bounds(frame, (-20, 10, 260, 120))
+
+    assert cropped.shape == (90, 200, 3)

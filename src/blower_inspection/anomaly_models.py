@@ -156,9 +156,17 @@ class HybridPatchcorePadimInspector:
         )
         return config.model_file
 
-    def inspect(self, config: PartModelConfig, image: np.ndarray, *, save_outputs: bool = True) -> InspectionResult:
+    def inspect(
+        self,
+        config: PartModelConfig,
+        image: np.ndarray,
+        *,
+        save_outputs: bool = True,
+        crop_to_component: bool = True,
+    ) -> InspectionResult:
         torch = require_module("torch")
-        image = crop_component_roi(image)
+        if crop_to_component:
+            image = crop_component_roi(image)
         if not config.model_file.exists():
             raise FileNotFoundError(f"Hybrid model has not been trained: {config.model_file}")
         checkpoint = self._load_runtime_checkpoint(torch, config.model_file)

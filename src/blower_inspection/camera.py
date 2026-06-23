@@ -68,6 +68,37 @@ def _red_annotation_roi_bounds(image: np.ndarray) -> tuple[int, int, int, int] |
     return x0, y0, x1 - x0, y1 - y0
 
 
+def default_component_roi_bounds(image: np.ndarray) -> tuple[int, int, int, int]:
+    """Return the fixed production ROI covering only the blower fan strip.
+
+    The installed camera intentionally sees the full table for operator context,
+    but inference should only run on the long blower wheel highlighted by the
+    customer-provided red rectangle. These ratios are resolution independent and
+    match that marked production area.
+    """
+    if image.size == 0:
+        raise ValueError("Cannot crop an empty image")
+    height, width = image.shape[:2]
+    if height < 4 or width < 4:
+        return 0, 0, width, height
+    x0 = int(round(width * 0.08))
+    y0 = int(round(height * 0.37))
+    x1 = int(round(width * 0.85))
+    y1 = int(round(height * 0.59))
+    return x0, y0, max(1, x1 - x0), max(1, y1 - y0)
+
+
+def crop_bounds(image: np.ndarray, bounds: tuple[int, int, int, int]) -> np.ndarray:
+    """Crop ``image`` to already-computed ROI bounds."""
+    height, width = image.shape[:2]
+    x, y, w, h = bounds
+    x0 = max(0, min(width - 1, int(x)))
+    y0 = max(0, min(height - 1, int(y)))
+    x1 = max(x0 + 1, min(width, x0 + int(w)))
+    y1 = max(y0 + 1, min(height, y0 + int(h)))
+    return image[y0:y1, x0:x1].copy()
+
+
 def component_roi_bounds(image: np.ndarray, *, padding_ratio: float = 0.035) -> tuple[int, int, int, int]:
     """Return ``(x, y, w, h)`` bounds for the blower component inside a wide camera frame.
 
@@ -125,7 +156,7 @@ def component_roi_bounds(image: np.ndarray, *, padding_ratio: float = 0.035) -> 
         candidates.append((score, (x, y, w, h)))
 
     if not candidates:
-        return 0, 0, width, height
+        return default_component_roi_bounds(image)
 
     _score, (x, y, w, h) = max(candidates, key=lambda item: item[0])
     pad_x = max(4, int(w * padding_ratio))
@@ -140,7 +171,7 @@ def component_roi_bounds(image: np.ndarray, *, padding_ratio: float = 0.035) -> 
 def crop_component_roi(image: np.ndarray, *, padding_ratio: float = 0.035) -> np.ndarray:
     """Crop a wide camera frame down to the blower component inspection ROI."""
     x, y, w, h = component_roi_bounds(image, padding_ratio=padding_ratio)
-    return image[y : y + h, x : x + w].copy()
+    return crop_bounds(image, (x, y, w, h))
 
 
 class USBCamera:
