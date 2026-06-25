@@ -477,8 +477,11 @@ class InspectionWindow(QWidget):
             device_name = self.inspector.runtime_device_name()
         except Exception as exc:
             device_name = f"unavailable ({exc})"
-        esp32_status = "ESP32 READY" if self.esp32_output.connect() else f"ESP32 OFFLINE ({self.esp32_output.last_error})"
-        self.esp32_output.set_fail(False)
+        if self.esp32_output.connect():
+            esp32_status = f"ESP32 READY {self.esp32_output.connected_port}"
+            self.esp32_output.set_fail(False)
+        else:
+            esp32_status = f"ESP32 OFFLINE ({self.esp32_output.last_error})"
         self.log.addItem(
             f"LIVE INSPECTION STARTED {self.selected_model().id} | "
             f"CAMERA {self.camera.width}x{self.camera.height}@{self.camera.fps} | DEVICE {device_name} | {esp32_status}"
@@ -538,7 +541,7 @@ class InspectionWindow(QWidget):
             f"LATENCY:  {latency_ms:.1f} ms"
         )
         self.latency_top.setText(f"LATENCY:  {latency_ms:.0f} ms")
-        if not self.esp32_output.set_fail(not result.is_pass) and self.stats["inspected"] == 1:
+        if not self.esp32_output.set_fail(not result.is_pass) and (self.stats["inspected"] == 1 or not result.is_pass):
             self.log.addItem(f"ESP32 OUTPUT WARNING: {self.esp32_output.last_error}")
         self.log.addItem(f"{result.status} | {self.selected_model().id} | score={result.anomaly_score:.3f}")
 

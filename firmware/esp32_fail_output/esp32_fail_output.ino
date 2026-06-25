@@ -5,17 +5,42 @@
   The firmware drives GPIO 4 (often labeled D4 on ESP32 dev boards) HIGH when
   the Python inspection app sends "FAIL" over USB serial. It drives the pin LOW
   for "PASS", "LOW", "STANDBY", or "RESET".
+
+  If your relay board is active-low, change FAIL_ACTIVE_LEVEL to LOW. If your
+  ESP32 board labels D4 differently, change FAIL_OUTPUT_PIN to the actual GPIO
+  number wired to the relay input.
 */
 
 #ifndef FAIL_OUTPUT_PIN
 #define FAIL_OUTPUT_PIN 4
 #endif
 
+#ifndef FAIL_ACTIVE_LEVEL
+#define FAIL_ACTIVE_LEVEL HIGH
+#endif
+
+const int FAIL_INACTIVE_LEVEL = (FAIL_ACTIVE_LEVEL == HIGH) ? LOW : HIGH;
 String commandBuffer;
+bool failActive = false;
 
 void setFailOutput(bool failed) {
-  digitalWrite(FAIL_OUTPUT_PIN, failed ? HIGH : LOW);
-  Serial.println(failed ? "FAIL_OUTPUT=HIGH" : "FAIL_OUTPUT=LOW");
+  failActive = failed;
+  digitalWrite(FAIL_OUTPUT_PIN, failed ? FAIL_ACTIVE_LEVEL : FAIL_INACTIVE_LEVEL);
+  Serial.print("FAIL_OUTPUT=");
+  Serial.print(failed ? "ACTIVE" : "INACTIVE");
+  Serial.print(" GPIO=");
+  Serial.print(FAIL_OUTPUT_PIN);
+  Serial.print(" LEVEL=");
+  Serial.println(digitalRead(FAIL_OUTPUT_PIN) == HIGH ? "HIGH" : "LOW");
+}
+
+void printStatus() {
+  Serial.print("ESP32_FAIL_OUTPUT_READY GPIO=");
+  Serial.print(FAIL_OUTPUT_PIN);
+  Serial.print(" ACTIVE_LEVEL=");
+  Serial.print(FAIL_ACTIVE_LEVEL == HIGH ? "HIGH" : "LOW");
+  Serial.print(" STATE=");
+  Serial.println(failActive ? "FAIL" : "PASS");
 }
 
 void handleCommand(String command) {
@@ -28,6 +53,8 @@ void handleCommand(String command) {
     setFailOutput(false);
   } else if (command == "PING") {
     Serial.println("PONG");
+  } else if (command == "STATUS") {
+    printStatus();
   } else if (command.length() > 0) {
     Serial.print("UNKNOWN=");
     Serial.println(command);
@@ -36,9 +63,10 @@ void handleCommand(String command) {
 
 void setup() {
   pinMode(FAIL_OUTPUT_PIN, OUTPUT);
-  digitalWrite(FAIL_OUTPUT_PIN, LOW);
+  digitalWrite(FAIL_OUTPUT_PIN, FAIL_INACTIVE_LEVEL);
   Serial.begin(115200);
-  Serial.println("ESP32_FAIL_OUTPUT_READY GPIO=4 BAUD=115200");
+  delay(250);
+  printStatus();
 }
 
 void loop() {

@@ -124,7 +124,7 @@ labeled `D4` on ESP32 development boards. On every detected `FAIL`, the Python
 app sends `FAIL` over USB serial and the firmware drives GPIO 4 HIGH. On `PASS`,
 `STOP`, or standby/reset states, it drives GPIO 4 LOW.
 
-Set the serial port if auto-detection does not find the board:
+The app now scans available serial ports and logs the connected port as `ESP32 READY <port>`. If the inspection log says `ESP32 OFFLINE`, confirm the ESP32 appears in Device Manager / `arduino-cli board list` and set the serial port manually:
 
 ```bash
 export BLOWER_ESP32_PORT=/dev/ttyUSB0
@@ -135,10 +135,12 @@ python -m blower_inspection.app
 Windows PowerShell example:
 
 ```powershell
-$env:BLOWER_ESP32_PORT = "COM3"
+$env:BLOWER_ESP32_PORT = "COM7"
 $env:BLOWER_ESP32_BAUD = "115200"
 python -m blower_inspection.app
 ```
+
+If you set the wrong `BLOWER_ESP32_PORT`, the app will still try other detected ports by default. Set `BLOWER_ESP32_SCAN_ALL=0` to disable fallback scanning. Many ESP32 boards reset when the serial port opens, so the app waits briefly before sending the first command; override this with `BLOWER_ESP32_SETTLE=0` only if needed.
 
 For one-off CLI inspections, add `--esp32-output`:
 
@@ -148,4 +150,4 @@ python -m blower_inspection.cli inspect BF-001 path/to/test_image.png --esp32-ou
 
 Use level shifting, an opto-isolator, or an interposing relay/PLC input module as
 required by the connected machine. Do not connect ESP32 GPIO directly to voltages
-above 3.3 V.
+above 3.3 V. If the ESP32 log shows `FAIL_OUTPUT=ACTIVE ... LEVEL=HIGH` but the relay does not energize, check whether the relay module is active-low; if it is, change `FAIL_ACTIVE_LEVEL` in the firmware from `HIGH` to `LOW` and re-flash.
