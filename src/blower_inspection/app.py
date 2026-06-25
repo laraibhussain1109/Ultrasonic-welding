@@ -43,6 +43,7 @@ from .camera import (
     save_capture,
 )
 from .config import ModelRegistry, PartModelConfig, ensure_model_folders
+from .esp32_output import ESP32FailOutput
 
 
 QSS = """
@@ -148,6 +149,7 @@ class InspectionWindow(QWidget):
         self.registry = ModelRegistry()
         ensure_model_folders(self.registry)
         self.inspector = HybridPatchcorePadimInspector()
+        self.esp32_output = ESP32FailOutput()
         active_model = self.registry.active()
         self.camera = USBCamera(width=active_model.camera_width, height=active_model.camera_height, fps=active_model.camera_fps)
         self.frame = None
@@ -475,9 +477,11 @@ class InspectionWindow(QWidget):
             device_name = self.inspector.runtime_device_name()
         except Exception as exc:
             device_name = f"unavailable ({exc})"
+        esp32_status = "ESP32 READY" if self.esp32_output.connect() else f"ESP32 OFFLINE ({self.esp32_output.last_error})"
+        self.esp32_output.set_fail(False)
         self.log.addItem(
             f"LIVE INSPECTION STARTED {self.selected_model().id} | "
-            f"CAMERA {self.camera.width}x{self.camera.height}@{self.camera.fps} | DEVICE {device_name}"
+            f"CAMERA {self.camera.width}x{self.camera.height}@{self.camera.fps} | DEVICE {device_name} | {esp32_status}"
         )
         self.live_timer.start(1)
 
@@ -534,6 +538,8 @@ class InspectionWindow(QWidget):
             f"LATENCY:  {latency_ms:.1f} ms"
         )
         self.latency_top.setText(f"LATENCY:  {latency_ms:.0f} ms")
+        if not self.esp32_output.set_fail(not result.is_pass) and self.stats["inspected"] == 1:
+            self.log.addItem(f"ESP32 OUTPUT WARNING: {self.esp32_output.last_error}")
         self.log.addItem(f"{result.status} | {self.selected_model().id} | score={result.anomaly_score:.3f}")
 
     def _clear_inference_worker(self) -> None:
@@ -587,6 +593,7 @@ class InspectionWindow(QWidget):
         self.inspection_running = False
         self.live_timer.stop()
         self.camera.close()
+        self.esp32_output.set_fail(False)
         self.latest_annotated_frame = None
         self.current_display_frame = None
         self.live_roi_bounds = None

@@ -11,6 +11,7 @@ import cv2
 from .auth import AuthStore
 from .config import ModelRegistry, ensure_model_folders
 from .anomaly_models import HybridPatchcorePadimInspector
+from .esp32_output import ESP32FailOutput
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -26,6 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     inspect = sub.add_parser("inspect", help="Inspect one image with a trained model")
     inspect.add_argument("model_id")
     inspect.add_argument("image")
+    inspect.add_argument("--esp32-output", action="store_true", help="Send FAIL/PASS output to ESP32 after inspecting the image")
 
     add_user = sub.add_parser("add-user", help="Create or update a UI login")
     add_user.add_argument("username")
@@ -59,6 +61,10 @@ def main(argv: list[str] | None = None) -> int:
         if image is None:
             raise SystemExit(f"Unable to read image: {args.image}")
         result = inspector.inspect(model, image)
+        if args.esp32_output:
+            esp32 = ESP32FailOutput()
+            if not esp32.set_fail(not result.is_pass):
+                print(f"ESP32 output warning: {esp32.last_error}")
         print(
             f"{result.status} score={result.anomaly_score:.2f} "
             f"area={result.defect_area_px} bad_sector_ratio={result.bad_sector_ratio:.3f} "

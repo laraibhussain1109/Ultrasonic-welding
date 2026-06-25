@@ -114,3 +114,38 @@ python -m blower_inspection.cli inspect BF-001 path/to/test_image.png
 - Store failed overlays and JSON reports for process engineering review.
 - The hybrid trainer pools deep features to a 28×28 patch grid, projects them to 256 dimensions, caps PaDiM at 128 components, and caps PatchCore memory to prevent multi-gigabyte covariance allocations on line PCs.
 - Use line PLC handshaking before enabling automatic reject gates.
+
+## ESP32 fail output
+
+The inspection UI can drive an ESP32 output pin when a part fails inspection. Flash
+`firmware/esp32_fail_output/esp32_fail_output.ino` to the ESP32 with the Arduino
+IDE or `arduino-cli`. The sketch uses GPIO 4 by default, which is commonly
+labeled `D4` on ESP32 development boards. On every detected `FAIL`, the Python
+app sends `FAIL` over USB serial and the firmware drives GPIO 4 HIGH. On `PASS`,
+`STOP`, or standby/reset states, it drives GPIO 4 LOW.
+
+Set the serial port if auto-detection does not find the board:
+
+```bash
+export BLOWER_ESP32_PORT=/dev/ttyUSB0
+export BLOWER_ESP32_BAUD=115200
+python -m blower_inspection.app
+```
+
+Windows PowerShell example:
+
+```powershell
+$env:BLOWER_ESP32_PORT = "COM3"
+$env:BLOWER_ESP32_BAUD = "115200"
+python -m blower_inspection.app
+```
+
+For one-off CLI inspections, add `--esp32-output`:
+
+```bash
+python -m blower_inspection.cli inspect BF-001 path/to/test_image.png --esp32-output
+```
+
+Use level shifting, an opto-isolator, or an interposing relay/PLC input module as
+required by the connected machine. Do not connect ESP32 GPIO directly to voltages
+above 3.3 V.
