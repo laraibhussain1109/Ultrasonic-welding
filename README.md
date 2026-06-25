@@ -124,7 +124,7 @@ labeled `D4` on ESP32 development boards. On every detected `FAIL`, the Python
 app sends `FAIL` over USB serial and the firmware drives GPIO 4 HIGH. On `PASS`,
 `STOP`, or standby/reset states, it drives GPIO 4 LOW.
 
-The app now scans available serial ports and logs the connected port as `ESP32 READY <port>`. If the inspection log says `ESP32 OFFLINE`, confirm the ESP32 appears in Device Manager / `arduino-cli board list` and set the serial port manually:
+The app now scans available serial ports, sends a `PING` handshake to the firmware, and only logs `ESP32 READY <port>` after the firmware replies with `PONG` or `ESP32_FAIL_OUTPUT_READY`. This prevents false-ready cases where Windows opens a built-in serial port such as `COM1` that is not the ESP32. If the inspection log says `ESP32 OFFLINE`, confirm the ESP32 appears in Device Manager / `arduino-cli board list` and set the serial port manually:
 
 ```bash
 export BLOWER_ESP32_PORT=/dev/ttyUSB0
@@ -140,7 +140,7 @@ $env:BLOWER_ESP32_BAUD = "115200"
 python -m blower_inspection.app
 ```
 
-If you set the wrong `BLOWER_ESP32_PORT`, the app will still try other detected ports by default. Set `BLOWER_ESP32_SCAN_ALL=0` to disable fallback scanning. Many ESP32 boards reset when the serial port opens, so the app waits briefly before sending the first command; override this with `BLOWER_ESP32_SETTLE=0` only if needed.
+If you set the wrong `BLOWER_ESP32_PORT`, the app will still try other detected ports by default. Set `BLOWER_ESP32_SCAN_ALL=0` to disable fallback scanning. Many ESP32 boards reset when the serial port opens, so the app waits briefly before sending the handshake and first command; override this with `BLOWER_ESP32_SETTLE=0` only if needed. Keep `BLOWER_ESP32_REQUIRE_HANDSHAKE=1` unless you intentionally replaced the provided firmware, because the handshake is what prevents the app from selecting the wrong COM port.
 
 
 ### Python serial dependency

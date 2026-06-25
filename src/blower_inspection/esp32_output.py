@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 DEFAULT_BAUDRATE = 115200
 DEFAULT_TIMEOUT_S = 0.2
+DEFAULT_HANDSHAKE_TIMEOUT_S = 2.0
 DEFAULT_CONNECT_SETTLE_S = 1.5
 PYSERIAL_INSTALL_HINT = "Install pyserial with: python -m pip install pyserial (or reinstall the app with: python -m pip install -e .[industrial])"
 ESP32_PORT_KEYWORDS = ("cp210", "ch340", "ch910", "silicon labs", "usb serial", "esp32", "wch")
@@ -25,6 +26,7 @@ class ESP32OutputConfig:
     enabled: bool = True
     connect_settle_s: float = DEFAULT_CONNECT_SETTLE_S
     scan_all_ports: bool = True
+    require_handshake: bool = True
 
     @classmethod
     def from_env(cls) -> "ESP32OutputConfig":
@@ -32,12 +34,15 @@ class ESP32OutputConfig:
         enabled = enabled_value not in {"0", "false", "no", "off", "disabled"}
         scan_value = os.getenv("BLOWER_ESP32_SCAN_ALL", "1").strip().lower()
         scan_all_ports = scan_value not in {"0", "false", "no", "off", "disabled"}
+        handshake_value = os.getenv("BLOWER_ESP32_REQUIRE_HANDSHAKE", "1").strip().lower()
+        require_handshake = handshake_value not in {"0", "false", "no", "off", "disabled"}
         return cls(
             port=os.getenv("BLOWER_ESP32_PORT") or autodetect_port(),
             baudrate=int(os.getenv("BLOWER_ESP32_BAUD", str(DEFAULT_BAUDRATE))),
             enabled=enabled,
             connect_settle_s=float(os.getenv("BLOWER_ESP32_SETTLE", str(DEFAULT_CONNECT_SETTLE_S))),
             scan_all_ports=scan_all_ports,
+            require_handshake=require_handshake,
         )
 
 
@@ -105,6 +110,7 @@ class ESP32FailOutput:
         self._serial = None
         self.connected_port: str | None = None
         self.last_error: str | None = None
+        self.last_response: str | None = None
 
     @property
     def is_connected(self) -> bool:
@@ -145,11 +151,43 @@ class ESP32FailOutput:
             self.last_error = None
             if self.config.connect_settle_s > 0:
                 time.sleep(self.config.connect_settle_s)
+            if self.config.require_handshake and not self._verify_firmware():
+                failed_response = self.last_response or "no response"
+                self.last_error = f"{port}: opened but ESP32 firmware handshake failed ({failed_response})"
+                self.close()
+                return False
             return True
         except Exception as exc:
             self._serial = None
             self.connected_port = None
             self.last_error = f"{port}: {exc}"
+            return False
+
+    def _verify_firmware(self) -> bool:
+        if self._serial is None:
+            return False
+        try:
+            if hasattr(self._serial, "reset_input_buffer"):
+                self._serial.reset_input_buffer()
+            self._serial.write(b"PING\n")
+            self._serial.flush()
+            deadline = time.monotonic() + DEFAULT_HANDSHAKE_TIMEOUT_S
+            responses: list[str] = []
+            while time.monotonic() < deadline:
+                raw = self._serial.readline()
+                if not raw:
+                    continue
+                response = raw.decode("utf-8", errors="replace").strip()
+                if not response:
+                    continue
+                responses.append(response)
+                if response == "PONG" or response.startswith("ESP32_FAIL_OUTPUT_READY"):
+                    self.last_response = response
+                    return True
+            self.last_response = "; ".join(responses[-3:]) if responses else None
+            return False
+        except Exception as exc:
+            self.last_response = f"handshake error: {exc}"
             return False
 
     def send(self, command: str) -> bool:

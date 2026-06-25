@@ -1,18 +1,29 @@
+import sys
+from types import SimpleNamespace
+
 from blower_inspection import esp32_output
 from blower_inspection.esp32_output import ESP32FailOutput, ESP32OutputConfig
 
 
 class FakeSerial:
-    def __init__(self):
+    def __init__(self, responses=None):
         self.is_open = True
         self.writes = []
         self.closed = False
+        self.responses = list(responses or [])
+        self.reset_count = 0
 
     def write(self, data):
         self.writes.append(data)
 
     def flush(self):
         pass
+
+    def readline(self):
+        return self.responses.pop(0) if self.responses else b""
+
+    def reset_input_buffer(self):
+        self.reset_count += 1
 
     def close(self):
         self.closed = True
@@ -73,3 +84,37 @@ def test_missing_pyserial_reports_install_hint(monkeypatch):
 
     assert output.connect() is False
     assert "python -m pip install pyserial" in output.last_error
+
+
+def test_handshake_skips_non_esp32_port_and_uses_firmware_port(monkeypatch):
+    opened = {}
+
+    def serial_factory(port, _baudrate, timeout):
+        responses = [b"PONG\n"] if port == "COM7" else []
+        serial = FakeSerial(responses=responses)
+        serial.timeout = timeout
+        opened[port] = serial
+        return serial
+
+    monkeypatch.setitem(sys.modules, "serial", SimpleNamespace(Serial=serial_factory))
+    monkeypatch.setattr(esp32_output, "candidate_ports", lambda preferred_port=None: ["COM1", "COM7"])
+    monkeypatch.setattr(esp32_output, "DEFAULT_HANDSHAKE_TIMEOUT_S", 0.01)
+    output = ESP32FailOutput(ESP32OutputConfig(port="COM1", connect_settle_s=0, scan_all_ports=True))
+
+    assert output.connect() is True
+    assert opened["COM1"].closed is True
+    assert opened["COM1"].writes == [b"PING\n"]
+    assert opened["COM7"].writes == [b"PING\n"]
+    assert output.connected_port == "COM7"
+
+
+def test_handshake_can_be_disabled_for_custom_firmware(monkeypatch):
+    fake = FakeSerial()
+    monkeypatch.setitem(sys.modules, "serial", SimpleNamespace(Serial=lambda *_args, **_kwargs: fake))
+    output = ESP32FailOutput(
+        ESP32OutputConfig(port="COM9", connect_settle_s=0, scan_all_ports=False, require_handshake=False)
+    )
+
+    assert output.connect() is True
+    assert fake.writes == []
+    assert output.connected_port == "COM9"
