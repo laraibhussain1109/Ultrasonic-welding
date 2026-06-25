@@ -121,38 +121,80 @@ The inspection UI can drive an ESP32 output pin when a part fails inspection. Fl
 `firmware/esp32_fail_output/esp32_fail_output.ino` to the ESP32 with the Arduino
 IDE or `arduino-cli`. The sketch uses GPIO 4 by default, which is commonly
 labeled `D4` on ESP32 development boards. On every detected `FAIL`, the Python
-app sends `FAIL` over USB serial and the firmware drives GPIO 4 HIGH. On `PASS`,
-`STOP`, or standby/reset states, it drives GPIO 4 LOW.
+app sends a wireless HTTP command to the ESP32 and the firmware drives GPIO 4
+HIGH. On `PASS`, `STOP`, or standby/reset states, it drives GPIO 4 LOW.
 
-The app now scans available serial ports, sends a `PING` handshake to the firmware, and only logs `ESP32 READY <port>` after the firmware replies with `PONG` or `ESP32_FAIL_OUTPUT_READY`. This prevents false-ready cases where Windows opens a built-in serial port such as `COM1` that is not the ESP32. If the inspection log says `ESP32 OFFLINE`, confirm the ESP32 appears in Device Manager / `arduino-cli board list` and set the serial port manually:
+### Recommended WiFi / hotspot mode
 
-```bash
-export BLOWER_ESP32_PORT=/dev/ttyUSB0
-export BLOWER_ESP32_BAUD=115200
+USB serial is no longer required for production triggering. By default the ESP32
+creates its own hotspot:
+
+| Setting | Default |
+| --- | --- |
+| SSID | `NeuroIris-ESP32` |
+| Password | `neuroiris123` |
+| ESP32 URL | `http://192.168.4.1` |
+
+Deployment steps:
+
+1. Flash the ESP32 firmware once.
+2. On the production PC, connect WiFi to the `NeuroIris-ESP32` hotspot.
+3. Start the app normally:
+
+```powershell
 python -m blower_inspection.app
 ```
 
-Windows PowerShell example:
+The app defaults to WiFi transport and calls:
+
+- `http://192.168.4.1/ping` to verify the ESP32 is reachable,
+- `http://192.168.4.1/fail` when inspection result is FAIL,
+- `http://192.168.4.1/pass` when inspection result is PASS or inspection stops.
+
+If you put the ESP32 and production PC on another WiFi network, set the ESP32 URL
+before launching:
 
 ```powershell
+$env:BLOWER_ESP32_TRANSPORT = "wifi"
+$env:BLOWER_ESP32_URL = "http://192.168.1.50"
+python -m blower_inspection.app
+```
+
+For one-off CLI inspections, add `--esp32-output` after setting the same WiFi
+environment variables if needed:
+
+```bash
+python -m blower_inspection.cli inspect BF-001 path/to/test_image.png --esp32-output
+```
+
+### Optional USB serial fallback
+
+USB serial remains available for bench testing or if you explicitly prefer a
+cabled trigger path:
+
+```powershell
+$env:BLOWER_ESP32_TRANSPORT = "serial"
 $env:BLOWER_ESP32_PORT = "COM7"
 $env:BLOWER_ESP32_BAUD = "115200"
 python -m blower_inspection.app
 ```
 
-If you set the wrong `BLOWER_ESP32_PORT`, the app will still try other detected ports by default. Set `BLOWER_ESP32_SCAN_ALL=0` to disable fallback scanning. Many ESP32 boards reset when the serial port opens, so the app waits briefly before sending the handshake and first command; override this with `BLOWER_ESP32_SETTLE=0` only if needed. Keep `BLOWER_ESP32_REQUIRE_HANDSHAKE=1` unless you intentionally replaced the provided firmware, because the handshake is what prevents the app from selecting the wrong COM port.
-
+When serial mode is enabled, the app scans available serial ports, sends a `PING`
+handshake to the firmware, and only logs `ESP32 READY <port>` after the firmware
+replies with `PONG` or `ESP32_FAIL_OUTPUT_READY`. Keep
+`BLOWER_ESP32_REQUIRE_HANDSHAKE=1` unless you intentionally replaced the provided
+firmware.
 
 ### Python serial dependency
 
 You do **not** need the Arduino IDE on the deployment PC just to run inspection.
 The Arduino IDE or `arduino-cli` is only needed on whichever computer you use to
 flash `firmware/esp32_fail_output/esp32_fail_output.ino` onto the ESP32. The
-deployment PC only needs the Python package `pyserial` so the app can open the
-ESP32 USB COM port.
+deployment PC only needs `pyserial` if you choose optional USB serial mode. WiFi
+mode uses Python's standard library HTTP client.
 
-If the log says `No module named serial`, install `pyserial` into the same Python
-environment that launches the app:
+If serial mode says `No module named serial`, install `pyserial` into the same
+Python environment that launches the app:
 
 ```powershell
 python -m pip install pyserial
@@ -169,12 +211,18 @@ Avoid launching as `python -m src.blower_inspection.app`; use
 `python -m blower_inspection.app` after installation so the same environment gets
 the package dependencies.
 
-For one-off CLI inspections, add `--esp32-output`:
-
-```bash
-python -m blower_inspection.cli inspect BF-001 path/to/test_image.png --esp32-output
-```
-
 Use level shifting, an opto-isolator, or an interposing relay/PLC input module as
 required by the connected machine. Do not connect ESP32 GPIO directly to voltages
-above 3.3 V. If the ESP32 log shows `FAIL_OUTPUT=ACTIVE ... LEVEL=HIGH` but the relay does not energize, check whether the relay module is active-low; if it is, change `FAIL_ACTIVE_LEVEL` in the firmware from `HIGH` to `LOW` and re-flash.
+above 3.3 V. If the ESP32 HTTP `/fail` response shows
+`FAIL_OUTPUT=ACTIVE ... LEVEL=HIGH` but the relay does not energize, check whether
+the relay module is active-low; if it is, change `FAIL_ACTIVE_LEVEL` in the
+firmware from `HIGH` to `LOW` and re-flash.
+
+## Production recommendations
+
+- Use a mechanical nest with angular keying; do not rely on software alignment for large pose variation.
+- Use diffuse ring/coaxial lighting for weld consistency and a low-angle secondary light for hairline cracks.
+- Keep a master set of golden PASS/FAIL samples for every model and re-run them after any threshold or lighting change.
+- Store failed overlays and JSON reports for process engineering review.
+- The hybrid trainer pools deep features to a 28×28 patch grid, projects them to 256 dimensions, caps PaDiM at 128 components, and caps PatchCore memory to prevent multi-gigabyte covariance allocations on line PCs.
+- Use line PLC handshaking before enabling automatic reject gates.

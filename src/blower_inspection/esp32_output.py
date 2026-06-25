@@ -1,4 +1,4 @@
-"""Serial control for an ESP32 reject/fail output pin."""
+"""Control an ESP32 reject/fail output pin over WiFi or USB serial."""
 
 from __future__ import annotations
 
@@ -7,19 +7,23 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from urllib import request
+from urllib.error import URLError
 
 
 DEFAULT_BAUDRATE = 115200
 DEFAULT_TIMEOUT_S = 0.2
+DEFAULT_WIFI_TIMEOUT_S = 0.5
 DEFAULT_HANDSHAKE_TIMEOUT_S = 2.0
 DEFAULT_CONNECT_SETTLE_S = 1.5
+DEFAULT_WIFI_BASE_URL = "http://192.168.4.1"
 PYSERIAL_INSTALL_HINT = "Install pyserial with: python -m pip install pyserial (or reinstall the app with: python -m pip install -e .[industrial])"
 ESP32_PORT_KEYWORDS = ("cp210", "ch340", "ch910", "silicon labs", "usb serial", "esp32", "wch")
 
 
 @dataclass(frozen=True)
 class ESP32OutputConfig:
-    """Configuration for the ESP32 serial fail-output controller."""
+    """Configuration for the ESP32 fail-output controller."""
 
     port: str | None = None
     baudrate: int = DEFAULT_BAUDRATE
@@ -27,6 +31,9 @@ class ESP32OutputConfig:
     connect_settle_s: float = DEFAULT_CONNECT_SETTLE_S
     scan_all_ports: bool = True
     require_handshake: bool = True
+    transport: str = "wifi"
+    wifi_base_url: str = DEFAULT_WIFI_BASE_URL
+    wifi_timeout_s: float = DEFAULT_WIFI_TIMEOUT_S
 
     @classmethod
     def from_env(cls) -> "ESP32OutputConfig":
@@ -43,6 +50,9 @@ class ESP32OutputConfig:
             connect_settle_s=float(os.getenv("BLOWER_ESP32_SETTLE", str(DEFAULT_CONNECT_SETTLE_S))),
             scan_all_ports=scan_all_ports,
             require_handshake=require_handshake,
+            transport=os.getenv("BLOWER_ESP32_TRANSPORT", "wifi").strip().lower(),
+            wifi_base_url=os.getenv("BLOWER_ESP32_URL", DEFAULT_WIFI_BASE_URL).rstrip("/"),
+            wifi_timeout_s=float(os.getenv("BLOWER_ESP32_WIFI_TIMEOUT", str(DEFAULT_WIFI_TIMEOUT_S))),
         )
 
 
@@ -98,11 +108,11 @@ def autodetect_port() -> str | None:
 
 
 class ESP32FailOutput:
-    """Best-effort serial client for driving the ESP32 fail output.
+    """Best-effort client for driving the ESP32 fail output.
 
-    The matching firmware accepts newline-terminated commands:
-    ``FAIL`` drives the configured GPIO HIGH, while ``PASS``, ``LOW``, and
-    ``STANDBY`` drive it LOW.
+    WiFi mode talks to the firmware HTTP endpoints (``/fail``, ``/pass``,
+    ``/ping``). Serial mode remains available by setting
+    ``BLOWER_ESP32_TRANSPORT=serial``.
     """
 
     def __init__(self, config: ESP32OutputConfig | None = None) -> None:
@@ -114,6 +124,8 @@ class ESP32FailOutput:
 
     @property
     def is_connected(self) -> bool:
+        if self.config.transport == "wifi":
+            return self.connected_port is not None
         return self._serial is not None and bool(getattr(self._serial, "is_open", False))
 
     def connect(self) -> bool:
@@ -122,6 +134,38 @@ class ESP32FailOutput:
             return False
         if self.is_connected:
             return True
+        if self.config.transport == "wifi":
+            return self._connect_wifi()
+        if self.config.transport == "serial":
+            return self._connect_serial()
+        self.last_error = f"Unsupported ESP32 transport '{self.config.transport}'. Use 'wifi' or 'serial'."
+        return False
+
+    def _connect_wifi(self) -> bool:
+        response = self._http_get("/ping")
+        if response is None:
+            return False
+        if response.strip() != "PONG":
+            self.last_error = f"WiFi handshake failed at {self.config.wifi_base_url}: {response!r}"
+            return False
+        self.connected_port = self.config.wifi_base_url
+        self.last_response = response
+        self.last_error = None
+        return True
+
+    def _http_get(self, path: str) -> str | None:
+        url = f"{self.config.wifi_base_url}{path}"
+        try:
+            with request.urlopen(url, timeout=self.config.wifi_timeout_s) as response:
+                body = response.read().decode("utf-8", errors="replace").strip()
+        except (OSError, URLError) as exc:
+            self.last_error = f"ESP32 WiFi unavailable at {url}: {exc}"
+            self.connected_port = None
+            return None
+        self.last_response = body
+        return body
+
+    def _connect_serial(self) -> bool:
         ports = candidate_ports(self.config.port) if self.config.scan_all_ports else ([self.config.port] if self.config.port else [])
         if not ports:
             self.last_error = "No ESP32 serial port found; set BLOWER_ESP32_PORT"
@@ -191,10 +235,27 @@ class ESP32FailOutput:
             return False
 
     def send(self, command: str) -> bool:
+        normalized = command.strip().upper()
         if not self.connect():
             return False
+        if self.config.transport == "wifi":
+            endpoint_by_command = {
+                "FAIL": "/fail",
+                "HIGH": "/fail",
+                "PASS": "/pass",
+                "LOW": "/pass",
+                "STANDBY": "/pass",
+                "RESET": "/pass",
+                "PING": "/ping",
+                "STATUS": "/status",
+            }
+            endpoint = endpoint_by_command.get(normalized)
+            if endpoint is None:
+                self.last_error = f"Unsupported WiFi command: {normalized}"
+                return False
+            return self._http_get(endpoint) is not None
         try:
-            self._serial.write(f"{command.strip().upper()}\n".encode("ascii"))
+            self._serial.write(f"{normalized}\n".encode("ascii"))
             self._serial.flush()
             self.last_error = None
             return True
@@ -208,10 +269,9 @@ class ESP32FailOutput:
         return self.send("FAIL" if failed else "PASS")
 
     def close(self) -> None:
-        if self._serial is None:
-            return
-        try:
-            self._serial.close()
-        finally:
-            self._serial = None
-            self.connected_port = None
+        if self._serial is not None:
+            try:
+                self._serial.close()
+            finally:
+                self._serial = None
+        self.connected_port = None

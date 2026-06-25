@@ -31,14 +31,14 @@ class FakeSerial:
 
 
 def test_disabled_output_does_not_connect():
-    output = ESP32FailOutput(ESP32OutputConfig(port="/dev/ttyUSB0", enabled=False, connect_settle_s=0))
+    output = ESP32FailOutput(ESP32OutputConfig(port="/dev/ttyUSB0", enabled=False, connect_settle_s=0, transport="serial"))
 
     assert output.set_fail(True) is False
     assert output.last_error == "ESP32 output disabled"
 
 
 def test_set_fail_writes_expected_commands():
-    output = ESP32FailOutput(ESP32OutputConfig(port="/dev/ttyUSB0", connect_settle_s=0))
+    output = ESP32FailOutput(ESP32OutputConfig(port="/dev/ttyUSB0", connect_settle_s=0, transport="serial"))
     fake = FakeSerial()
     output._serial = fake
 
@@ -49,7 +49,7 @@ def test_set_fail_writes_expected_commands():
 
 def test_connect_falls_back_from_wrong_preferred_port(monkeypatch):
     monkeypatch.setattr(esp32_output, "candidate_ports", lambda preferred_port=None: [preferred_port, "COM7"])
-    output = ESP32FailOutput(ESP32OutputConfig(port="COM3", connect_settle_s=0, scan_all_ports=True))
+    output = ESP32FailOutput(ESP32OutputConfig(port="COM3", connect_settle_s=0, scan_all_ports=True, transport="serial"))
     opened_ports = []
 
     def fake_open_port(port):
@@ -80,7 +80,7 @@ def test_missing_pyserial_reports_install_hint(monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    output = ESP32FailOutput(ESP32OutputConfig(port="COM3", connect_settle_s=0, scan_all_ports=False))
+    output = ESP32FailOutput(ESP32OutputConfig(port="COM3", connect_settle_s=0, scan_all_ports=False, transport="serial"))
 
     assert output.connect() is False
     assert "python -m pip install pyserial" in output.last_error
@@ -99,7 +99,7 @@ def test_handshake_skips_non_esp32_port_and_uses_firmware_port(monkeypatch):
     monkeypatch.setitem(sys.modules, "serial", SimpleNamespace(Serial=serial_factory))
     monkeypatch.setattr(esp32_output, "candidate_ports", lambda preferred_port=None: ["COM1", "COM7"])
     monkeypatch.setattr(esp32_output, "DEFAULT_HANDSHAKE_TIMEOUT_S", 0.01)
-    output = ESP32FailOutput(ESP32OutputConfig(port="COM1", connect_settle_s=0, scan_all_ports=True))
+    output = ESP32FailOutput(ESP32OutputConfig(port="COM1", connect_settle_s=0, scan_all_ports=True, transport="serial"))
 
     assert output.connect() is True
     assert opened["COM1"].closed is True
@@ -112,9 +112,36 @@ def test_handshake_can_be_disabled_for_custom_firmware(monkeypatch):
     fake = FakeSerial()
     monkeypatch.setitem(sys.modules, "serial", SimpleNamespace(Serial=lambda *_args, **_kwargs: fake))
     output = ESP32FailOutput(
-        ESP32OutputConfig(port="COM9", connect_settle_s=0, scan_all_ports=False, require_handshake=False)
+        ESP32OutputConfig(port="COM9", connect_settle_s=0, scan_all_ports=False, require_handshake=False, transport="serial")
     )
 
     assert output.connect() is True
     assert fake.writes == []
     assert output.connected_port == "COM9"
+
+
+def test_wifi_connect_and_set_fail(monkeypatch):
+    calls = []
+
+    def fake_http_get(self, path):
+        calls.append(path)
+        if path == "/ping":
+            return "PONG"
+        if path == "/fail":
+            return "FAIL_OUTPUT=ACTIVE GPIO=4 LEVEL=HIGH"
+        return "OK"
+
+    monkeypatch.setattr(ESP32FailOutput, "_http_get", fake_http_get)
+    output = ESP32FailOutput(ESP32OutputConfig(transport="wifi", wifi_base_url="http://192.168.4.1"))
+
+    assert output.set_fail(True) is True
+    assert output.connected_port == "http://192.168.4.1"
+    assert calls == ["/ping", "/fail"]
+
+
+def test_wifi_rejects_failed_ping(monkeypatch):
+    monkeypatch.setattr(ESP32FailOutput, "_http_get", lambda self, path: "NOT_PONG")
+    output = ESP32FailOutput(ESP32OutputConfig(transport="wifi", wifi_base_url="http://192.168.4.1"))
+
+    assert output.connect() is False
+    assert "WiFi handshake failed" in output.last_error
