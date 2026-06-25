@@ -14,7 +14,16 @@
       "min_defect_area_px": 120,
       "max_bad_sector_ratio": 0.18,
       "algorithm": "hybrid_patchcore_padim",
-      "image_size": 384
+      "image_size": 384,
+      "roi_ratios": [
+        0.08,
+        0.37,
+        0.77,
+        0.22
+      ],
+      "camera_width": 1920,
+      "camera_height": 1080,
+      "camera_fps": 30
     },
     {
       "id": "BF-002",
@@ -29,7 +38,16 @@
       "min_defect_area_px": 120,
       "max_bad_sector_ratio": 0.18,
       "algorithm": "hybrid_patchcore_padim",
-      "image_size": 384
+      "image_size": 384,
+      "roi_ratios": [
+        0.08,
+        0.37,
+        0.77,
+        0.22
+      ],
+      "camera_width": 1920,
+      "camera_height": 1080,
+      "camera_fps": 30
     },
     {
       "id": "BF-003",
@@ -44,7 +62,16 @@
       "min_defect_area_px": 140,
       "max_bad_sector_ratio": 0.18,
       "algorithm": "hybrid_patchcore_padim",
-      "image_size": 384
+      "image_size": 384,
+      "roi_ratios": [
+        0.08,
+        0.37,
+        0.77,
+        0.22
+      ],
+      "camera_width": 1920,
+      "camera_height": 1080,
+      "camera_fps": 30
     },
     {
       "id": "BF-004",
@@ -59,7 +86,16 @@
       "min_defect_area_px": 140,
       "max_bad_sector_ratio": 0.18,
       "algorithm": "hybrid_patchcore_padim",
-      "image_size": 384
+      "image_size": 384,
+      "roi_ratios": [
+        0.08,
+        0.37,
+        0.77,
+        0.22
+      ],
+      "camera_width": 1920,
+      "camera_height": 1080,
+      "camera_fps": 30
     }
   ]
 }

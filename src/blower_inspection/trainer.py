@@ -46,11 +46,15 @@ def list_images(directory: str | Path) -> list[Path]:
     return sorted(path for path in directory.iterdir() if path.suffix.lower() in IMAGE_EXTENSIONS and path.is_file())
 
 
-def read_gray(path: str | Path, image_size: tuple[int, int] | None = None) -> np.ndarray:
+def read_gray(
+    path: str | Path,
+    image_size: tuple[int, int] | None = None,
+    roi_ratios: tuple[float, float, float, float] | None = None,
+) -> np.ndarray:
     image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
     if image is None:
         raise ValueError(f"Unable to read image: {path}")
-    image = crop_component_roi(image)
+    image = crop_component_roi(image, roi_ratios=roi_ratios)
     if image_size is not None:
         image = cv2.resize(image, image_size, interpolation=cv2.INTER_AREA)
     return image.astype(np.float32) / 255.0
@@ -205,7 +209,7 @@ class NormalTemplateTrainer:
             raise ValueError(
                 f"Need at least 3 normal images in {config.normal_image_dir}; found {len(image_paths)}"
             )
-        images = [read_gray(path, self.image_size) for path in image_paths]
+        images = [read_gray(path, self.image_size, config.roi_ratios) for path in image_paths]
         reference = images[0]
         aligned = [reference]
         for image in images[1:]:
@@ -229,7 +233,7 @@ class NormalTemplateTrainer:
         return config.model_file
 
     def inspect(self, config: PartModelConfig, image: np.ndarray, *, save_outputs: bool = True) -> InspectionResult:
-        image = crop_component_roi(image)
+        image = crop_component_roi(image, roi_ratios=config.roi_ratios)
         if not config.model_file.exists():
             raise FileNotFoundError(f"Model has not been trained: {config.model_file}")
         loaded = np.load(config.model_file, allow_pickle=False)

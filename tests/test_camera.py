@@ -79,3 +79,9 @@ def test_crop_bounds_clamps_cached_roi_to_image():
     cropped = camera.crop_bounds(frame, (-20, 10, 260, 120))
 
     assert cropped.shape == (90, 200, 3)
+
+
+def test_component_roi_bounds_uses_saved_model_roi_ratios():
+    frame = np.full((1000, 2000, 3), 180, dtype=np.uint8)
+
+    assert camera.component_roi_bounds(frame, roi_ratios=(0.1, 0.2, 0.3, 0.4)) == (200, 200, 600, 400)

@@ -68,6 +68,35 @@ def _red_annotation_roi_bounds(image: np.ndarray) -> tuple[int, int, int, int] |
     return x0, y0, x1 - x0, y1 - y0
 
 
+DEFAULT_COMPONENT_ROI_RATIOS = (0.08, 0.37, 0.77, 0.22)
+
+
+def roi_bounds_from_ratios(image: np.ndarray, roi_ratios: tuple[float, float, float, float]) -> tuple[int, int, int, int]:
+    """Convert normalized ``(x, y, w, h)`` ROI ratios to image pixel bounds."""
+    if image.size == 0:
+        raise ValueError("Cannot crop an empty image")
+    height, width = image.shape[:2]
+    if height < 4 or width < 4:
+        return 0, 0, width, height
+    x_ratio, y_ratio, w_ratio, h_ratio = roi_ratios
+    x0 = int(round(width * min(max(x_ratio, 0.0), 0.99)))
+    y0 = int(round(height * min(max(y_ratio, 0.0), 0.99)))
+    x1 = int(round(width * min(max(x_ratio + w_ratio, 0.01), 1.0)))
+    y1 = int(round(height * min(max(y_ratio + h_ratio, 0.01), 1.0)))
+    return x0, y0, max(1, x1 - x0), max(1, y1 - y0)
+
+
+def roi_ratios_from_bounds(
+    image: np.ndarray, bounds: tuple[int, int, int, int]
+) -> tuple[float, float, float, float]:
+    """Convert pixel ROI bounds to normalized ``(x, y, w, h)`` ratios."""
+    if image.size == 0:
+        raise ValueError("Cannot calculate ROI ratios for an empty image")
+    height, width = image.shape[:2]
+    x, y, w, h = bounds
+    return x / width, y / height, w / width, h / height
+
+
 def default_component_roi_bounds(image: np.ndarray) -> tuple[int, int, int, int]:
     """Return the fixed production ROI covering only the blower fan strip.
 
@@ -81,11 +110,7 @@ def default_component_roi_bounds(image: np.ndarray) -> tuple[int, int, int, int]
     height, width = image.shape[:2]
     if height < 4 or width < 4:
         return 0, 0, width, height
-    x0 = int(round(width * 0.08))
-    y0 = int(round(height * 0.37))
-    x1 = int(round(width * 0.85))
-    y1 = int(round(height * 0.59))
-    return x0, y0, max(1, x1 - x0), max(1, y1 - y0)
+    return roi_bounds_from_ratios(image, DEFAULT_COMPONENT_ROI_RATIOS)
 
 
 def crop_bounds(image: np.ndarray, bounds: tuple[int, int, int, int]) -> np.ndarray:
@@ -99,7 +124,12 @@ def crop_bounds(image: np.ndarray, bounds: tuple[int, int, int, int]) -> np.ndar
     return image[y0:y1, x0:x1].copy()
 
 
-def component_roi_bounds(image: np.ndarray, *, padding_ratio: float = 0.035) -> tuple[int, int, int, int]:
+def component_roi_bounds(
+    image: np.ndarray,
+    *,
+    padding_ratio: float = 0.035,
+    roi_ratios: tuple[float, float, float, float] | None = None,
+) -> tuple[int, int, int, int]:
     """Return ``(x, y, w, h)`` bounds for the blower component inside a wide camera frame.
 
     The production camera sees the whole work table, but only the long dark blower
@@ -109,6 +139,8 @@ def component_roi_bounds(image: np.ndarray, *, padding_ratio: float = 0.035) -> 
     """
     if image.size == 0:
         raise ValueError("Cannot crop an empty image")
+    if roi_ratios is not None:
+        return roi_bounds_from_ratios(image, roi_ratios)
 
     annotated_bounds = _red_annotation_roi_bounds(image)
     if annotated_bounds is not None:
@@ -168,9 +200,14 @@ def component_roi_bounds(image: np.ndarray, *, padding_ratio: float = 0.035) -> 
     return x0, y0, x1 - x0, y1 - y0
 
 
-def crop_component_roi(image: np.ndarray, *, padding_ratio: float = 0.035) -> np.ndarray:
+def crop_component_roi(
+    image: np.ndarray,
+    *,
+    padding_ratio: float = 0.035,
+    roi_ratios: tuple[float, float, float, float] | None = None,
+) -> np.ndarray:
     """Crop a wide camera frame down to the blower component inspection ROI."""
-    x, y, w, h = component_roi_bounds(image, padding_ratio=padding_ratio)
+    x, y, w, h = component_roi_bounds(image, padding_ratio=padding_ratio, roi_ratios=roi_ratios)
     return crop_bounds(image, (x, y, w, h))
 
 

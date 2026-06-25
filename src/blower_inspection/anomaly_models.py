@@ -113,6 +113,7 @@ class HybridPatchcorePadimInspector:
         self._device_cache: Any | None = None
         self._backbone_cache: tuple[Any, _FeatureHook, Any] | None = None
         self._checkpoint_cache: dict[Path, tuple[float, dict[str, Any]]] = {}
+        self._training_roi_ratios: tuple[float, float, float, float] | None = None
 
     def train(self, config: PartModelConfig) -> Path:
         image_paths = list_images(config.normal_image_dir)
@@ -123,6 +124,7 @@ class HybridPatchcorePadimInspector:
             )
         used_image_paths = self._select_training_images(image_paths)
         torch = require_module("torch")
+        self._training_roi_ratios = config.roi_ratios
         embeddings, grid_shape = self._extract_dataset_embeddings(used_image_paths)
         embeddings_np = embeddings.cpu().numpy().astype(np.float32)
         rng = np.random.default_rng(self.settings.random_seed)
@@ -166,7 +168,7 @@ class HybridPatchcorePadimInspector:
     ) -> InspectionResult:
         torch = require_module("torch")
         if crop_to_component:
-            image = crop_component_roi(image)
+            image = crop_component_roi(image, roi_ratios=config.roi_ratios)
         if not config.model_file.exists():
             raise FileNotFoundError(f"Hybrid model has not been trained: {config.model_file}")
         checkpoint = self._load_runtime_checkpoint(torch, config.model_file)
@@ -396,7 +398,7 @@ class HybridPatchcorePadimInspector:
         image = cv2.imread(str(path))
         if image is None:
             raise ValueError(f"Unable to read training image: {path}")
-        return self._preprocess_image(crop_component_roi(image))
+        return self._preprocess_image(crop_component_roi(image, roi_ratios=self._training_roi_ratios))
 
     def _preprocess_image(self, image: np.ndarray) -> Any:
         torch = require_module("torch")
