@@ -22,8 +22,10 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QMessageBox,
     QPushButton,
+    QDoubleSpinBox,
     QSizePolicy,
     QSlider,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
     QFileDialog,
@@ -31,7 +33,15 @@ from PyQt6.QtWidgets import (
 
 from .anomaly_models import HybridPatchcorePadimInspector
 from .auth import AuthStore, User
-from .camera import USBCamera, crop_component_roi, save_capture
+from .camera import (
+    DEFAULT_COMPONENT_ROI_RATIOS,
+    USBCamera,
+    component_roi_bounds,
+    crop_bounds,
+    crop_component_roi,
+    roi_ratios_from_bounds,
+    save_capture,
+)
 from .config import ModelRegistry, PartModelConfig, ensure_model_folders
 
 
@@ -124,7 +134,7 @@ class InspectionWorker(QThread):
     def run(self) -> None:
         start = time.perf_counter()
         try:
-            result = self.inspector.inspect(self.model, self.frame, save_outputs=False)
+            result = self.inspector.inspect(self.model, self.frame, save_outputs=False, crop_to_component=False)
         except Exception as exc:
             self.failed.emit(str(exc))
             return
@@ -138,7 +148,8 @@ class InspectionWindow(QWidget):
         self.registry = ModelRegistry()
         ensure_model_folders(self.registry)
         self.inspector = HybridPatchcorePadimInspector()
-        self.camera = USBCamera(width=3840, height=2160, fps=30)
+        active_model = self.registry.active()
+        self.camera = USBCamera(width=active_model.camera_width, height=active_model.camera_height, fps=active_model.camera_fps)
         self.frame = None
         self.inspection_running = False
         self.inference_worker: InspectionWorker | None = None
@@ -146,6 +157,8 @@ class InspectionWindow(QWidget):
         self.inference_interval_s = 0.05
         self.latest_annotated_frame = None
         self.current_display_frame = None
+        self.live_roi_bounds = None
+        self.raw_frame = None
         self.fps_frame_count = 0
         self.fps_started_at = time.perf_counter()
         self.stats = {"inspected": 0, "passed": 0, "failed": 0}
@@ -203,8 +216,9 @@ class InspectionWindow(QWidget):
         layout.setContentsMargins(23, 20, 23, 20)
         layout.addWidget(self._section("SYSTEM CONTROL"))
         self.model_combo = QComboBox()
-        self.model_by_label = {f"{m.id}  |  {m.name}": m for m in self.registry.all()}
-        self.model_combo.addItems(self.model_by_label.keys())
+        self.model_by_label = {}
+        self._refresh_models()
+        self.model_combo.currentTextChanged.connect(lambda _text: self._apply_selected_camera_settings())
         layout.addWidget(self.model_combo)
         start = QPushButton("▶   START INSPECTION")
         start.setObjectName("primary")
@@ -213,6 +227,12 @@ class InspectionWindow(QWidget):
         calibrate = QPushButton("⊕   CALIBRATE")
         calibrate.clicked.connect(self.load_image)
         layout.addWidget(calibrate)
+        roi_button = QPushButton("▣   SET PART ROI")
+        roi_button.clicked.connect(self.set_part_roi)
+        layout.addWidget(roi_button)
+        camera_button = QPushButton("⚙   CAMERA FPS / RESOLUTION")
+        camera_button.clicked.connect(self.set_camera_settings)
+        layout.addWidget(camera_button)
         stop = QPushButton("▪   STOP")
         stop.setObjectName("danger")
         stop.clicked.connect(self.stop_camera)
@@ -327,6 +347,28 @@ class InspectionWindow(QWidget):
     def selected_model(self) -> PartModelConfig:
         return self.model_by_label[self.model_combo.currentText()]
 
+    def _refresh_models(self, selected_id: str | None = None) -> None:
+        current_id = selected_id
+        if current_id is None and getattr(self, "model_combo", None) is not None and self.model_combo.currentText():
+            current_id = self.selected_model().id
+        self.model_by_label = {f"{m.id}  |  {m.name}": m for m in self.registry.all()}
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        self.model_combo.addItems(self.model_by_label.keys())
+        if current_id is not None:
+            for index, model in enumerate(self.model_by_label.values()):
+                if model.id == current_id:
+                    self.model_combo.setCurrentIndex(index)
+                    break
+        self.model_combo.blockSignals(False)
+        self._apply_selected_camera_settings()
+
+    def _apply_selected_camera_settings(self) -> None:
+        if not getattr(self, "model_by_label", None) or self.inspection_running:
+            return
+        model = self.selected_model()
+        self.camera = USBCamera(width=model.camera_width, height=model.camera_height, fps=model.camera_fps)
+
     def load_image(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Load inspection image", str(Path.cwd()), "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)")
         if not path:
@@ -335,15 +377,83 @@ class InspectionWindow(QWidget):
         if frame is None:
             QMessageBox.critical(self, "Image error", f"Unable to read {path}")
             return
-        frame = crop_component_roi(frame)
+        frame = crop_component_roi(frame, roi_ratios=self.selected_model().roi_ratios)
         self.frame = frame
         self.show_frame(frame)
         self.log.addItem(f"LOADED ROI {Path(path).name}")
+
+    def set_part_roi(self) -> None:
+        model = self.selected_model()
+        ratios = model.roi_ratios or DEFAULT_COMPONENT_ROI_RATIOS
+        if model.roi_ratios is None and self.raw_frame is not None:
+            ratios = roi_ratios_from_bounds(self.raw_frame, component_roi_bounds(self.raw_frame))
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Set ROI for {model.id}")
+        layout = QFormLayout(dialog)
+        fields: list[QDoubleSpinBox] = []
+        for label, value in zip(("X %", "Y %", "WIDTH %", "HEIGHT %"), ratios):
+            field = QDoubleSpinBox()
+            field.setRange(0.0, 100.0)
+            field.setDecimals(2)
+            field.setSingleStep(0.5)
+            field.setValue(value * 100.0)
+            layout.addRow(label, field)
+            fields.append(field)
+        save = QPushButton("SAVE ROI AS MODEL DEFAULT")
+        save.clicked.connect(dialog.accept)
+        layout.addRow(save)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        x, y, w, h = (field.value() / 100.0 for field in fields)
+        w = max(0.01, min(w, 1.0 - x))
+        h = max(0.01, min(h, 1.0 - y))
+        updated = self.registry.update_model_settings(model.id, roi_ratios=(x, y, w, h))
+        self._refresh_models(updated.id)
+        self.live_roi_bounds = None
+        self.log.addItem(f"SAVED ROI DEFAULT {updated.id}: x={x:.3f} y={y:.3f} w={w:.3f} h={h:.3f}")
+
+    def set_camera_settings(self) -> None:
+        model = self.selected_model()
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Camera settings for {model.id}")
+        layout = QFormLayout(dialog)
+        width = QSpinBox()
+        width.setRange(320, 8192)
+        width.setSingleStep(160)
+        width.setValue(model.camera_width)
+        height = QSpinBox()
+        height.setRange(240, 8192)
+        height.setSingleStep(90)
+        height.setValue(model.camera_height)
+        fps = QSpinBox()
+        fps.setRange(1, 240)
+        fps.setValue(model.camera_fps)
+        layout.addRow("WIDTH", width)
+        layout.addRow("HEIGHT", height)
+        layout.addRow("FPS", fps)
+        save = QPushButton("SAVE CAMERA DEFAULT")
+        save.clicked.connect(dialog.accept)
+        layout.addRow(save)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        was_running = self.inspection_running
+        if was_running:
+            self.stop_camera()
+        updated = self.registry.update_model_settings(
+            model.id,
+            camera_width=width.value(),
+            camera_height=height.value(),
+            camera_fps=fps.value(),
+        )
+        self._refresh_models(updated.id)
+        self.log.addItem(f"SAVED CAMERA DEFAULT {updated.id}: {updated.camera_width}x{updated.camera_height}@{updated.camera_fps}")
 
     def start_inspection(self) -> None:
         if self.inspection_running:
             return
         try:
+            self._apply_selected_camera_settings()
             self.camera.open()
         except Exception as exc:
             QMessageBox.critical(self, "Camera error", str(exc))
@@ -359,14 +469,27 @@ class InspectionWindow(QWidget):
         self.last_inference_at = 0.0
         self.latest_annotated_frame = None
         self.current_display_frame = None
-        self.log.addItem(f"LIVE INSPECTION STARTED {self.selected_model().id}")
-        self.live_timer.start(33)
+        self.live_roi_bounds = None
+        self.raw_frame = None
+        try:
+            device_name = self.inspector.runtime_device_name()
+        except Exception as exc:
+            device_name = f"unavailable ({exc})"
+        self.log.addItem(
+            f"LIVE INSPECTION STARTED {self.selected_model().id} | "
+            f"CAMERA {self.camera.width}x{self.camera.height}@{self.camera.fps} | DEVICE {device_name}"
+        )
+        self.live_timer.start(1)
 
     def _process_live_frame(self) -> None:
         if not self.inspection_running:
             return
         try:
-            frame = crop_component_roi(self.camera.read())
+            raw_frame = self.camera.read()
+            self.raw_frame = raw_frame
+            if self.live_roi_bounds is None:
+                self.live_roi_bounds = component_roi_bounds(raw_frame, roi_ratios=self.selected_model().roi_ratios)
+            frame = crop_bounds(raw_frame, self.live_roi_bounds)
         except Exception as exc:
             self._handle_live_error(f"Camera frame error: {exc}")
             return
@@ -466,6 +589,8 @@ class InspectionWindow(QWidget):
         self.camera.close()
         self.latest_annotated_frame = None
         self.current_display_frame = None
+        self.live_roi_bounds = None
+        self.raw_frame = None
         self.viewer.clear()
         self.viewer.setText("NO CAMERA FRAME")
         self.fps_top.setText("FPS:  -")

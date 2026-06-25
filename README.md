@@ -65,6 +65,15 @@ $env:BLOWER_INSPECTION_DEVICE = "cuda"
 python -m blower_inspection.app
 ```
 
+The UI also logs the active inference device when live inspection starts. If that log shows `cpu` on the deployment PC, install a CUDA-enabled PyTorch wheel for the RTX 5070 or set `BLOWER_INSPECTION_DEVICE=cuda` after confirming `python -c "import torch; print(torch.cuda.is_available())"` returns `True`.
+
+Each part model stores its own camera mode and default inspection ROI in `config/models.json`. Operators can update both from the GUI without editing code:
+
+- **SET PART ROI** saves the selected model's normalized ROI percentages as that part's new default.
+- **CAMERA FPS / RESOLUTION** saves the selected model's camera width, height, and FPS, for example 3840×2160 @ 30 FPS for full 8.3 MP mode or 1920×1080 @ 60 FPS for high-speed mode.
+
+The blower fan ROI is still cropped before inference, but reducing USB/camera bandwidth can avoid a full-frame capture bottleneck when the full 8.3 MP image is not needed.
+
 ## Training workflow
 
 Each configured model has its own normal-image folder:

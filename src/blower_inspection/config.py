@@ -20,6 +20,10 @@ class PartModelConfig:
     anomaly_threshold: float = 4.0
     min_defect_area_px: int = 120
     max_bad_sector_ratio: float = 0.18
+    roi_ratios: tuple[float, float, float, float] | None = None
+    camera_width: int = 1920
+    camera_height: int = 1080
+    camera_fps: int = 30
 
 
 class ModelRegistry:
@@ -44,8 +48,43 @@ class ModelRegistry:
     def active(self) -> PartModelConfig:
         return self.get(self._data.get("active_model", self.all()[0].id))
 
+    def update_model_settings(
+        self,
+        model_id: str,
+        *,
+        roi_ratios: tuple[float, float, float, float] | None = None,
+        camera_width: int | None = None,
+        camera_height: int | None = None,
+        camera_fps: int | None = None,
+    ) -> PartModelConfig:
+        for entry in self._data.get("models", []):
+            if entry.get("id") != model_id:
+                continue
+            if roi_ratios is not None:
+                entry["roi_ratios"] = [round(float(value), 6) for value in roi_ratios]
+            if camera_width is not None:
+                entry["camera_width"] = int(camera_width)
+            if camera_height is not None:
+                entry["camera_height"] = int(camera_height)
+            if camera_fps is not None:
+                entry["camera_fps"] = int(camera_fps)
+            self._save()
+            self._data = self._load()
+            return self.get(model_id)
+        known = ", ".join(model.id for model in self.all())
+        raise KeyError(f"Unknown model '{model_id}'. Known models: {known}")
+
+    def _save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = self.path.with_suffix(f"{self.path.suffix}.tmp")
+        with temp_path.open("w", encoding="utf-8") as handle:
+            json.dump(self._data, handle, indent=2)
+            handle.write("\n")
+        temp_path.replace(self.path)
+
     @staticmethod
     def _parse(entry: dict) -> PartModelConfig:
+        roi = entry.get("roi_ratios")
         return PartModelConfig(
             id=entry["id"],
             name=entry["name"],
@@ -58,6 +97,10 @@ class ModelRegistry:
             anomaly_threshold=float(entry.get("anomaly_threshold", 4.0)),
             min_defect_area_px=int(entry.get("min_defect_area_px", 120)),
             max_bad_sector_ratio=float(entry.get("max_bad_sector_ratio", 0.18)),
+            roi_ratios=tuple(float(value) for value in roi) if roi is not None else None,
+            camera_width=int(entry.get("camera_width", 1920)),
+            camera_height=int(entry.get("camera_height", 1080)),
+            camera_fps=int(entry.get("camera_fps", 30)),
         )
 
 
