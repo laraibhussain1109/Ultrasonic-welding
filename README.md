@@ -142,6 +142,33 @@ python -m blower_inspection.app
 
 If you set the wrong `BLOWER_ESP32_PORT`, the app will still try other detected ports by default. Set `BLOWER_ESP32_SCAN_ALL=0` to disable fallback scanning. Many ESP32 boards reset when the serial port opens, so the app waits briefly before sending the first command; override this with `BLOWER_ESP32_SETTLE=0` only if needed.
 
+
+### Python serial dependency
+
+You do **not** need the Arduino IDE on the deployment PC just to run inspection.
+The Arduino IDE or `arduino-cli` is only needed on whichever computer you use to
+flash `firmware/esp32_fail_output/esp32_fail_output.ino` onto the ESP32. The
+deployment PC only needs the Python package `pyserial` so the app can open the
+ESP32 USB COM port.
+
+If the log says `No module named serial`, install `pyserial` into the same Python
+environment that launches the app:
+
+```powershell
+python -m pip install pyserial
+```
+
+If you are running from this source checkout, reinstall the app dependencies:
+
+```powershell
+python -m pip install -e .[industrial]
+python -m blower_inspection.app
+```
+
+Avoid launching as `python -m src.blower_inspection.app`; use
+`python -m blower_inspection.app` after installation so the same environment gets
+the package dependencies.
+
 For one-off CLI inspections, add `--esp32-output`:
 
 ```bash

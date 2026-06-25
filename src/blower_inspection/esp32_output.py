@@ -12,6 +12,7 @@ from dataclasses import dataclass
 DEFAULT_BAUDRATE = 115200
 DEFAULT_TIMEOUT_S = 0.2
 DEFAULT_CONNECT_SETTLE_S = 1.5
+PYSERIAL_INSTALL_HINT = "Install pyserial with: python -m pip install pyserial (or reinstall the app with: python -m pip install -e .[industrial])"
 ESP32_PORT_KEYWORDS = ("cp210", "ch340", "ch910", "silicon labs", "usb serial", "esp32", "wch")
 
 
@@ -45,6 +46,8 @@ def _serial_list_ports() -> list[str]:
 
     try:
         from serial.tools import list_ports  # type: ignore[import-not-found]
+    except ModuleNotFoundError:
+        return []
     except Exception:
         return []
 
@@ -132,7 +135,11 @@ class ESP32FailOutput:
     def _open_port(self, port: str) -> bool:
         try:
             import serial  # type: ignore[import-not-found]
+        except ModuleNotFoundError:
+            self.last_error = PYSERIAL_INSTALL_HINT
+            return False
 
+        try:
             self._serial = serial.Serial(port, self.config.baudrate, timeout=DEFAULT_TIMEOUT_S)
             self.connected_port = port
             self.last_error = None

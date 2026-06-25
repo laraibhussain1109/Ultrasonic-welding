@@ -56,3 +56,20 @@ def test_connect_falls_back_from_wrong_preferred_port(monkeypatch):
     assert output.connect() is True
     assert opened_ports == ["COM3", "COM7"]
     assert output.connected_port == "COM7"
+
+
+def test_missing_pyserial_reports_install_hint(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "serial":
+            raise ModuleNotFoundError("No module named 'serial'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    output = ESP32FailOutput(ESP32OutputConfig(port="COM3", connect_settle_s=0, scan_all_ports=False))
+
+    assert output.connect() is False
+    assert "python -m pip install pyserial" in output.last_error
