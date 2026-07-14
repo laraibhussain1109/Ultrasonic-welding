@@ -351,12 +351,17 @@ class InspectionWindow(QWidget):
 
     def inspection_model(self) -> PartModelConfig:
         model = self.selected_model()
-        tolerance_area = int((self.tolerance_percent / 100.0) * model.image_size * model.image_size)
+        # The tolerance buttons are operator-facing strictness controls.  Lower
+        # percentages must reject smaller detected regions/sectors, while higher
+        # percentages allow larger confirmed defects before rejecting the part.
+        strictness_scale = max(self.tolerance_percent, 1) / 5.0
+        tolerance_area = max(1, int(model.min_defect_area_px * strictness_scale))
         tolerance_threshold = max(model.anomaly_threshold, (0.65 + 0.30 * (self.tolerance_percent / 20.0)) * 10.0)
         return replace(
             model,
             anomaly_threshold=tolerance_threshold,
-            min_defect_area_px=max(model.min_defect_area_px, tolerance_area),
+            min_defect_area_px=tolerance_area,
+            max_bad_sector_ratio=max(0.01, self.tolerance_percent / 100.0),
         )
 
     def _refresh_models(self, selected_id: str | None = None) -> None:
