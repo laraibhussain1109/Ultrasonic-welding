@@ -192,12 +192,18 @@ class HybridPatchcorePadimInspector:
         fused = cv2.resize(fused_small, (self.settings.image_size, self.settings.image_size), interpolation=cv2.INTER_CUBIC)
         fused = cv2.GaussianBlur(fused, (9, 9), 0)
         ring_mask = fan_ring_mask(fused.shape, config.inner_radius_ratio, config.outer_radius_ratio)
-        threshold = min(max(config.anomaly_threshold / 10.0, 0.05), 0.95)
-        candidate_mask = clean_mask((fused > threshold) & ring_mask)
+        # Operators judge the overlay by color: blue/green should remain PASS,
+        # while FAIL should require the yellow/red-to-red severity band.  The
+        # hybrid map is normalized to 0..1, so keep the configurable threshold
+        # but never allow it below the visual yellow/red floor.
+        threshold = min(max(config.anomaly_threshold / 10.0, 0.65), 0.95)
+        candidate_mask = clean_mask((fused >= threshold) & ring_mask)
         defect_area = int(candidate_mask.sum())
         ring_scores = fused[ring_mask]
         anomaly_score = float(np.max(ring_scores)) if ring_scores.size else 0.0
-        bad_sector_ratio, bad_sectors = sector_statistics(ring_mask, fused * 10.0, config.expected_fins)
+        bad_sector_ratio, bad_sectors = sector_statistics(
+            ring_mask, fused, config.expected_fins, min_bad_score=threshold
+        )
         fail_area = max(config.min_defect_area_px, int(0.0004 * fused.size))
         status = "FAIL" if defect_area >= fail_area or bad_sector_ratio >= config.max_bad_sector_ratio else "PASS"
         display_image, defect_boxes = inspection_overlay(
@@ -207,6 +213,7 @@ class HybridPatchcorePadimInspector:
             status=status,
             anomaly_score=anomaly_score,
             min_box_area_px=config.min_defect_area_px,
+            score_normalizer=threshold,
         )
         overlay_path = report_path = None
         if save_outputs:
