@@ -48,3 +48,21 @@ def test_load_hybrid_checkpoint_falls_back_for_legacy_path_pickles(tmp_path):
         {"map_location": "cpu", "weights_only": True},
         {"map_location": "cpu", "weights_only": False},
     ]
+
+
+def test_apply_model_settings_uses_model_image_size(tmp_path):
+    config = _config(tmp_path)
+    config = PartModelConfig(**{**config.__dict__, "image_size": 256})
+    inspector = HybridPatchcorePadimInspector()
+
+    inspector._apply_model_settings(config)
+
+    assert inspector.settings.image_size == 256
+
+
+def test_apply_checkpoint_settings_restores_training_image_size(tmp_path):
+    inspector = HybridPatchcorePadimInspector()
+
+    inspector._apply_checkpoint_settings({"settings": {"image_size": 384}})
+
+    assert inspector.settings.image_size == 384

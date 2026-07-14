@@ -24,6 +24,7 @@ class PartModelConfig:
     camera_width: int = 1920
     camera_height: int = 1080
     camera_fps: int = 30
+    image_size: int = 384
 
 
 class ModelRegistry:
@@ -101,6 +102,7 @@ class ModelRegistry:
             camera_width=int(entry.get("camera_width", 1920)),
             camera_height=int(entry.get("camera_height", 1080)),
             camera_fps=int(entry.get("camera_fps", 30)),
+            image_size=int(entry.get("image_size", 384)),
         )
 
 

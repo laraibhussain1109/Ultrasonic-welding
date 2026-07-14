@@ -235,6 +235,15 @@ class USBCamera:
         if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
             self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self.capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0)
+        actual_width = int(round(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH)))
+        actual_height = int(round(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        actual_fps = int(round(self.capture.get(cv2.CAP_PROP_FPS)))
+        if actual_width > 0:
+            self.width = actual_width
+        if actual_height > 0:
+            self.height = actual_height
+        if actual_fps > 0:
+            self.fps = actual_fps
 
     def read(self) -> np.ndarray:
         if self.capture is None:

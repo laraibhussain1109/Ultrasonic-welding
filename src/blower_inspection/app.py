@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import cv2
@@ -161,6 +162,7 @@ class InspectionWindow(QWidget):
         self.raw_frame = None
         self.fps_frame_count = 0
         self.fps_started_at = time.perf_counter()
+        self.tolerance_percent = 5
         self.stats = {"inspected": 0, "passed": 0, "failed": 0}
         self.started_at = time.time()
         self.train_worker: TrainWorker | None = None
@@ -347,6 +349,16 @@ class InspectionWindow(QWidget):
     def selected_model(self) -> PartModelConfig:
         return self.model_by_label[self.model_combo.currentText()]
 
+    def inspection_model(self) -> PartModelConfig:
+        model = self.selected_model()
+        tolerance_area = int((self.tolerance_percent / 100.0) * model.image_size * model.image_size)
+        tolerance_threshold = max(model.anomaly_threshold, (0.65 + 0.30 * (self.tolerance_percent / 20.0)) * 10.0)
+        return replace(
+            model,
+            anomaly_threshold=tolerance_threshold,
+            min_defect_area_px=max(model.min_defect_area_px, tolerance_area),
+        )
+
     def _refresh_models(self, selected_id: str | None = None) -> None:
         current_id = selected_id
         if current_id is None and getattr(self, "model_combo", None) is not None and self.model_combo.currentText():
@@ -503,7 +515,7 @@ class InspectionWindow(QWidget):
             and now - self.last_inference_at >= self.inference_interval_s
         ):
             self.last_inference_at = now
-            self.inference_worker = InspectionWorker(self.inspector, self.selected_model(), frame)
+            self.inference_worker = InspectionWorker(self.inspector, self.inspection_model(), frame)
             self.inference_worker.finished_result.connect(self._handle_inspection_result)
             self.inference_worker.failed.connect(lambda message: self._handle_live_error(f"Inspection error: {message}"))
             self.inference_worker.finished.connect(self._clear_inference_worker)
@@ -614,6 +626,7 @@ class InspectionWindow(QWidget):
         self.pass_rate_value.value_label.setText(pass_rate)
 
     def set_tolerance(self, value: int) -> None:
+        self.tolerance_percent = value
         self.tolerance_top.setText(f"TOLERANCE:  {value}%")
         self.log.addItem(f"TOLERANCE SET TO {value}%")
 
