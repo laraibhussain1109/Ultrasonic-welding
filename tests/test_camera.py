@@ -85,3 +85,18 @@ def test_component_roi_bounds_uses_saved_model_roi_ratios():
     frame = np.full((1000, 2000, 3), 180, dtype=np.uint8)
 
     assert camera.component_roi_bounds(frame, roi_ratios=(0.1, 0.2, 0.3, 0.4)) == (200, 200, 600, 400)
+
+
+def test_is_part_present_rejects_smooth_empty_roi():
+    empty = np.full((160, 640, 3), 185, dtype=np.uint8)
+
+    assert camera.is_part_present(empty) is False
+
+
+def test_is_part_present_accepts_fin_texture_roi():
+    roi = np.full((160, 640, 3), 80, dtype=np.uint8)
+    for x in range(20, 620, 24):
+        cv2.line(roi, (x, 20), (x + 10, 140), (170, 170, 170), 2)
+    cv2.rectangle(roi, (0, 0), (639, 159), (35, 35, 45), 4)
+
+    assert camera.is_part_present(roi) is True

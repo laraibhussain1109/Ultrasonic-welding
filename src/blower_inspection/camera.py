@@ -200,6 +200,25 @@ def component_roi_bounds(
     return x0, y0, x1 - x0, y1 - y0
 
 
+def is_part_present(image: np.ndarray) -> bool:
+    """Return whether the cropped inspection ROI appears to contain a blower part.
+
+    Empty nests/backgrounds can otherwise be scored as anomalous and shown as
+    FAIL.  The blower wheel has strong fin edges and grayscale variation; an
+    empty ROI is usually smooth/dim after cropping.
+    """
+    if image.size == 0:
+        return False
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
+    if gray.shape[0] < 12 or gray.shape[1] < 12:
+        return False
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    contrast = float(gray.std())
+    edges = cv2.Canny(gray, 35, 110)
+    edge_density = float(cv2.countNonZero(edges)) / float(edges.size)
+    dark_or_mid = float(np.count_nonzero(gray < 220)) / float(gray.size)
+    return contrast >= 8.0 and edge_density >= 0.004 and dark_or_mid >= 0.10
+
 def crop_component_roi(
     image: np.ndarray,
     *,

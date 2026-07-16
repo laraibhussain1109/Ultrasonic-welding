@@ -40,11 +40,13 @@ from .camera import (
     component_roi_bounds,
     crop_bounds,
     crop_component_roi,
+    is_part_present,
     roi_ratios_from_bounds,
     save_capture,
 )
 from .config import ModelRegistry, PartModelConfig, ensure_model_folders
 from .fail_output import ESP32FailOutputBridge
+from .trainer import InspectionResult
 
 
 QSS = """
@@ -57,6 +59,7 @@ QLabel#metricValue { color: #00ffe1; font-size: 34px; font-weight: 900; }
 QLabel#statusStandby { background: #1c1b2b; border: 1px solid #173a59; border-radius: 4px; color: #b7c5e8; font-size: 30px; font-weight: 900; letter-spacing: 12px; padding: 15px; }
 QLabel#statusPass { background: #062319; border: 1px solid #00ff85; border-radius: 4px; color: #00ff85; font-size: 30px; font-weight: 900; letter-spacing: 12px; padding: 15px; }
 QLabel#statusFail { background: #25080d; border: 1px solid #ff3030; border-radius: 4px; color: #ff4040; font-size: 30px; font-weight: 900; letter-spacing: 12px; padding: 15px; }
+QLabel#statusNoPart { background: #211b08; border: 1px solid #f5c542; border-radius: 4px; color: #f5c542; font-size: 30px; font-weight: 900; letter-spacing: 8px; padding: 15px; }
 QPushButton { background: #08172a; border: 1px solid #0b314a; border-radius: 5px; padding: 14px; color: #8fb7df; font-size: 14px; font-weight: 800; letter-spacing: 2px; }
 QPushButton:hover { border-color: #00c8ff; color: #00d9ff; background: #092038; }
 QPushButton#primary { border: 2px solid #00c8ff; color: #00d9ff; background: #08253a; }
@@ -516,6 +519,9 @@ class InspectionWindow(QWidget):
         if self.latest_annotated_frame is None:
             self.show_frame(frame)
         self.fps_frame_count += 1
+        if not is_part_present(frame):
+            self._handle_no_part_frame(frame)
+            return
         now = time.perf_counter()
         if (
             self.inference_worker is None
@@ -530,6 +536,9 @@ class InspectionWindow(QWidget):
 
     def _handle_inspection_result(self, result, latency_ms: float) -> None:
         if not self.inspection_running:
+            return
+        if result.is_no_part:
+            self._handle_no_part_result(result, latency_ms)
             return
         self.stats["inspected"] += 1
         self.stats["passed" if result.is_pass else "failed"] += 1
@@ -555,6 +564,35 @@ class InspectionWindow(QWidget):
         self.latency_top.setText(f"LATENCY:  {latency_ms:.0f} ms")
         self._send_fail_output(result)
         self.log.addItem(f"{result.status} | {self.selected_model().id} | score={result.anomaly_score:.3f}")
+
+    def _handle_no_part_frame(self, frame) -> None:
+        result = InspectionResult(
+            status="NO PART",
+            anomaly_score=0.0,
+            defect_area_px=0,
+            bad_sector_ratio=0.0,
+            bad_sectors=[],
+            display_image=frame,
+        )
+        self._handle_no_part_result(result, 0.0)
+
+    def _handle_no_part_result(self, result, latency_ms: float) -> None:
+        self.status_badge.setObjectName("statusNoPart")
+        self.status_badge.setText("NO PART")
+        self.status_badge.style().unpolish(self.status_badge)
+        self.status_badge.style().polish(self.status_badge)
+        if result.display_image is not None:
+            self.latest_annotated_frame = result.display_image
+            self.show_frame(result.display_image)
+        self.score_slider.setValue(0)
+        self.score_label.setText("0.000")
+        self.last_result.setText(
+            f"FRAME:  -\nSCORE:  -\nCOVERAGE:  -\nBOXES:  -\n"
+            f"BAD SECTORS:  -\nSECTOR RATIO:  -\nLATENCY:  {latency_ms:.1f} ms"
+        )
+        self.latency_top.setText(f"LATENCY:  {latency_ms:.0f} ms")
+        self.fail_output.send_result(False)
+        self.log.addItem(f"NO PART | {self.selected_model().id}")
 
     def _send_fail_output(self, result) -> None:
         self.fail_output.send_result(not result.is_pass)

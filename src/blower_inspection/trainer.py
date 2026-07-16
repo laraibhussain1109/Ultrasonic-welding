@@ -38,6 +38,10 @@ class InspectionResult:
     def is_pass(self) -> bool:
         return self.status == "PASS"
 
+    @property
+    def is_no_part(self) -> bool:
+        return self.status == "NO PART"
+
 
 def list_images(directory: str | Path) -> list[Path]:
     directory = Path(directory)
