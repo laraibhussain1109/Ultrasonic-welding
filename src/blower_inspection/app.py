@@ -44,6 +44,7 @@ from .camera import (
     save_capture,
 )
 from .config import ModelRegistry, PartModelConfig, ensure_model_folders
+from .fail_output import ESP32FailOutputBridge
 
 
 QSS = """
@@ -149,6 +150,7 @@ class InspectionWindow(QWidget):
         self.registry = ModelRegistry()
         ensure_model_folders(self.registry)
         self.inspector = HybridPatchcorePadimInspector()
+        self.fail_output = ESP32FailOutputBridge()
         active_model = self.registry.active()
         self.camera = USBCamera(width=active_model.camera_width, height=active_model.camera_height, fps=active_model.camera_fps)
         self.frame = None
@@ -551,7 +553,11 @@ class InspectionWindow(QWidget):
             f"LATENCY:  {latency_ms:.1f} ms"
         )
         self.latency_top.setText(f"LATENCY:  {latency_ms:.0f} ms")
+        self._send_fail_output(result)
         self.log.addItem(f"{result.status} | {self.selected_model().id} | score={result.anomaly_score:.3f}")
+
+    def _send_fail_output(self, result) -> None:
+        self.fail_output.send_result(not result.is_pass)
 
     def _clear_inference_worker(self) -> None:
         if self.inference_worker is not None:
@@ -589,6 +595,12 @@ class InspectionWindow(QWidget):
         super().resizeEvent(event)
         self._paint_frame_to_viewer()
 
+
+    def closeEvent(self, event) -> None:
+        self.fail_output.reset()
+        self.fail_output.close()
+        super().closeEvent(event)
+
     def train_selected(self) -> None:
         if not self.user.is_admin:
             QMessageBox.warning(self, "Permission denied", "Training is available to admin users only.")
@@ -604,6 +616,7 @@ class InspectionWindow(QWidget):
         self.inspection_running = False
         self.live_timer.stop()
         self.camera.close()
+        self.fail_output.reset()
         self.latest_annotated_frame = None
         self.current_display_frame = None
         self.live_roi_bounds = None
