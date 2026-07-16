@@ -100,3 +100,11 @@ def test_is_part_present_accepts_fin_texture_roi():
     cv2.rectangle(roi, (0, 0), (639, 159), (35, 35, 45), 4)
 
     assert camera.is_part_present(roi) is True
+
+
+def test_is_part_present_rejects_non_part_colours_even_with_edges():
+    roi = np.full((160, 640, 3), (25, 90, 170), dtype=np.uint8)  # brown/orange BGR background
+    for x in range(20, 620, 24):
+        cv2.line(roi, (x, 20), (x + 10, 140), (35, 120, 210), 2)
+
+    assert camera.is_part_present(roi) is False

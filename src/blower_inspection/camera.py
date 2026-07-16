@@ -204,20 +204,37 @@ def is_part_present(image: np.ndarray) -> bool:
     """Return whether the cropped inspection ROI appears to contain a blower part.
 
     Empty nests/backgrounds can otherwise be scored as anomalous and shown as
-    FAIL.  The blower wheel has strong fin edges and grayscale variation; an
-    empty ROI is usually smooth/dim after cropping.
+    FAIL.  Production AC blower fans are cylindrical and are expected to be made
+    from blue, black/dark, or occasionally white plastic, so the presence check
+    requires both part-colour pixels and cylinder/fin texture edges.
     """
     if image.size == 0:
         return False
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
+    if image.ndim == 2:
+        bgr = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        gray = image.copy()
+    else:
+        bgr = image
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     if gray.shape[0] < 12 or gray.shape[1] < 12:
         return False
+
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    hue = hsv[:, :, 0]
+    sat = hsv[:, :, 1]
+    val = hsv[:, :, 2]
+    blue_pixels = (hue >= 85) & (hue <= 135) & (sat >= 35) & (val >= 35)
+    black_pixels = val <= 115
+    white_pixels = (sat <= 70) & (val >= 145)
+    part_colour_mask = blue_pixels | black_pixels | white_pixels
+    colour_ratio = float(np.count_nonzero(part_colour_mask)) / float(part_colour_mask.size)
+
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
     contrast = float(gray.std())
     edges = cv2.Canny(gray, 35, 110)
     edge_density = float(cv2.countNonZero(edges)) / float(edges.size)
-    dark_or_mid = float(np.count_nonzero(gray < 220)) / float(gray.size)
-    return contrast >= 8.0 and edge_density >= 0.004 and dark_or_mid >= 0.10
+    part_edge_density = float(np.count_nonzero(edges.astype(bool) & part_colour_mask)) / float(edges.size)
+    return colour_ratio >= 0.18 and contrast >= 8.0 and edge_density >= 0.004 and part_edge_density >= 0.002
 
 def crop_component_roi(
     image: np.ndarray,
