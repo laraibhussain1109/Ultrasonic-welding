@@ -200,6 +200,42 @@ def component_roi_bounds(
     return x0, y0, x1 - x0, y1 - y0
 
 
+def is_part_present(image: np.ndarray) -> bool:
+    """Return whether the cropped inspection ROI appears to contain a blower part.
+
+    Empty nests/backgrounds can otherwise be scored as anomalous and shown as
+    FAIL.  Production AC blower fans are cylindrical and are expected to be made
+    from blue, black/dark, or occasionally white plastic, so the presence check
+    requires both part-colour pixels and cylinder/fin texture edges.
+    """
+    if image.size == 0:
+        return False
+    if image.ndim == 2:
+        bgr = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        gray = image.copy()
+    else:
+        bgr = image
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    if gray.shape[0] < 12 or gray.shape[1] < 12:
+        return False
+
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    hue = hsv[:, :, 0]
+    sat = hsv[:, :, 1]
+    val = hsv[:, :, 2]
+    blue_pixels = (hue >= 85) & (hue <= 135) & (sat >= 35) & (val >= 35)
+    black_pixels = val <= 115
+    white_pixels = (sat <= 70) & (val >= 145)
+    part_colour_mask = blue_pixels | black_pixels | white_pixels
+    colour_ratio = float(np.count_nonzero(part_colour_mask)) / float(part_colour_mask.size)
+
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    contrast = float(gray.std())
+    edges = cv2.Canny(gray, 35, 110)
+    edge_density = float(cv2.countNonZero(edges)) / float(edges.size)
+    part_edge_density = float(np.count_nonzero(edges.astype(bool) & part_colour_mask)) / float(edges.size)
+    return colour_ratio >= 0.18 and contrast >= 8.0 and edge_density >= 0.004 and part_edge_density >= 0.002
+
 def crop_component_roi(
     image: np.ndarray,
     *,
@@ -235,6 +271,15 @@ class USBCamera:
         if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
             self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self.capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0)
+        actual_width = int(round(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH)))
+        actual_height = int(round(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        actual_fps = int(round(self.capture.get(cv2.CAP_PROP_FPS)))
+        if actual_width > 0:
+            self.width = actual_width
+        if actual_height > 0:
+            self.height = actual_height
+        if actual_fps > 0:
+            self.fps = actual_fps
 
     def read(self) -> np.ndarray:
         if self.capture is None:

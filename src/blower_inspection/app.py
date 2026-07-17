@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import cv2
@@ -39,11 +40,13 @@ from .camera import (
     component_roi_bounds,
     crop_bounds,
     crop_component_roi,
+    is_part_present,
     roi_ratios_from_bounds,
     save_capture,
 )
 from .config import ModelRegistry, PartModelConfig, ensure_model_folders
-from .esp32_output import ESP32FailOutput
+from .fail_output import ESP32FailOutputBridge
+from .trainer import InspectionResult
 
 
 QSS = """
@@ -56,6 +59,7 @@ QLabel#metricValue { color: #00ffe1; font-size: 34px; font-weight: 900; }
 QLabel#statusStandby { background: #1c1b2b; border: 1px solid #173a59; border-radius: 4px; color: #b7c5e8; font-size: 30px; font-weight: 900; letter-spacing: 12px; padding: 15px; }
 QLabel#statusPass { background: #062319; border: 1px solid #00ff85; border-radius: 4px; color: #00ff85; font-size: 30px; font-weight: 900; letter-spacing: 12px; padding: 15px; }
 QLabel#statusFail { background: #25080d; border: 1px solid #ff3030; border-radius: 4px; color: #ff4040; font-size: 30px; font-weight: 900; letter-spacing: 12px; padding: 15px; }
+QLabel#statusNoPart { background: #211b08; border: 1px solid #f5c542; border-radius: 4px; color: #f5c542; font-size: 30px; font-weight: 900; letter-spacing: 8px; padding: 15px; }
 QPushButton { background: #08172a; border: 1px solid #0b314a; border-radius: 5px; padding: 14px; color: #8fb7df; font-size: 14px; font-weight: 800; letter-spacing: 2px; }
 QPushButton:hover { border-color: #00c8ff; color: #00d9ff; background: #092038; }
 QPushButton#primary { border: 2px solid #00c8ff; color: #00d9ff; background: #08253a; }
@@ -149,7 +153,7 @@ class InspectionWindow(QWidget):
         self.registry = ModelRegistry()
         ensure_model_folders(self.registry)
         self.inspector = HybridPatchcorePadimInspector()
-        self.esp32_output = ESP32FailOutput()
+        self.fail_output = ESP32FailOutputBridge()
         active_model = self.registry.active()
         self.camera = USBCamera(width=active_model.camera_width, height=active_model.camera_height, fps=active_model.camera_fps)
         self.frame = None
@@ -163,6 +167,7 @@ class InspectionWindow(QWidget):
         self.raw_frame = None
         self.fps_frame_count = 0
         self.fps_started_at = time.perf_counter()
+        self.tolerance_percent = 5
         self.stats = {"inspected": 0, "passed": 0, "failed": 0}
         self.started_at = time.time()
         self.train_worker: TrainWorker | None = None
@@ -349,6 +354,21 @@ class InspectionWindow(QWidget):
     def selected_model(self) -> PartModelConfig:
         return self.model_by_label[self.model_combo.currentText()]
 
+    def inspection_model(self) -> PartModelConfig:
+        model = self.selected_model()
+        # The tolerance buttons are operator-facing strictness controls.  Lower
+        # percentages must reject smaller detected regions/sectors, while higher
+        # percentages allow larger confirmed defects before rejecting the part.
+        strictness_scale = max(self.tolerance_percent, 1) / 5.0
+        tolerance_area = max(1, int(model.min_defect_area_px * strictness_scale))
+        tolerance_threshold = max(model.anomaly_threshold, (0.65 + 0.30 * (self.tolerance_percent / 20.0)) * 10.0)
+        return replace(
+            model,
+            anomaly_threshold=tolerance_threshold,
+            min_defect_area_px=tolerance_area,
+            max_bad_sector_ratio=max(0.01, self.tolerance_percent / 100.0),
+        )
+
     def _refresh_models(self, selected_id: str | None = None) -> None:
         current_id = selected_id
         if current_id is None and getattr(self, "model_combo", None) is not None and self.model_combo.currentText():
@@ -504,13 +524,16 @@ class InspectionWindow(QWidget):
         if self.latest_annotated_frame is None:
             self.show_frame(frame)
         self.fps_frame_count += 1
+        if not is_part_present(frame):
+            self._handle_no_part_frame(frame)
+            return
         now = time.perf_counter()
         if (
             self.inference_worker is None
             and now - self.last_inference_at >= self.inference_interval_s
         ):
             self.last_inference_at = now
-            self.inference_worker = InspectionWorker(self.inspector, self.selected_model(), frame)
+            self.inference_worker = InspectionWorker(self.inspector, self.inspection_model(), frame)
             self.inference_worker.finished_result.connect(self._handle_inspection_result)
             self.inference_worker.failed.connect(lambda message: self._handle_live_error(f"Inspection error: {message}"))
             self.inference_worker.finished.connect(self._clear_inference_worker)
@@ -518,6 +541,9 @@ class InspectionWindow(QWidget):
 
     def _handle_inspection_result(self, result, latency_ms: float) -> None:
         if not self.inspection_running:
+            return
+        if result.is_no_part:
+            self._handle_no_part_result(result, latency_ms)
             return
         self.stats["inspected"] += 1
         self.stats["passed" if result.is_pass else "failed"] += 1
@@ -541,9 +567,40 @@ class InspectionWindow(QWidget):
             f"LATENCY:  {latency_ms:.1f} ms"
         )
         self.latency_top.setText(f"LATENCY:  {latency_ms:.0f} ms")
-        if not self.esp32_output.set_fail(not result.is_pass) and (self.stats["inspected"] == 1 or not result.is_pass):
-            self.log.addItem(f"ESP32 OUTPUT WARNING: {self.esp32_output.last_error}")
+        self._send_fail_output(result)
         self.log.addItem(f"{result.status} | {self.selected_model().id} | score={result.anomaly_score:.3f}")
+
+    def _handle_no_part_frame(self, frame) -> None:
+        result = InspectionResult(
+            status="NO PART",
+            anomaly_score=0.0,
+            defect_area_px=0,
+            bad_sector_ratio=0.0,
+            bad_sectors=[],
+            display_image=frame,
+        )
+        self._handle_no_part_result(result, 0.0)
+
+    def _handle_no_part_result(self, result, latency_ms: float) -> None:
+        self.status_badge.setObjectName("statusNoPart")
+        self.status_badge.setText("NO PART")
+        self.status_badge.style().unpolish(self.status_badge)
+        self.status_badge.style().polish(self.status_badge)
+        if result.display_image is not None:
+            self.latest_annotated_frame = result.display_image
+            self.show_frame(result.display_image)
+        self.score_slider.setValue(0)
+        self.score_label.setText("0.000")
+        self.last_result.setText(
+            f"FRAME:  -\nSCORE:  -\nCOVERAGE:  -\nBOXES:  -\n"
+            f"BAD SECTORS:  -\nSECTOR RATIO:  -\nLATENCY:  {latency_ms:.1f} ms"
+        )
+        self.latency_top.setText(f"LATENCY:  {latency_ms:.0f} ms")
+        self.fail_output.send_result(False)
+        self.log.addItem(f"NO PART | {self.selected_model().id}")
+
+    def _send_fail_output(self, result) -> None:
+        self.fail_output.send_result(not result.is_pass)
 
     def _clear_inference_worker(self) -> None:
         if self.inference_worker is not None:
@@ -581,6 +638,12 @@ class InspectionWindow(QWidget):
         super().resizeEvent(event)
         self._paint_frame_to_viewer()
 
+
+    def closeEvent(self, event) -> None:
+        self.fail_output.reset()
+        self.fail_output.close()
+        super().closeEvent(event)
+
     def train_selected(self) -> None:
         if not self.user.is_admin:
             QMessageBox.warning(self, "Permission denied", "Training is available to admin users only.")
@@ -596,7 +659,7 @@ class InspectionWindow(QWidget):
         self.inspection_running = False
         self.live_timer.stop()
         self.camera.close()
-        self.esp32_output.set_fail(False)
+        self.fail_output.reset()
         self.latest_annotated_frame = None
         self.current_display_frame = None
         self.live_roi_bounds = None
@@ -624,6 +687,7 @@ class InspectionWindow(QWidget):
         self.pass_rate_value.value_label.setText(pass_rate)
 
     def set_tolerance(self, value: int) -> None:
+        self.tolerance_percent = value
         self.tolerance_top.setText(f"TOLERANCE:  {value}%")
         self.log.addItem(f"TOLERANCE SET TO {value}%")
 

@@ -25,7 +25,7 @@ import math
 import os
 import pickle
 import random
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -56,6 +56,7 @@ class HybridTrainingSettings:
     padim_weight: float = 0.45
     batch_size: int = 4
     random_seed: int = 42
+    runtime_memory_bank_limit: int = 512
 
 
 def require_module(module_name: str) -> Any:
@@ -116,6 +117,7 @@ class HybridPatchcorePadimInspector:
         self._training_roi_ratios: tuple[float, float, float, float] | None = None
 
     def train(self, config: PartModelConfig) -> Path:
+        self._apply_model_settings(config)
         image_paths = list_images(config.normal_image_dir)
         if len(image_paths) < 20:
             raise ValueError(
@@ -174,6 +176,7 @@ class HybridPatchcorePadimInspector:
         checkpoint = self._load_runtime_checkpoint(torch, config.model_file)
         if checkpoint.get("algorithm") != "hybrid_patchcore_padim":
             raise ValueError(f"Model file is not a hybrid PatchCore/PaDiM checkpoint: {config.model_file}")
+        self._apply_checkpoint_settings(checkpoint)
         tensor = self._preprocess_image(image)
         features, _grid_shape = self._extract_embeddings_from_tensor(tensor)
         patchcore_map = self._patchcore_score_map(features, checkpoint["memory_bank"], torch)
@@ -192,12 +195,18 @@ class HybridPatchcorePadimInspector:
         fused = cv2.resize(fused_small, (self.settings.image_size, self.settings.image_size), interpolation=cv2.INTER_CUBIC)
         fused = cv2.GaussianBlur(fused, (9, 9), 0)
         ring_mask = fan_ring_mask(fused.shape, config.inner_radius_ratio, config.outer_radius_ratio)
-        threshold = min(max(config.anomaly_threshold / 10.0, 0.05), 0.95)
-        candidate_mask = clean_mask((fused > threshold) & ring_mask)
+        # Operators judge the overlay by color: blue/green should remain PASS,
+        # while FAIL should require the yellow/red-to-red severity band.  The
+        # hybrid map is normalized to 0..1, so keep the configurable threshold
+        # but never allow it below the visual yellow/red floor.
+        threshold = min(max(config.anomaly_threshold / 10.0, 0.65), 0.95)
+        candidate_mask = clean_mask((fused >= threshold) & ring_mask)
         defect_area = int(candidate_mask.sum())
         ring_scores = fused[ring_mask]
         anomaly_score = float(np.max(ring_scores)) if ring_scores.size else 0.0
-        bad_sector_ratio, bad_sectors = sector_statistics(ring_mask, fused * 10.0, config.expected_fins)
+        bad_sector_ratio, bad_sectors = sector_statistics(
+            ring_mask, fused, config.expected_fins, min_bad_score=threshold
+        )
         fail_area = max(config.min_defect_area_px, int(0.0004 * fused.size))
         status = "FAIL" if defect_area >= fail_area or bad_sector_ratio >= config.max_bad_sector_ratio else "PASS"
         display_image, defect_boxes = inspection_overlay(
@@ -207,6 +216,7 @@ class HybridPatchcorePadimInspector:
             status=status,
             anomaly_score=anomaly_score,
             min_box_area_px=config.min_defect_area_px,
+            score_normalizer=threshold,
         )
         overlay_path = report_path = None
         if save_outputs:
@@ -299,6 +309,25 @@ class HybridPatchcorePadimInspector:
             return f"cuda:{index or 0} ({torch.cuda.get_device_name(index or 0)})"
         return str(device)
 
+    def _apply_model_settings(self, config: PartModelConfig) -> None:
+        if config.image_size != self.settings.image_size:
+            self.settings = replace(self.settings, image_size=config.image_size)
+
+    def _apply_checkpoint_settings(self, checkpoint: dict[str, Any]) -> None:
+        saved = checkpoint.get("settings")
+        if not isinstance(saved, dict):
+            return
+        current = asdict(self.settings)
+        next_values = {key: saved.get(key, value) for key, value in current.items()}
+        next_settings = HybridTrainingSettings(**next_values)
+        rebuild_backbone = (
+            next_settings.backbone != self.settings.backbone
+            or next_settings.embedding_layers != self.settings.embedding_layers
+        )
+        self.settings = next_settings
+        if rebuild_backbone:
+            self._backbone_cache = None
+
     def _build_backbone(self) -> tuple[Any, _FeatureHook, Any]:
         if self._backbone_cache is not None:
             return self._backbone_cache
@@ -325,6 +354,16 @@ class HybridPatchcorePadimInspector:
             value = checkpoint.get(key)
             if hasattr(value, "to"):
                 checkpoint[key] = value.to(self._device(torch), non_blocking=True).float().contiguous()
+        memory_bank = checkpoint.get("memory_bank")
+        if hasattr(memory_bank, "shape") and memory_bank.shape[0] > self.settings.runtime_memory_bank_limit:
+            indices = torch.linspace(
+                0,
+                memory_bank.shape[0] - 1,
+                steps=self.settings.runtime_memory_bank_limit,
+                device=memory_bank.device,
+            ).long()
+            checkpoint["memory_bank"] = memory_bank.index_select(0, indices).contiguous()
+            checkpoint["runtime_memory_bank_size"] = int(checkpoint["memory_bank"].shape[0])
         self._checkpoint_cache[model_file] = (stamp, checkpoint)
         return checkpoint
 

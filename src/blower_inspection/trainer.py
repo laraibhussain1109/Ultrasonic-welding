@@ -38,6 +38,10 @@ class InspectionResult:
     def is_pass(self) -> bool:
         return self.status == "PASS"
 
+    @property
+    def is_no_part(self) -> bool:
+        return self.status == "NO PART"
+
 
 def list_images(directory: str | Path) -> list[Path]:
     directory = Path(directory)
@@ -154,7 +158,10 @@ def inspection_overlay(
     else:
         base = image.copy()
     height, width = base.shape[:2]
-    normalized = robust_normalize(score_map / max(score_normalizer, 1e-6))
+    # Use the same absolute threshold scale for the display and pass/fail logic.
+    # A pixel that is below the configured fail threshold stays blue/green;
+    # only threshold-level anomalies reach the yellow/red end of the heatmap.
+    normalized = np.clip(score_map.astype(np.float32) / max(score_normalizer, 1e-6), 0.0, 1.0)
     score_full = cv2.resize(normalized, (width, height), interpolation=cv2.INTER_CUBIC)
     score_full = cv2.GaussianBlur(score_full, (9, 9), 0)
     mask_full_uint8 = cv2.resize(defect_mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST)
@@ -173,7 +180,13 @@ def inspection_overlay(
     return annotated, boxes
 
 
-def sector_statistics(mask: np.ndarray, score_map: np.ndarray, expected_fins: int) -> tuple[float, list[int]]:
+def sector_statistics(
+    mask: np.ndarray,
+    score_map: np.ndarray,
+    expected_fins: int,
+    *,
+    min_bad_score: float = 2.0,
+) -> tuple[float, list[int]]:
     h, w = mask.shape
     yy, xx = np.indices((h, w))
     angle = (np.arctan2(yy - h / 2.0, xx - w / 2.0) + 2 * np.pi) % (2 * np.pi)
@@ -192,7 +205,7 @@ def sector_statistics(mask: np.ndarray, score_map: np.ndarray, expected_fins: in
     median = float(np.median(sector_scores))
     mad = float(np.median(np.abs(np.asarray(sector_scores) - median))) + 1e-6
     for sector, score in enumerate(sector_scores):
-        if score > median + 6.0 * mad and score > 2.0:
+        if score > median + 6.0 * mad and score >= min_bad_score:
             bad_sectors.append(sector)
     return len(bad_sectors) / max(expected_fins, 1), bad_sectors
 
@@ -248,7 +261,9 @@ class NormalTemplateTrainer:
         defect_area = int(candidate_mask.sum())
         masked_scores = score_map[ring_mask]
         anomaly_score = float(np.percentile(masked_scores, 99.5)) if masked_scores.size else 0.0
-        bad_sector_ratio, bad_sectors = sector_statistics(ring_mask, score_map, config.expected_fins)
+        bad_sector_ratio, bad_sectors = sector_statistics(
+            ring_mask, score_map, config.expected_fins, min_bad_score=config.anomaly_threshold
+        )
         status = "FAIL" if (
             defect_area >= config.min_defect_area_px or bad_sector_ratio >= config.max_bad_sector_ratio
         ) else "PASS"
