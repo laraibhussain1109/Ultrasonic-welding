@@ -497,9 +497,14 @@ class InspectionWindow(QWidget):
             device_name = self.inspector.runtime_device_name()
         except Exception as exc:
             device_name = f"unavailable ({exc})"
+        if self.esp32_output.connect():
+            esp32_status = f"ESP32 READY {self.esp32_output.connected_port}"
+            self.esp32_output.set_fail(False)
+        else:
+            esp32_status = f"ESP32 OFFLINE ({self.esp32_output.last_error})"
         self.log.addItem(
             f"LIVE INSPECTION STARTED {self.selected_model().id} | "
-            f"CAMERA {self.camera.width}x{self.camera.height}@{self.camera.fps} | DEVICE {device_name}"
+            f"CAMERA {self.camera.width}x{self.camera.height}@{self.camera.fps} | DEVICE {device_name} | {esp32_status}"
         )
         self.live_timer.start(1)
 
