@@ -57,3 +57,13 @@ def test_model_registry_persists_roi_and_camera_settings(tmp_path):
     reloaded = ModelRegistry(path).get("BF-001")
     assert reloaded.roi_ratios == (0.1, 0.2, 0.7, 0.3)
     assert reloaded.camera_width == 3840
+
+
+def test_model_registry_persists_yolo_detector_path(tmp_path):
+    path = _registry_file(tmp_path)
+    registry = ModelRegistry(path)
+
+    updated = registry.update_model_settings("BF-001", yolo_model_path="models/best.pt")
+
+    assert str(updated.yolo_model_path) == "models/best.pt"
+    assert str(ModelRegistry(path).get("BF-001").yolo_model_path) == "models/best.pt"

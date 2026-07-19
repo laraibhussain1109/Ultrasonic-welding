@@ -245,8 +245,9 @@ class HybridPatchcorePadimInspector:
         globals such as ``pathlib.WindowsPath``.
         """
         data = asdict(config)
-        for key in ("normal_image_dir", "model_file", "result_dir"):
-            data[key] = str(data[key])
+        for key in ("normal_image_dir", "model_file", "result_dir", "yolo_model_path"):
+            if data[key] is not None:
+                data[key] = str(data[key])
         return data
 
     @staticmethod

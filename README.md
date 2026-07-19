@@ -74,6 +74,29 @@ Each part model stores its own camera mode and default inspection ROI in `config
 
 The blower fan ROI is still cropped before inference, but reducing USB/camera bandwidth can avoid a full-frame capture bottleneck when the full 8.3 MP image is not needed.
 
+## YOLO part localisation, rotation handling, and daily counts
+
+The live inspection path uses your own Ultralytics **YOLO12s** `best.pt` model to
+locate the exact part crop. In the UI, select the part model, press **YOLO PART
+MODEL**, and choose `best.pt`; the path is persisted in `config/models.json` for
+that part model. Install the optional dependency before deployment:
+
+```bash
+pip install -e .[industrial]
+```
+
+Each camera frame is passed to YOLO with Ultralytics `bytetrack.yaml` and the
+resulting persistent track ID is used as the inspection identity. PatchCore/PaDiM
+runs only inside that YOLO bounding box. All views while a cylindrical part is
+rotating are accumulated under one track ID; a single failed view makes the final
+part verdict `FAIL`. The PASS/FAIL signal and production counters are updated
+only after ByteTrack loses the part for the configured timeout (or inspection is
+stopped), so a rotating part is never counted once per frame.
+
+Daily counters persist in `data/results/daily_statistics.json`. An operating day
+runs from local time 07:00 through the next local 07:00; the UI's reset control
+reloads those protected daily totals rather than erasing production records.
+
 ## Training workflow
 
 Each configured model has its own normal-image folder:

@@ -45,8 +45,10 @@ from .camera import (
     save_capture,
 )
 from .config import ModelRegistry, PartModelConfig, ensure_model_folders
+from .daily_stats import DailyStatistics, operating_day
 from .fail_output import ESP32FailOutputBridge
 from .trainer import InspectionResult
+from .yolo_tracking import RotatingPartInspector, TrackedPart, YoloByteTrackDetector
 
 
 QSS = """
@@ -127,13 +129,14 @@ class TrainWorker(QThread):
 
 
 class InspectionWorker(QThread):
-    finished_result = pyqtSignal(object, float)
+    finished_result = pyqtSignal(int, object, float)
     failed = pyqtSignal(str)
 
-    def __init__(self, inspector: HybridPatchcorePadimInspector, model: PartModelConfig, frame) -> None:
+    def __init__(self, inspector: HybridPatchcorePadimInspector, model: PartModelConfig, track_id: int, frame) -> None:
         super().__init__()
         self.inspector = inspector
         self.model = model
+        self.track_id = track_id
         self.frame = frame.copy()
 
     def run(self) -> None:
@@ -143,7 +146,7 @@ class InspectionWorker(QThread):
         except Exception as exc:
             self.failed.emit(str(exc))
             return
-        self.finished_result.emit(result, (time.perf_counter() - start) * 1000.0)
+        self.finished_result.emit(self.track_id, result, (time.perf_counter() - start) * 1000.0)
 
 
 class InspectionWindow(QWidget):
@@ -168,7 +171,10 @@ class InspectionWindow(QWidget):
         self.fps_frame_count = 0
         self.fps_started_at = time.perf_counter()
         self.tolerance_percent = 5
-        self.stats = {"inspected": 0, "passed": 0, "failed": 0}
+        self.daily_statistics = DailyStatistics()
+        self.stats = self.daily_statistics.counts()
+        self.part_detector: YoloByteTrackDetector | None = None
+        self.rotating_parts: RotatingPartInspector | None = None
         self.started_at = time.time()
         self.train_worker: TrainWorker | None = None
         self.setWindowTitle(f"NeuroIris Blower Fan Inspection - {user.username} ({user.role})")
@@ -237,6 +243,9 @@ class InspectionWindow(QWidget):
         roi_button = QPushButton("▣   SET PART ROI")
         roi_button.clicked.connect(self.set_part_roi)
         layout.addWidget(roi_button)
+        detector_button = QPushButton("⌕   YOLO PART MODEL")
+        detector_button.clicked.connect(self.set_yolo_model)
+        layout.addWidget(detector_button)
         camera_button = QPushButton("⚙   CAMERA FPS / RESOLUTION")
         camera_button.clicked.connect(self.set_camera_settings)
         layout.addWidget(camera_button)
@@ -471,11 +480,26 @@ class InspectionWindow(QWidget):
         self._refresh_models(updated.id)
         self.log.addItem(f"SAVED CAMERA DEFAULT {updated.id}: {updated.camera_width}x{updated.camera_height}@{updated.camera_fps}")
 
+    def set_yolo_model(self) -> None:
+        model = self.selected_model()
+        path, _ = QFileDialog.getOpenFileName(self, "Select YOLO best.pt", str(model.yolo_model_path or Path.cwd()), "PyTorch model (*.pt)")
+        if not path:
+            return
+        updated = self.registry.update_model_settings(model.id, yolo_model_path=path)
+        self._refresh_models(updated.id)
+        self.log.addItem(f"SAVED YOLO PART DETECTOR {updated.id}: {path}")
+
     def start_inspection(self) -> None:
         if self.inspection_running:
             return
+        model = self.selected_model()
+        if model.yolo_model_path is None:
+            QMessageBox.critical(self, "YOLO model required", "Select your trained YOLO best.pt with YOLO PART MODEL before starting live inspection.")
+            return
         try:
             self._apply_selected_camera_settings()
+            self.part_detector = YoloByteTrackDetector(model.yolo_model_path, model.yolo_confidence)
+            self.rotating_parts = RotatingPartInspector(model.inspection_lost_timeout_s)
             self.camera.open()
         except Exception as exc:
             QMessageBox.critical(self, "Camera error", str(exc))
@@ -514,9 +538,12 @@ class InspectionWindow(QWidget):
         try:
             raw_frame = self.camera.read()
             self.raw_frame = raw_frame
-            if self.live_roi_bounds is None:
-                self.live_roi_bounds = component_roi_bounds(raw_frame, roi_ratios=self.selected_model().roi_ratios)
-            frame = crop_bounds(raw_frame, self.live_roi_bounds)
+            assert self.part_detector is not None and self.rotating_parts is not None
+            tracks = self.part_detector.track(raw_frame)
+            completed_parts = self.rotating_parts.observe_tracks(tracks)
+            for part in completed_parts:
+                self._handle_completed_part(part)
+            frame = self._draw_tracks(raw_frame, tracks)
         except Exception as exc:
             self._handle_live_error(f"Camera frame error: {exc}")
             return
@@ -524,7 +551,12 @@ class InspectionWindow(QWidget):
         if self.latest_annotated_frame is None:
             self.show_frame(frame)
         self.fps_frame_count += 1
-        if not is_part_present(frame):
+        if not tracks:
+            # Keep the final badge visible on the frame where ByteTrack closes
+            # a rotating-part session instead of immediately replacing it with
+            # the transient empty-nest state.
+            if completed_parts:
+                return
             self._handle_no_part_frame(frame)
             return
         now = time.perf_counter()
@@ -533,21 +565,32 @@ class InspectionWindow(QWidget):
             and now - self.last_inference_at >= self.inference_interval_s
         ):
             self.last_inference_at = now
-            self.inference_worker = InspectionWorker(self.inspector, self.inspection_model(), frame)
+            # Give each simultaneously tracked part one exact-crop inspection
+            # before spending more frames on any already observed rotation.
+            assert self.rotating_parts is not None
+            part = max(
+                tracks,
+                key=lambda candidate: (
+                    self.rotating_parts.needs_initial_inspection(candidate.track_id),
+                    candidate.confidence,
+                ),
+            )
+            self.inference_worker = InspectionWorker(
+                self.inspector, self.inspection_model(), part.track_id, crop_bounds(raw_frame, part.bounds)
+            )
             self.inference_worker.finished_result.connect(self._handle_inspection_result)
             self.inference_worker.failed.connect(lambda message: self._handle_live_error(f"Inspection error: {message}"))
             self.inference_worker.finished.connect(self._clear_inference_worker)
             self.inference_worker.start()
 
-    def _handle_inspection_result(self, result, latency_ms: float) -> None:
+    def _handle_inspection_result(self, track_id: int, result, latency_ms: float) -> None:
         if not self.inspection_running:
             return
         if result.is_no_part:
             self._handle_no_part_result(result, latency_ms)
             return
-        self.stats["inspected"] += 1
-        self.stats["passed" if result.is_pass else "failed"] += 1
-        self.update_stats()
+        if self.rotating_parts is not None:
+            self.rotating_parts.record_inspection(track_id, is_pass=result.is_pass, anomaly_score=result.anomaly_score)
         self.score_slider.setValue(int(result.anomaly_score * 1000))
         self.score_label.setText(f"{result.anomaly_score:.3f}")
         self.status_badge.setObjectName("statusPass" if result.is_pass else "statusFail")
@@ -561,14 +604,32 @@ class InspectionWindow(QWidget):
         if len(result.bad_sectors) > 8:
             bad_sector_text += ",..."
         self.last_result.setText(
-            f"FRAME:  {self.stats['inspected']}\nSCORE:  {result.anomaly_score:.3f}\n"
+            f"TRACK:  {track_id} (rotation in progress)\nSCORE:  {result.anomaly_score:.3f}\n"
             f"COVERAGE:  {result.defect_area_px}px\nBOXES:  {len(result.defect_boxes)}\n"
             f"BAD SECTORS:  {bad_sector_text}\nSECTOR RATIO:  {result.bad_sector_ratio:.2%}\n"
             f"LATENCY:  {latency_ms:.1f} ms"
         )
         self.latency_top.setText(f"LATENCY:  {latency_ms:.0f} ms")
-        self._send_fail_output(result)
-        self.log.addItem(f"{result.status} | {self.selected_model().id} | score={result.anomaly_score:.3f}")
+        self.log.addItem(f"VIEW {result.status} | track={track_id} | score={result.anomaly_score:.3f}")
+
+    def _handle_completed_part(self, part) -> None:
+        self.stats = self.daily_statistics.record(part.status)
+        self.update_stats()
+        self.status_badge.setObjectName("statusPass" if part.status == "PASS" else "statusFail")
+        self.status_badge.setText(part.status)
+        self.status_badge.style().unpolish(self.status_badge)
+        self.status_badge.style().polish(self.status_badge)
+        self.fail_output.send_result(part.status == "FAIL")
+        self.log.addItem(f"FINAL {part.status} | track={part.track_id} | views={part.frames_inspected} | worst={part.worst_score:.3f}")
+
+    @staticmethod
+    def _draw_tracks(frame, tracks: list[TrackedPart]):
+        display = frame.copy()
+        for track in tracks:
+            x, y, w, h = track.bounds
+            cv2.rectangle(display, (x, y), (x + w, y + h), (0, 217, 255), 2)
+            cv2.putText(display, f"PART {track.track_id} {track.confidence:.0%}", (x, max(18, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 217, 255), 2)
+        return display
 
     def _handle_no_part_frame(self, frame) -> None:
         result = InspectionResult(
@@ -596,7 +657,6 @@ class InspectionWindow(QWidget):
             f"BAD SECTORS:  -\nSECTOR RATIO:  -\nLATENCY:  {latency_ms:.1f} ms"
         )
         self.latency_top.setText(f"LATENCY:  {latency_ms:.0f} ms")
-        self.fail_output.send_result(False)
         self.log.addItem(f"NO PART | {self.selected_model().id}")
 
     def _send_fail_output(self, result) -> None:
@@ -656,6 +716,11 @@ class InspectionWindow(QWidget):
         self.train_worker.start()
 
     def stop_camera(self) -> None:
+        if self.rotating_parts is not None:
+            for part in self.rotating_parts.flush():
+                self._handle_completed_part(part)
+        self.part_detector = None
+        self.rotating_parts = None
         self.inspection_running = False
         self.live_timer.stop()
         self.camera.close()
@@ -674,9 +739,9 @@ class InspectionWindow(QWidget):
         self.status_badge.style().polish(self.status_badge)
 
     def reset_stats(self) -> None:
-        self.stats = {"inspected": 0, "passed": 0, "failed": 0}
+        self.stats = self.daily_statistics.counts()
         self.update_stats()
-        self.log.clear()
+        self.log.addItem(f"DAILY COUNTERS RETAINED ({operating_day()} 07:00–07:00)")
 
     def update_stats(self) -> None:
         inspected = self.stats["inspected"]

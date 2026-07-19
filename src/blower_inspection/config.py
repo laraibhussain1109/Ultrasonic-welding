@@ -25,6 +25,9 @@ class PartModelConfig:
     camera_height: int = 1080
     camera_fps: int = 30
     image_size: int = 384
+    yolo_model_path: Path | None = None
+    yolo_confidence: float = 0.40
+    inspection_lost_timeout_s: float = 1.0
 
 
 class ModelRegistry:
@@ -57,6 +60,7 @@ class ModelRegistry:
         camera_width: int | None = None,
         camera_height: int | None = None,
         camera_fps: int | None = None,
+        yolo_model_path: str | Path | None = None,
     ) -> PartModelConfig:
         for entry in self._data.get("models", []):
             if entry.get("id") != model_id:
@@ -69,6 +73,8 @@ class ModelRegistry:
                 entry["camera_height"] = int(camera_height)
             if camera_fps is not None:
                 entry["camera_fps"] = int(camera_fps)
+            if yolo_model_path is not None:
+                entry["yolo_model_path"] = str(yolo_model_path)
             self._save()
             self._data = self._load()
             return self.get(model_id)
@@ -103,6 +109,9 @@ class ModelRegistry:
             camera_height=int(entry.get("camera_height", 1080)),
             camera_fps=int(entry.get("camera_fps", 30)),
             image_size=int(entry.get("image_size", 384)),
+            yolo_model_path=Path(entry["yolo_model_path"]) if entry.get("yolo_model_path") else None,
+            yolo_confidence=float(entry.get("yolo_confidence", 0.40)),
+            inspection_lost_timeout_s=float(entry.get("inspection_lost_timeout_s", 1.0)),
         )
 
 
