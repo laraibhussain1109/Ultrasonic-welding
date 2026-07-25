@@ -521,11 +521,15 @@ class InspectionWindow(QWidget):
             device_name = self.inspector.runtime_device_name()
         except Exception as exc:
             device_name = f"unavailable ({exc})"
-        if self.esp32_output.connect():
-            esp32_status = f"ESP32 READY {self.esp32_output.connected_port}"
-            self.esp32_output.set_fail(False)
+        if self.fail_output.config.enabled:
+            # ESP32FailOutputBridge is deliberately asynchronous and exposes
+            # send_result/reset rather than the synchronous connect/set_fail
+            # API of the legacy serial driver. Queue a safe PASS state without
+            # blocking camera startup.
+            self.fail_output.reset()
+            esp32_status = f"ESP32 CONFIGURED {self.fail_output.config.base_url}"
         else:
-            esp32_status = f"ESP32 OFFLINE ({self.esp32_output.last_error})"
+            esp32_status = "ESP32 DISABLED"
         self.log.addItem(
             f"LIVE INSPECTION STARTED {self.selected_model().id} | "
             f"CAMERA {self.camera.width}x{self.camera.height}@{self.camera.fps} | DEVICE {device_name} | {esp32_status}"
