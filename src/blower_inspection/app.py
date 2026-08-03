@@ -499,7 +499,11 @@ class InspectionWindow(QWidget):
         try:
             self._apply_selected_camera_settings()
             self.part_detector = YoloByteTrackDetector(model.yolo_model_path, model.yolo_confidence)
-            self.rotating_parts = RotatingPartInspector(model.inspection_lost_timeout_s)
+            self.rotating_parts = RotatingPartInspector(
+                model.inspection_lost_timeout_s,
+                model.counting_line_ratio,
+                model.counting_direction,
+            )
             self.camera.open()
         except Exception as exc:
             QMessageBox.critical(self, "Camera error", str(exc))
@@ -544,10 +548,13 @@ class InspectionWindow(QWidget):
             self.raw_frame = raw_frame
             assert self.part_detector is not None and self.rotating_parts is not None
             tracks = self.part_detector.track(raw_frame)
-            completed_parts = self.rotating_parts.observe_tracks(tracks)
-            for part in completed_parts:
-                self._handle_completed_part(part)
-            frame = self._draw_tracks(raw_frame, tracks)
+            self.rotating_parts.observe_tracks(tracks, raw_frame.shape[1])
+            frame = self._draw_tracks(
+                raw_frame,
+                tracks,
+                self.rotating_parts.counting_line_ratio,
+                self.rotating_parts.counting_direction,
+            )
         except Exception as exc:
             self._handle_live_error(f"Camera frame error: {exc}")
             return
@@ -556,11 +563,6 @@ class InspectionWindow(QWidget):
             self.show_frame(frame)
         self.fps_frame_count += 1
         if not tracks:
-            # Keep the final badge visible on the frame where ByteTrack closes
-            # a rotating-part session instead of immediately replacing it with
-            # the transient empty-nest state.
-            if completed_parts:
-                return
             self._handle_no_part_frame(frame)
             return
         now = time.perf_counter()
@@ -575,6 +577,7 @@ class InspectionWindow(QWidget):
             part = max(
                 tracks,
                 key=lambda candidate: (
+                    self.rotating_parts.needs_completion_inspection(candidate.track_id),
                     self.rotating_parts.needs_initial_inspection(candidate.track_id),
                     candidate.confidence,
                 ),
@@ -593,12 +596,17 @@ class InspectionWindow(QWidget):
         if result.is_no_part:
             self._handle_no_part_result(result, latency_ms)
             return
+        completed_part = None
+        latched_failure = not result.is_pass
         if self.rotating_parts is not None:
-            self.rotating_parts.record_inspection(track_id, is_pass=result.is_pass, anomaly_score=result.anomaly_score)
+            completed_part = self.rotating_parts.record_inspection(
+                track_id, is_pass=result.is_pass, anomaly_score=result.anomaly_score
+            )
+            latched_failure = self.rotating_parts.latched_failure(track_id) or latched_failure
         self.score_slider.setValue(int(result.anomaly_score * 1000))
         self.score_label.setText(f"{result.anomaly_score:.3f}")
-        self.status_badge.setObjectName("statusPass" if result.is_pass else "statusFail")
-        self.status_badge.setText(result.status)
+        self.status_badge.setObjectName("statusFail" if latched_failure else "statusStandby")
+        self.status_badge.setText("FAIL LATCHED" if latched_failure else "INSPECTING")
         self.status_badge.style().unpolish(self.status_badge)
         self.status_badge.style().polish(self.status_badge)
         if result.display_image is not None:
@@ -615,6 +623,8 @@ class InspectionWindow(QWidget):
         )
         self.latency_top.setText(f"LATENCY:  {latency_ms:.0f} ms")
         self.log.addItem(f"VIEW {result.status} | track={track_id} | score={result.anomaly_score:.3f}")
+        if completed_part is not None:
+            self._handle_completed_part(completed_part)
 
     def _handle_completed_part(self, part) -> None:
         self.stats = self.daily_statistics.record(part.status)
@@ -627,8 +637,21 @@ class InspectionWindow(QWidget):
         self.log.addItem(f"FINAL {part.status} | track={part.track_id} | views={part.frames_inspected} | worst={part.worst_score:.3f}")
 
     @staticmethod
-    def _draw_tracks(frame, tracks: list[TrackedPart]):
+    def _draw_tracks(
+        frame, tracks: list[TrackedPart], counting_line_ratio: float, counting_direction: str
+    ):
         display = frame.copy()
+        line_x = int(round(display.shape[1] * counting_line_ratio))
+        cv2.line(display, (line_x, 0), (line_x, display.shape[0] - 1), (0, 255, 255), 2)
+        cv2.putText(
+            display,
+            "COUNT LINE " + (">" if counting_direction == "left_to_right" else "<"),
+            (max(4, line_x - 135), 24),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0, 255, 255),
+            2,
+        )
         for track in tracks:
             x, y, w, h = track.bounds
             cv2.rectangle(display, (x, y), (x + w, y + h), (0, 217, 255), 2)

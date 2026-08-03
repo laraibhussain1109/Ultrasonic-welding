@@ -86,12 +86,19 @@ pip install -e .[industrial]
 ```
 
 Each camera frame is passed to YOLO with Ultralytics `bytetrack.yaml` and the
-resulting persistent track ID is used as the inspection identity. PatchCore/PaDiM
-runs only inside that YOLO bounding box. All views while a cylindrical part is
-rotating are accumulated under one track ID; a single failed view makes the final
-part verdict `FAIL`. The PASS/FAIL signal and production counters are updated
-only after ByteTrack loses the part for the configured timeout (or inspection is
-stopped), so a rotating part is never counted once per frame.
+resulting persistent track ID is used to associate detections. PatchCore/PaDiM
+runs only inside the current YOLO bounding box. All views while a cylindrical
+part is rotating are accumulated into one physical inspection session; a failed
+view is latched and makes the final verdict `FAIL`, even when every later view is
+flawless. If brief occlusion changes ByteTrack's ID, an overlapping detection is
+reattached to the recent session instead of clearing that failure.
+
+The PASS/FAIL signal and production counters are updated only when the detected
+part center crosses the configured counting line (`counting_line_ratio`, default
+80% of frame width, moving left-to-right). Disappearance or rotation in place
+does not count or complete a part. Set `counting_direction` to `right_to_left`
+when production flows in the opposite direction. The operator must rotate the
+complete curved surface before moving the part across the displayed count line.
 
 Daily counters persist in `data/results/daily_statistics.json`. An operating day
 runs from local time 07:00 through the next local 07:00; the UI's reset control
