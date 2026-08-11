@@ -166,6 +166,16 @@ def broken_fin_mask(image: np.ndarray, output_shape: tuple[int, int]) -> np.ndar
     ).astype(bool)
     gaps = reconstructed & ~existing & interior
 
+    # Normal blower geometry creates repeated interruptions at the same x
+    # coordinate across many fins. A real isolated broken fin affects only one
+    # or two horizontal edge rows, so remove columns with repeated gaps.
+    repeated_gap_columns = np.count_nonzero(gaps, axis=0) >= max(3, int(height * 0.025))
+    repeated_gap_columns = cv2.dilate(
+        repeated_gap_columns.astype(np.uint8)[None, :],
+        cv2.getStructuringElement(cv2.MORPH_RECT, (max(3, width // 200), 1)),
+    )[0].astype(bool)
+    gaps[:, repeated_gap_columns] = False
+
     # Support ribs have strong vertical edges through much of the crop height;
     # suppress their columns without suppressing the short endpoints of a break.
     vertical_edges = (grad_x >= x_threshold) & interior
@@ -182,6 +192,12 @@ def broken_fin_mask(image: np.ndarray, output_shape: tuple[int, int]) -> np.ndar
         _x, _y, component_width, component_height, area = stats[label]
         if area >= 2 and component_width >= 3 and component_width <= max_gap:
             confirmed[labels == label] = True
+    # Fail safe: this detector is for isolated breaks. If it fires broadly, the
+    # pattern is normal repeated texture/lighting rather than a localized broken
+    # fin. Never allow that condition to paint or fail the entire component.
+    confirmed_count, _labels = cv2.connectedComponents(confirmed.astype(np.uint8), 8)
+    if confirmed_count - 1 > 12 or np.count_nonzero(confirmed) > interior.sum() * 0.01:
+        confirmed[:] = False
     confirmed = cv2.dilate(
         confirmed.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
     ).astype(bool)

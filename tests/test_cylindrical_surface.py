@@ -66,3 +66,14 @@ def test_broken_fin_detector_does_not_mark_continuous_fins():
     detected = broken_fin_mask(fin_image(), (120, 600))
 
     assert np.count_nonzero(detected) == 0
+
+
+def test_broken_fin_detector_fails_safe_on_broad_repeated_texture():
+    image = fin_image()
+    for y in range(20, 105, 12):
+        for x in range(40, 560, 35):
+            cv2.rectangle(image, (x, y - 2), (x + 8, y + 2), (35, 35, 35), -1)
+
+    detected = broken_fin_mask(image, (120, 600))
+
+    assert np.count_nonzero(detected) == 0

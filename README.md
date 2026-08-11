@@ -111,7 +111,9 @@ The hybrid result also includes a high-resolution structural fin-continuity
 check. It detects short gaps in horizontal fins that the downsampled deep
 features may treat as harmless texture, while suppressing the normal full-height
 support ribs. Confirmed gaps are promoted to full overlay severity and participate
-in the same latched FAIL verdict.
+in the same latched FAIL verdict. Repeated gap columns and any broad structural
+response are rejected as normal part texture, preventing the structural check
+from painting or failing the entire blower surface.
 
 Daily counters persist in `data/results/daily_statistics.json`. An operating day
 runs from local time 07:00 through the next local 07:00; the UI's reset control
