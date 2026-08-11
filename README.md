@@ -107,6 +107,12 @@ miss small surface marks because their feature positions do not match the live
 crop. The live overlay leaves normal pixels unchanged and colors only confirmed
 thresholded anomaly regions.
 
+The hybrid result also includes a high-resolution structural fin-continuity
+check. It detects short gaps in horizontal fins that the downsampled deep
+features may treat as harmless texture, while suppressing the normal full-height
+support ribs. Confirmed gaps are promoted to full overlay severity and participate
+in the same latched FAIL verdict.
+
 Daily counters persist in `data/results/daily_statistics.json`. An operating day
 runs from local time 07:00 through the next local 07:00; the UI's reset control
 reloads those protected daily totals rather than erasing production records.

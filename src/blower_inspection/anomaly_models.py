@@ -37,6 +37,7 @@ from .camera import crop_component_roi
 from .config import PartModelConfig
 from .trainer import (
     InspectionResult,
+    broken_fin_mask,
     clean_mask,
     cylindrical_sector_statistics,
     cylindrical_surface_mask,
@@ -214,7 +215,11 @@ class HybridPatchcorePadimInspector:
         # hybrid map is normalized to 0..1, so keep the configurable threshold
         # but never allow it below the visual yellow/red floor.
         threshold = min(max(config.anomaly_threshold / 10.0, 0.65), 0.95)
-        candidate_mask = clean_mask((fused >= threshold) & surface_mask)
+        fin_breaks = broken_fin_mask(image, fused.shape) & surface_mask
+        candidate_mask = clean_mask(((fused >= threshold) & surface_mask) | fin_breaks)
+        # Give confirmed structural gaps full display severity so a subtle
+        # broken fin is clearly localized even when deep features are tolerant.
+        fused = np.maximum(fused, fin_breaks.astype(np.float32))
         defect_area = int(candidate_mask.sum())
         surface_scores = fused[surface_mask]
         anomaly_score = float(np.max(surface_scores)) if surface_scores.size else 0.0

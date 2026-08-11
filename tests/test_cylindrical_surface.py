@@ -4,10 +4,22 @@ import numpy as np
 cv2 = pytest.importorskip("cv2", exc_type=ImportError)
 
 from blower_inspection.trainer import (
+    broken_fin_mask,
     cylindrical_sector_statistics,
     cylindrical_surface_mask,
     inspection_overlay,
 )
+
+
+def fin_image(*, broken=False):
+    image = np.full((120, 600, 3), 35, dtype=np.uint8)
+    for y in range(20, 105, 12):
+        cv2.line(image, (10, y), (590, y), (175, 175, 175), 2)
+        if broken and y == 56:
+            cv2.rectangle(image, (150, y - 2), (170, y + 2), (35, 35, 35), -1)
+    for x in (100, 250, 400, 550):
+        cv2.line(image, (x, 10), (x, 110), (120, 120, 120), 4)
+    return image
 
 
 def test_surface_mask_includes_center_and_excludes_crop_edges():
@@ -42,3 +54,15 @@ def test_cylindrical_sectors_find_a_localized_surface_defect():
 
     assert ratio > 0
     assert sectors == [10]
+
+
+def test_broken_fin_detector_marks_small_horizontal_discontinuity():
+    detected = broken_fin_mask(fin_image(broken=True), (120, 600))
+
+    assert np.count_nonzero(detected[50:63, 145:175]) > 0
+
+
+def test_broken_fin_detector_does_not_mark_continuous_fins():
+    detected = broken_fin_mask(fin_image(), (120, 600))
+
+    assert np.count_nonzero(detected) == 0

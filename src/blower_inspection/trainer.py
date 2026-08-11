@@ -118,7 +118,7 @@ def fan_ring_mask(shape: tuple[int, int], inner_ratio: float, outer_ratio: float
 
 
 def cylindrical_surface_mask(
-    shape: tuple[int, int], *, horizontal_margin_ratio: float = 0.02, vertical_margin_ratio: float = 0.05
+    shape: tuple[int, int], *, horizontal_margin_ratio: float = 0.02, vertical_margin_ratio: float = 0.08
 ) -> np.ndarray:
     """Mask the visible rectangular surface of a YOLO-cropped cylindrical part.
 
@@ -132,6 +132,62 @@ def cylindrical_surface_mask(
     mask = np.zeros((height, width), dtype=bool)
     mask[margin_y : height - margin_y, margin_x : width - margin_x] = True
     return mask
+
+
+def broken_fin_mask(image: np.ndarray, output_shape: tuple[int, int]) -> np.ndarray:
+    """Locate short discontinuities in otherwise continuous horizontal fins.
+
+    Deep PatchCore features are intentionally tolerant of small texture changes,
+    which can hide a physically broken thin fin. This high-resolution companion
+    detector finds gaps in horizontal edges while suppressing the full-height
+    vertical support ribs that legitimately interrupt every fin.
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    height, width = gray.shape
+    grad_y = np.abs(cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3))
+    grad_x = np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3))
+    interior = cylindrical_surface_mask(gray.shape, horizontal_margin_ratio=0.03, vertical_margin_ratio=0.08)
+    y_values = grad_y[interior]
+    x_values = grad_x[interior]
+    y_threshold = max(20.0, float(np.percentile(y_values, 70.0)))
+    x_threshold = max(20.0, float(np.percentile(x_values, 82.0)))
+    horizontal_edges = (grad_y >= y_threshold) & interior
+
+    # A closing reconstructs only short missing sections between edge fragments.
+    max_gap = max(7, int(round(width * 0.035))) | 1
+    reconstructed = cv2.morphologyEx(
+        horizontal_edges.astype(np.uint8),
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (max_gap, 1)),
+    ).astype(bool)
+    existing = cv2.dilate(
+        horizontal_edges.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_RECT, (3, 1))
+    ).astype(bool)
+    gaps = reconstructed & ~existing & interior
+
+    # Support ribs have strong vertical edges through much of the crop height;
+    # suppress their columns without suppressing the short endpoints of a break.
+    vertical_edges = (grad_x >= x_threshold) & interior
+    rib_columns = np.count_nonzero(vertical_edges, axis=0) >= max(5, int(height * 0.18))
+    rib_columns = cv2.dilate(
+        rib_columns.astype(np.uint8)[None, :],
+        cv2.getStructuringElement(cv2.MORPH_RECT, (max(3, width // 160), 1)),
+    )[0].astype(bool)
+    gaps[:, rib_columns] = False
+
+    count, labels, stats, _centroids = cv2.connectedComponentsWithStats(gaps.astype(np.uint8), 8)
+    confirmed = np.zeros_like(gaps)
+    for label in range(1, count):
+        _x, _y, component_width, component_height, area = stats[label]
+        if area >= 2 and component_width >= 3 and component_width <= max_gap:
+            confirmed[labels == label] = True
+    confirmed = cv2.dilate(
+        confirmed.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    ).astype(bool)
+    return cv2.resize(
+        confirmed.astype(np.uint8), (output_shape[1], output_shape[0]), interpolation=cv2.INTER_NEAREST
+    ).astype(bool)
 
 
 def clean_mask(mask: np.ndarray) -> np.ndarray:
