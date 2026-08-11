@@ -43,10 +43,12 @@ from .trainer import (
     cylindrical_surface_mask,
     inspection_overlay,
     list_images,
+    normal_reference_score,
+    normal_reference_statistics,
 )
 from .yolo_tracking import YoloByteTrackDetector
 
-HYBRID_MODEL_VERSION = 3
+HYBRID_MODEL_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -143,6 +145,10 @@ class HybridPatchcorePadimInspector:
             else None
         )
         embeddings, grid_shape = self._extract_dataset_embeddings(used_image_paths)
+        reference_images = [self._read_training_crop(path) for path in used_image_paths]
+        normal_reference, normal_scale = normal_reference_statistics(
+            reference_images, (self.settings.image_size, self.settings.image_size)
+        )
         embeddings_np = embeddings.cpu().numpy().astype(np.float32)
         rng = np.random.default_rng(self.settings.random_seed)
         if embeddings_np.shape[1] > self.settings.padim_components:
@@ -170,6 +176,8 @@ class HybridPatchcorePadimInspector:
                 "memory_bank": memory_bank.cpu(),
                 "padim_mean": torch.as_tensor(padim_mean, dtype=torch.float32),
                 "padim_inv_cov": torch.as_tensor(padim_inv_cov, dtype=torch.float32),
+                "normal_reference": torch.as_tensor(normal_reference, dtype=torch.float32),
+                "normal_scale": torch.as_tensor(normal_scale, dtype=torch.float32),
             },
             config.model_file,
         )
@@ -191,6 +199,11 @@ class HybridPatchcorePadimInspector:
         checkpoint = self._load_runtime_checkpoint(torch, config.model_file)
         if checkpoint.get("algorithm") != "hybrid_patchcore_padim":
             raise ValueError(f"Model file is not a hybrid PatchCore/PaDiM checkpoint: {config.model_file}")
+        if int(checkpoint.get("version", 0)) < HYBRID_MODEL_VERSION:
+            raise RuntimeError(
+                "This hybrid checkpoint predates calibrated normal-reference and reflection handling. "
+                f"Retrain {config.id} with TRAIN SELECTED MODEL before live inspection."
+            )
         self._apply_checkpoint_settings(checkpoint)
         tensor = self._preprocess_image(image)
         features, _grid_shape = self._extract_embeddings_from_tensor(tensor)
@@ -215,8 +228,22 @@ class HybridPatchcorePadimInspector:
         # hybrid map is normalized to 0..1, so keep the configurable threshold
         # but never allow it below the visual yellow/red floor.
         threshold = min(max(config.anomaly_threshold / 10.0, 0.65), 0.95)
+        reference = checkpoint.get("normal_reference")
+        reference_scale = checkpoint.get("normal_scale")
+        if reference is None or reference_scale is None:
+            raise RuntimeError(f"Hybrid checkpoint is missing normal-reference calibration: {config.model_file}")
+        reference_map, reflection_mask = normal_reference_score(
+            image,
+            self._checkpoint_array(reference),
+            self._checkpoint_array(reference_scale),
+        )
+        # Fixed z-score calibration from known-good images is the primary
+        # decision signal. Deep scores need reference corroboration, which
+        # prevents per-frame normalization from making every normal part fail.
+        reference_defects = (reference_map >= 6.0) & ~reflection_mask
+        deep_defects = (fused >= threshold) & (reference_map >= 3.0) & ~reflection_mask
         fin_breaks = broken_fin_mask(image, fused.shape) & surface_mask
-        candidate_mask = clean_mask(((fused >= threshold) & surface_mask) | fin_breaks)
+        candidate_mask = clean_mask(((reference_defects | deep_defects) & surface_mask) | fin_breaks)
         # Give confirmed structural gaps full display severity so a subtle
         # broken fin is clearly localized even when deep features are tolerant.
         fused = np.maximum(fused, fin_breaks.astype(np.float32))
@@ -454,6 +481,9 @@ class HybridPatchcorePadimInspector:
         return torch.einsum("oc,bchw->bohw", matrix, embedding)
 
     def _preprocess_path(self, path: Path) -> Any:
+        return self._preprocess_image(self._read_training_crop(path))
+
+    def _read_training_crop(self, path: Path) -> np.ndarray:
         image = cv2.imread(str(path))
         if image is None:
             raise ValueError(f"Unable to read training image: {path}")
@@ -461,7 +491,7 @@ class HybridPatchcorePadimInspector:
             image = self._training_detector.exact_crop(image)
         else:
             image = crop_component_roi(image, roi_ratios=self._training_roi_ratios)
-        return self._preprocess_image(image)
+        return image
 
     def _preprocess_image(self, image: np.ndarray) -> Any:
         torch = require_module("torch")

@@ -115,6 +115,14 @@ in the same latched FAIL verdict. Repeated gap columns and any broad structural
 response are rejected as normal part texture, preventing the structural check
 from painting or failing the entire blower surface.
 
+Hybrid training also stores a robust median/MAD reference made from all known-good
+YOLO crops. Before comparison, broad illumination is removed with divisive
+normalization. Live deep anomalies must be corroborated by this fixed normal
+reference, so relative heatmap normalization cannot make every good part fail.
+Broad bright, low-texture lamp reflections are masked, while sharp white lines,
+cracks, and broken edges remain eligible as physical defects. Retraining is
+required once to add these reference statistics to an existing checkpoint.
+
 Daily counters persist in `data/results/daily_statistics.json`. An operating day
 runs from local time 07:00 through the next local 07:00; the UI's reset control
 reloads those protected daily totals rather than erasing production records.

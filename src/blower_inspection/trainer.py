@@ -134,6 +134,51 @@ def cylindrical_surface_mask(
     return mask
 
 
+def reflection_invariant_gray(image: np.ndarray, output_shape: tuple[int, int]) -> np.ndarray:
+    """Normalize slow illumination/glare while retaining local surface texture."""
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
+    width, height = output_shape[1], output_shape[0]
+    gray = cv2.resize(gray, (width, height), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
+    # Divisive illumination correction removes broad lamp gradients and exposure
+    # changes but preserves narrow cracks, missing fins, and weld boundaries.
+    sigma = max(5.0, min(height, width) / 18.0)
+    illumination = cv2.GaussianBlur(gray, (0, 0), sigmaX=sigma, sigmaY=sigma)
+    corrected = gray / np.maximum(illumination, 0.08)
+    median = float(np.median(corrected))
+    q10, q90 = np.percentile(corrected, (10.0, 90.0))
+    return np.clip((corrected - median) / max(float(q90 - q10), 0.08), -3.0, 3.0).astype(np.float32)
+
+
+def smooth_reflection_mask(image: np.ndarray, output_shape: tuple[int, int]) -> np.ndarray:
+    """Identify broad bright low-texture glare, not sharp white physical defects."""
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
+    gray = cv2.resize(gray, (output_shape[1], output_shape[0]), interpolation=cv2.INTER_AREA)
+    mean = cv2.GaussianBlur(gray.astype(np.float32), (0, 0), sigmaX=7.0)
+    mean_sq = cv2.GaussianBlur(gray.astype(np.float32) ** 2, (0, 0), sigmaX=7.0)
+    local_std = np.sqrt(np.maximum(mean_sq - mean**2, 0.0))
+    glare = (mean >= 210.0) & (local_std <= 12.0)
+    return cv2.dilate(glare.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+
+
+def normal_reference_statistics(images: list[np.ndarray], output_shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
+    """Fit a robust normal-only per-pixel reference from known-good images."""
+    stack = np.stack([reflection_invariant_gray(image, output_shape) for image in images], axis=0)
+    reference = np.median(stack, axis=0).astype(np.float32)
+    mad = np.median(np.abs(stack - reference), axis=0).astype(np.float32)
+    # A floor prevents tiny camera noise in very stable regions becoming FAIL.
+    scale = np.maximum(1.4826 * mad, 0.10).astype(np.float32)
+    return reference, scale
+
+
+def normal_reference_score(
+    image: np.ndarray, reference: np.ndarray, scale: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return fixed-calibration normal deviation and a smooth-reflection mask."""
+    normalized = reflection_invariant_gray(image, reference.shape)
+    score = np.abs(normalized - reference) / np.maximum(scale, 0.10)
+    return score.astype(np.float32), smooth_reflection_mask(image, reference.shape)
+
+
 def broken_fin_mask(image: np.ndarray, output_shape: tuple[int, int]) -> np.ndarray:
     """Locate short discontinuities in otherwise continuous horizontal fins.
 

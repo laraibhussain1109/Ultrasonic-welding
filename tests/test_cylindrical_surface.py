@@ -8,6 +8,9 @@ from blower_inspection.trainer import (
     cylindrical_sector_statistics,
     cylindrical_surface_mask,
     inspection_overlay,
+    normal_reference_score,
+    normal_reference_statistics,
+    smooth_reflection_mask,
 )
 
 
@@ -77,3 +80,27 @@ def test_broken_fin_detector_fails_safe_on_broad_repeated_texture():
     detected = broken_fin_mask(image, (120, 600))
 
     assert np.count_nonzero(detected) == 0
+
+
+def test_normal_reference_ignores_global_light_change_but_finds_damage():
+    normal = fin_image()
+    brighter = np.clip(normal.astype(np.float32) * 1.25 + 18, 0, 255).astype(np.uint8)
+    reference, scale = normal_reference_statistics([normal, brighter], (120, 600))
+    lit_score, _ = normal_reference_score(brighter, reference, scale)
+    damaged = brighter.copy()
+    cv2.rectangle(damaged, (150, 52), (175, 60), (0, 0, 0), -1)
+    damage_score, _ = normal_reference_score(damaged, reference, scale)
+
+    assert float(np.percentile(lit_score, 99)) < 3.0
+    assert float(np.max(damage_score[50:63, 145:180])) >= 6.0
+
+
+def test_smooth_glare_is_masked_but_sharp_white_line_is_not_fully_masked():
+    image = fin_image()
+    cv2.circle(image, (350, 55), 35, (245, 245, 245), -1)
+    cv2.line(image, (150, 45), (150, 70), (255, 255, 255), 2)
+
+    glare = smooth_reflection_mask(image, (120, 600))
+
+    assert glare[55, 350]
+    assert not np.all(glare[45:71, 148:153])
