@@ -28,7 +28,9 @@ class PartModelConfig:
     yolo_model_path: Path | None = None
     yolo_confidence: float = 0.40
     inspection_lost_timeout_s: float = 1.0
-    counting_line_ratio: float = 0.80
+    # Slightly left of frame center so the part reaches the count line within
+    # the usable fixture/conveyor travel visible in the production camera.
+    counting_line_ratio: float = 0.45
     counting_direction: str = "left_to_right"
 
 
@@ -114,7 +116,7 @@ class ModelRegistry:
             yolo_model_path=Path(entry["yolo_model_path"]) if entry.get("yolo_model_path") else None,
             yolo_confidence=float(entry.get("yolo_confidence", 0.40)),
             inspection_lost_timeout_s=float(entry.get("inspection_lost_timeout_s", 1.0)),
-            counting_line_ratio=float(entry.get("counting_line_ratio", 0.80)),
+            counting_line_ratio=float(entry.get("counting_line_ratio", 0.45)),
             counting_direction=str(entry.get("counting_direction", "left_to_right")),
         )
 

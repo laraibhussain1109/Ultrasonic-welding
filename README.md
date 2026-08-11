@@ -95,7 +95,7 @@ reattached to the recent session instead of clearing that failure.
 
 The PASS/FAIL signal and production counters are updated only when the detected
 part center crosses the configured counting line (`counting_line_ratio`, default
-80% of frame width, moving left-to-right). Disappearance or rotation in place
+45% of frame width—slightly left of center—moving left-to-right). Disappearance or rotation in place
 does not count or complete a part. Set `counting_direction` to `right_to_left`
 when production flows in the opposite direction. The operator must rotate the
 complete curved surface before moving the part across the displayed count line.

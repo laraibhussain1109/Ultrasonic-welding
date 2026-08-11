@@ -89,7 +89,7 @@ class RotatingPartInspector:
     def __init__(
         self,
         lost_timeout_s: float = 1.0,
-        counting_line_ratio: float = 0.80,
+        counting_line_ratio: float = 0.45,
         counting_direction: str = "left_to_right",
     ) -> None:
         if not 0.0 < counting_line_ratio < 1.0:
