@@ -117,6 +117,23 @@ def fan_ring_mask(shape: tuple[int, int], inner_ratio: float, outer_ratio: float
     return (radius >= inner_ratio * max_radius) & (radius <= outer_ratio * max_radius)
 
 
+def cylindrical_surface_mask(
+    shape: tuple[int, int], *, horizontal_margin_ratio: float = 0.02, vertical_margin_ratio: float = 0.05
+) -> np.ndarray:
+    """Mask the visible rectangular surface of a YOLO-cropped cylindrical part.
+
+    A blower wheel is long and horizontal in the exact YOLO crop. Applying the
+    old circular fan-ring mask to its square inference tensor excluded the
+    center of the curved surface and emphasized unrelated corners/edges.
+    """
+    height, width = shape
+    margin_x = max(1, int(round(width * horizontal_margin_ratio)))
+    margin_y = max(1, int(round(height * vertical_margin_ratio)))
+    mask = np.zeros((height, width), dtype=bool)
+    mask[margin_y : height - margin_y, margin_x : width - margin_x] = True
+    return mask
+
+
 def clean_mask(mask: np.ndarray) -> np.ndarray:
     kernel = np.ones((3, 3), np.uint8)
     cleaned = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, kernel, iterations=1)
@@ -167,7 +184,13 @@ def inspection_overlay(
     mask_full_uint8 = cv2.resize(defect_mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST)
     mask_full = mask_full_uint8.astype(bool)
     heatmap = cv2.applyColorMap(np.clip(score_full * 255, 0, 255).astype(np.uint8), cv2.COLORMAP_JET)
-    annotated = cv2.addWeighted(base, 0.62, heatmap, 0.38, 0)
+    # Do not paint a full-frame relative heatmap: per-image normalization always
+    # has a hottest pixel and made flawless fins look deep red. Preserve the
+    # camera image everywhere except confirmed, thresholded anomaly regions.
+    annotated = base.copy()
+    if np.any(mask_full):
+        anomaly_pixels = cv2.addWeighted(base, 0.35, heatmap, 0.65, 0)
+        annotated[mask_full] = anomaly_pixels[mask_full]
     contours, _ = cv2.findContours(mask_full_uint8 * 255, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cv2.drawContours(annotated, contours, -1, (0, 0, 255), 2)
     area_scale = (width * height) / max(defect_mask.size, 1)
@@ -207,6 +230,31 @@ def sector_statistics(
     for sector, score in enumerate(sector_scores):
         if score > median + 6.0 * mad and score >= min_bad_score:
             bad_sectors.append(sector)
+    return len(bad_sectors) / max(expected_fins, 1), bad_sectors
+
+
+def cylindrical_sector_statistics(
+    mask: np.ndarray,
+    score_map: np.ndarray,
+    expected_fins: int,
+    *,
+    min_bad_score: float,
+) -> tuple[float, list[int]]:
+    """Evaluate a horizontal cylinder as vertical fin strips, not polar wedges."""
+    _height, width = mask.shape
+    sector_scores: list[float] = []
+    for sector in range(expected_fins):
+        x0 = int(round(sector * width / expected_fins))
+        x1 = int(round((sector + 1) * width / expected_fins))
+        pixels = mask[:, x0:x1]
+        score = float(np.percentile(score_map[:, x0:x1][pixels], 99.0)) if np.any(pixels) else 0.0
+        sector_scores.append(score)
+    median = float(np.median(sector_scores))
+    mad = float(np.median(np.abs(np.asarray(sector_scores) - median))) + 1e-6
+    bad_sectors = [
+        sector for sector, score in enumerate(sector_scores)
+        if score >= min_bad_score and score > median + 6.0 * mad
+    ]
     return len(bad_sectors) / max(expected_fins, 1), bad_sectors
 
 

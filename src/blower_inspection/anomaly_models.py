@@ -35,7 +35,15 @@ import numpy as np
 
 from .camera import crop_component_roi
 from .config import PartModelConfig
-from .trainer import InspectionResult, clean_mask, fan_ring_mask, inspection_overlay, list_images, sector_statistics
+from .trainer import (
+    InspectionResult,
+    clean_mask,
+    cylindrical_sector_statistics,
+    cylindrical_surface_mask,
+    inspection_overlay,
+    list_images,
+)
+from .yolo_tracking import YoloByteTrackDetector
 
 HYBRID_MODEL_VERSION = 3
 
@@ -115,6 +123,7 @@ class HybridPatchcorePadimInspector:
         self._backbone_cache: tuple[Any, _FeatureHook, Any] | None = None
         self._checkpoint_cache: dict[Path, tuple[float, dict[str, Any]]] = {}
         self._training_roi_ratios: tuple[float, float, float, float] | None = None
+        self._training_detector: YoloByteTrackDetector | None = None
 
     def train(self, config: PartModelConfig) -> Path:
         self._apply_model_settings(config)
@@ -127,6 +136,11 @@ class HybridPatchcorePadimInspector:
         used_image_paths = self._select_training_images(image_paths)
         torch = require_module("torch")
         self._training_roi_ratios = config.roi_ratios
+        self._training_detector = (
+            YoloByteTrackDetector(config.yolo_model_path, config.yolo_confidence)
+            if config.yolo_model_path is not None
+            else None
+        )
         embeddings, grid_shape = self._extract_dataset_embeddings(used_image_paths)
         embeddings_np = embeddings.cpu().numpy().astype(np.float32)
         rng = np.random.default_rng(self.settings.random_seed)
@@ -194,18 +208,18 @@ class HybridPatchcorePadimInspector:
         )
         fused = cv2.resize(fused_small, (self.settings.image_size, self.settings.image_size), interpolation=cv2.INTER_CUBIC)
         fused = cv2.GaussianBlur(fused, (9, 9), 0)
-        ring_mask = fan_ring_mask(fused.shape, config.inner_radius_ratio, config.outer_radius_ratio)
+        surface_mask = cylindrical_surface_mask(fused.shape)
         # Operators judge the overlay by color: blue/green should remain PASS,
         # while FAIL should require the yellow/red-to-red severity band.  The
         # hybrid map is normalized to 0..1, so keep the configurable threshold
         # but never allow it below the visual yellow/red floor.
         threshold = min(max(config.anomaly_threshold / 10.0, 0.65), 0.95)
-        candidate_mask = clean_mask((fused >= threshold) & ring_mask)
+        candidate_mask = clean_mask((fused >= threshold) & surface_mask)
         defect_area = int(candidate_mask.sum())
-        ring_scores = fused[ring_mask]
-        anomaly_score = float(np.max(ring_scores)) if ring_scores.size else 0.0
-        bad_sector_ratio, bad_sectors = sector_statistics(
-            ring_mask, fused, config.expected_fins, min_bad_score=threshold
+        surface_scores = fused[surface_mask]
+        anomaly_score = float(np.max(surface_scores)) if surface_scores.size else 0.0
+        bad_sector_ratio, bad_sectors = cylindrical_sector_statistics(
+            surface_mask, fused, config.expected_fins, min_bad_score=threshold
         )
         fail_area = max(config.min_defect_area_px, int(0.0004 * fused.size))
         status = "FAIL" if defect_area >= fail_area or bad_sector_ratio >= config.max_bad_sector_ratio else "PASS"
@@ -438,7 +452,11 @@ class HybridPatchcorePadimInspector:
         image = cv2.imread(str(path))
         if image is None:
             raise ValueError(f"Unable to read training image: {path}")
-        return self._preprocess_image(crop_component_roi(image, roi_ratios=self._training_roi_ratios))
+        if self._training_detector is not None:
+            image = self._training_detector.exact_crop(image)
+        else:
+            image = crop_component_roi(image, roi_ratios=self._training_roi_ratios)
+        return self._preprocess_image(image)
 
     def _preprocess_image(self, image: np.ndarray) -> Any:
         torch = require_module("torch")

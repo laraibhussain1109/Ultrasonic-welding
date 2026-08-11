@@ -100,6 +100,13 @@ does not count or complete a part. Set `counting_direction` to `right_to_left`
 when production flows in the opposite direction. The operator must rotate the
 complete curved surface before moving the part across the displayed count line.
 
+After upgrading to this version, retrain each hybrid model from its normal-image
+folder. Training now uses the same YOLO exact crop as live inference; old hybrid
+checkpoints trained on the larger fixed ROI can produce broad false positives and
+miss small surface marks because their feature positions do not match the live
+crop. The live overlay leaves normal pixels unchanged and colors only confirmed
+thresholded anomaly regions.
+
 Daily counters persist in `data/results/daily_statistics.json`. An operating day
 runs from local time 07:00 through the next local 07:00; the UI's reset control
 reloads those protected daily totals rather than erasing production records.

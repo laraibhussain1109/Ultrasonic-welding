@@ -55,6 +55,21 @@ class YoloByteTrackDetector:
                 parts.append(TrackedPart(int(track_id), (x0, y0, x1 - x0, y1 - y0), float(confidence)))
         return parts
 
+    def exact_crop(self, frame: np.ndarray) -> np.ndarray:
+        """Return the highest-confidence YOLO part crop for training/inference parity."""
+        results = self._load().predict(frame, conf=self.confidence, verbose=False)
+        if not results or results[0].boxes is None or len(results[0].boxes) == 0:
+            raise ValueError("YOLO did not detect a part in the training image")
+        boxes = results[0].boxes
+        best = int(boxes.conf.argmax().item())
+        x0, y0, x1, y1 = boxes.xyxy[best].detach().cpu().numpy().astype(int)
+        height, width = frame.shape[:2]
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(width, x1), min(height, y1)
+        if x1 <= x0 or y1 <= y0:
+            raise ValueError("YOLO returned an empty part crop for a training image")
+        return frame[y0:y1, x0:x1].copy()
+
 
 @dataclass
 class RotatingPartSession:
