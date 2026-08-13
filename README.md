@@ -4,15 +4,15 @@ Python/PyQt6 inspection software for ultrasonic-welded blower fan parts. The sys
 
 ## What changed for industry deployment
 
-This is no longer a simple template-difference demo. The production path uses a **hybrid PatchCore + PaDiM anomaly detector** trained from normal images:
+The production path combines **YOLO + anomalib SuperSimpleNet**:
 
-1. A pretrained CNN extracts multi-scale patch embeddings from known-good blower fan images.
-2. **PatchCore** stores a coreset memory bank of representative normal patches.
-3. **PaDiM** fits per-location Gaussian distributions over normal patch features.
-4. Inspection fuses PatchCore nearest-neighbour distance and PaDiM Mahalanobis distance into a robust anomaly heatmap.
-5. The heatmap is restricted to the fin/weld ring and checked by fin sector to catch cracks, missing welds, wrongly welded fins, and abnormal local surface changes.
+1. The configured Ultralytics YOLO model finds the exact component region in every training and inference image.
+2. SuperSimpleNet trains only on verified normal YOLO crops and learns a discriminative anomaly boundary using synthetic anomalies.
+3. At inference, SuperSimpleNet produces a pixel anomaly map for the same exact crop.
+4. The map is restricted to the fin/weld surface and evaluated by defect area and fin sector.
+5. ByteTrack associates all rotation views with one part so any failed view remains latched.
 
-This is a practical normal-only approach for factories because it does not require thousands of defect examples before first deployment.
+This replaces the PatchCore/PaDiM memory-bank approach, which was too sensitive to coreset coverage and valid appearance variation. Existing hybrid checkpoints are incompatible and every part model must be retrained.
 
 ## UI
 
@@ -58,97 +58,13 @@ python -m blower_inspection.app
 
 ## Runtime acceleration
 
-The live inspector automatically selects CUDA when a CUDA-capable PyTorch build and NVIDIA driver are available. You can override the runtime device with `BLOWER_INSPECTION_DEVICE` (`cuda`, `cpu`, or `directml`/`dml` when `torch-directml` is installed). During live inspection the CNN backbone, PatchCore distance search, and PaDiM scoring stay cached on the selected accelerator instead of being rebuilt on every frame.
+The live inspector automatically selects CUDA when a CUDA-capable PyTorch build is available. Override it with `BLOWER_INSPECTION_DEVICE` (`cuda` or `cpu`). The UI logs the selected inference device.
 
-```powershell
-$env:BLOWER_INSPECTION_DEVICE = "cuda"
-python -m blower_inspection.app
-```
+## YOLO localisation and part tracking
 
-The UI also logs the active inference device when live inspection starts. If that log shows `cpu` on the deployment PC, install a CUDA-enabled PyTorch wheel for the RTX 5070 or set `BLOWER_INSPECTION_DEVICE=cuda` after confirming `python -c "import torch; print(torch.cuda.is_available())"` returns `True`.
+Select each part's YOLO `best.pt` from **YOLO PART MODEL**. The path is persisted in `config/models.json`. Full-FOV training images are YOLO-cropped in memory immediately before anomalib training; live images use the tracked YOLO bounding box. This train/inference symmetry keeps background and fixture variation out of SuperSimpleNet.
 
-Each part model stores its own camera mode and default inspection ROI in `config/models.json`. Operators can update both from the GUI without editing code:
-
-- **SET PART ROI** saves the selected model's normalized ROI percentages as that part's new default.
-- **CAMERA FPS / RESOLUTION** saves the selected model's camera width, height, and FPS, for example 3840×2160 @ 30 FPS for full 8.3 MP mode or 1920×1080 @ 60 FPS for high-speed mode.
-
-The blower fan ROI is still cropped before inference, but reducing USB/camera bandwidth can avoid a full-frame capture bottleneck when the full 8.3 MP image is not needed.
-
-## YOLO part localisation, rotation handling, and daily counts
-
-The live inspection path uses your own Ultralytics **YOLO12s** `best.pt` model to
-locate the exact part crop. In the UI, select the part model, press **YOLO PART
-MODEL**, and choose `best.pt`; the path is persisted in `config/models.json` for
-that part model. Install the optional dependency before deployment:
-
-```bash
-pip install -e .[industrial]
-```
-
-Each camera frame is passed to YOLO with Ultralytics `bytetrack.yaml` and the
-resulting persistent track ID is used to associate detections. PatchCore/PaDiM
-runs only inside the current YOLO bounding box. All views while a cylindrical
-part is rotating are accumulated into one physical inspection session; a failed
-view is latched and makes the final verdict `FAIL`, even when every later view is
-flawless. If brief occlusion changes ByteTrack's ID, an overlapping detection is
-reattached to the recent session instead of clearing that failure.
-
-The PASS/FAIL signal and production counters are updated only when the detected
-part center crosses the configured counting line (`counting_line_ratio`, default
-45% of frame width—slightly left of center—moving left-to-right). Disappearance or rotation in place
-does not count or complete a part. Set `counting_direction` to `right_to_left`
-when production flows in the opposite direction. The operator must rotate the
-complete curved surface before moving the part across the displayed count line.
-
-After upgrading to this version, retrain each hybrid model from its normal-image
-folder. Training now uses the same YOLO exact crop as live inference; old hybrid
-checkpoints trained on the larger fixed ROI can produce broad false positives and
-miss small surface marks because their feature positions do not match the live
-crop. The live overlay leaves normal pixels unchanged and colors only confirmed
-thresholded anomaly regions.
-
-The hybrid result also includes a high-resolution structural fin-continuity
-check. It detects short gaps in horizontal fins that the downsampled deep
-features may treat as harmless texture, while suppressing the normal full-height
-support ribs. Confirmed gaps are promoted to full overlay severity and participate
-in the same latched FAIL verdict. Repeated gap columns and any broad structural
-response are rejected as normal part texture, preventing the structural check
-from painting or failing the entire blower surface.
-
-Hybrid training also stores a robust median/MAD reference made from all known-good
-YOLO crops. Before comparison, broad illumination is removed with divisive
-normalization. Live deep anomalies must be corroborated by this fixed normal
-reference, so relative heatmap normalization cannot make every good part fail.
-Broad bright, low-texture lamp reflections are masked, while sharp white lines,
-cracks, and broken edges remain eligible as physical defects. Retraining is
-required once to add these reference statistics to an existing checkpoint.
-
-Train the anomaly model on the **YOLO-cropped component only**, not the complete
-camera FOV. Full-FOV training wastes PatchCore patches on the table, fixture,
-keyboard, and lighting and reduces the pixel resolution available for a small
-broken fin. The production profile uses a 640×640 input, an 80×80 embedding grid,
-an 8,192-patch training coreset, and up to 1,024 runtime memory patches. This is a
-deliberate detail/latency balance for the target RTX GPU and gives small defects
-substantially more representation than the old 384×384/56×56 profile. Retrain all
-part models after this upgrade because checkpoint version 6 contains the new
-resolution, PatchCore geometry, and student/teacher state.
-
-### Student/teacher anomaly detection
-
-Checkpoint version 6 adds an STFPM-style student/teacher detector. A frozen
-ImageNet ResNet-18 teacher and a trainable student observe the same known-good
-YOLO crops; the student learns to reproduce the teacher's multi-scale spatial
-features. During inspection, a local feature discrepancy that is outside the
-calibrated normal residual indicates an anomaly. This smooth learned mapping is
-the primary learned signal and does not depend on whether a small defect's
-nearest normal patch survived PatchCore coreset subsampling. PatchCore/PaDiM is
-retained as a corroborating ensemble signal, while normal-reference and glare
-masks still reject illumination changes. Retrain every part model after updating
-because older checkpoints do not contain the student or its residual calibration.
-
-Daily counters persist in `data/results/daily_statistics.json`. An operating day
-runs from local time 07:00 through the next local 07:00; the UI's reset control
-reloads those protected daily totals rather than erasing production records.
+The PASS/FAIL result is latched over all rotation views and counted only when the tracked part crosses the configured production line. See `docs/system_design.md` for the full architecture.
 
 ## Training workflow
 
@@ -157,8 +73,7 @@ reloads those protected daily totals rather than erasing production records.
 **You do not have to run this command before training.** Both the GUI **TRAIN
 SELECTED MODEL** action and `python -m blower_inspection.cli train BF-001`
 automatically run YOLO on every full-FOV normal image immediately before model
-training. Crops are held in memory, reused by PatchCore/PaDiM and normal-reference
-calibration, and the original images are not modified.
+training. Crops are staged temporarily for SuperSimpleNet, and the original images are not modified.
 
 The preparation command below is optional and intended only when you want to
 export and visually review the exact crops first.
@@ -209,7 +124,7 @@ For each part model:
 > The camera may see the whole table during capture. Live inspection, calibration image loading, CLI inspection, and training now automatically crop each frame to the long dark blower component ROI before the anomaly model runs, so keyboards, rails, cables, and bench clutter are excluded from scoring.
 
 1. Mount the camera rigidly and lock exposure, gain, focus, white balance, and lighting.
-2. Capture at least 100 known-good parts; the software enforces a minimum of 20 images and uses a deterministic, memory-bounded sample of up to 300 images for hybrid training.
+2. Capture at least 100 known-good parts; the software enforces a minimum of 20 images and uses those YOLO crops for SuperSimpleNet training.
 3. Put images in the model's `normal_image_dir`.
 4. Login as `admin`.
 5. Select the model and press **TRAIN SELECTED MODEL**.
@@ -231,7 +146,7 @@ python -m blower_inspection.cli inspect BF-001 path/to/test_image.png
 - Use diffuse ring/coaxial lighting for weld consistency and a low-angle secondary light for hairline cracks.
 - Keep a master set of golden PASS/FAIL samples for every model and re-run them after any threshold or lighting change.
 - Store failed overlays and JSON reports for process engineering review.
-- The hybrid trainer pools deep features to a 28×28 patch grid, projects them to 256 dimensions, caps PaDiM at 128 components, and caps PatchCore memory to prevent multi-gigabyte covariance allocations on line PCs.
+- SuperSimpleNet checkpoints are independent per part number; validate each against golden PASS/FAIL samples.
 - Use line PLC handshaking before enabling automatic reject gates.
 
 ## ESP32 fail output
@@ -343,5 +258,5 @@ firmware from `HIGH` to `LOW` and re-flash.
 - Use diffuse ring/coaxial lighting for weld consistency and a low-angle secondary light for hairline cracks.
 - Keep a master set of golden PASS/FAIL samples for every model and re-run them after any threshold or lighting change.
 - Store failed overlays and JSON reports for process engineering review.
-- The hybrid trainer pools deep features to a 28×28 patch grid, projects them to 256 dimensions, caps PaDiM at 128 components, and caps PatchCore memory to prevent multi-gigabyte covariance allocations on line PCs.
+- SuperSimpleNet checkpoints are independent per part number; validate each against golden PASS/FAIL samples.
 - Use line PLC handshaking before enabling automatic reject gates.

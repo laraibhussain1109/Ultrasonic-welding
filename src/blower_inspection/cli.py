@@ -10,7 +10,7 @@ import cv2
 
 from .auth import AuthStore
 from .config import ModelRegistry, ensure_model_folders
-from .anomaly_models import HybridPatchcorePadimInspector
+from .supersimplenet import SuperSimpleNetInspector
 from .esp32_output import ESP32FailOutput
 from .dataset import prepare_yolo_dataset
 
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     registry = ModelRegistry(args.models)
     ensure_model_folders(registry)
-    inspector = HybridPatchcorePadimInspector()
+    inspector = SuperSimpleNetInspector()
 
     if args.command == "list-models":
         for model in registry.all():

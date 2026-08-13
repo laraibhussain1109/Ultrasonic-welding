@@ -32,7 +32,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
 )
 
-from .anomaly_models import HybridPatchcorePadimInspector
+from .supersimplenet import SuperSimpleNetInspector
 from .auth import AuthStore, User
 from .camera import (
     DEFAULT_COMPONENT_ROI_RATIOS,
@@ -115,7 +115,7 @@ class TrainWorker(QThread):
     finished_ok = pyqtSignal(str)
     failed = pyqtSignal(str)
 
-    def __init__(self, inspector: HybridPatchcorePadimInspector, model: PartModelConfig) -> None:
+    def __init__(self, inspector: SuperSimpleNetInspector, model: PartModelConfig) -> None:
         super().__init__()
         self.inspector = inspector
         self.model = model
@@ -132,7 +132,7 @@ class InspectionWorker(QThread):
     finished_result = pyqtSignal(int, object, float)
     failed = pyqtSignal(str)
 
-    def __init__(self, inspector: HybridPatchcorePadimInspector, model: PartModelConfig, track_id: int, frame) -> None:
+    def __init__(self, inspector: SuperSimpleNetInspector, model: PartModelConfig, track_id: int, frame) -> None:
         super().__init__()
         self.inspector = inspector
         self.model = model
@@ -155,7 +155,7 @@ class InspectionWindow(QWidget):
         self.user = user
         self.registry = ModelRegistry()
         ensure_model_folders(self.registry)
-        self.inspector = HybridPatchcorePadimInspector()
+        self.inspector = SuperSimpleNetInspector()
         self.fail_output = ESP32FailOutputBridge()
         active_model = self.registry.active()
         self.camera = USBCamera(width=active_model.camera_width, height=active_model.camera_height, fps=active_model.camera_fps)
