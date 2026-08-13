@@ -123,6 +123,16 @@ Broad bright, low-texture lamp reflections are masked, while sharp white lines,
 cracks, and broken edges remain eligible as physical defects. Retraining is
 required once to add these reference statistics to an existing checkpoint.
 
+Train the anomaly model on the **YOLO-cropped component only**, not the complete
+camera FOV. Full-FOV training wastes PatchCore patches on the table, fixture,
+keyboard, and lighting and reduces the pixel resolution available for a small
+broken fin. The production profile uses a 640×640 input, an 80×80 embedding grid,
+an 8,192-patch training coreset, and up to 1,024 runtime memory patches. This is a
+deliberate detail/latency balance for the target RTX GPU and gives small defects
+substantially more representation than the old 384×384/56×56 profile. Retrain all
+part models after this upgrade because checkpoint version 5 contains the new
+resolution and PatchCore geometry.
+
 Daily counters persist in `data/results/daily_statistics.json`. An operating day
 runs from local time 07:00 through the next local 07:00; the UI's reset control
 reloads those protected daily totals rather than erasing production records.

@@ -66,3 +66,12 @@ def test_apply_checkpoint_settings_restores_training_image_size(tmp_path):
     inspector._apply_checkpoint_settings({"settings": {"image_size": 384}})
 
     assert inspector.settings.image_size == 384
+
+
+def test_default_hybrid_profile_preserves_small_defect_detail():
+    inspector = HybridPatchcorePadimInspector()
+
+    assert inspector.settings.image_size == 640
+    assert inspector.settings.embedding_grid_size == 80
+    assert inspector.settings.max_coreset_patches == 8192
+    assert inspector.settings.runtime_memory_bank_limit == 1024

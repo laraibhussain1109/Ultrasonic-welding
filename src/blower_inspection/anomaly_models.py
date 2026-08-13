@@ -48,26 +48,28 @@ from .trainer import (
 )
 from .yolo_tracking import YoloByteTrackDetector
 
-HYBRID_MODEL_VERSION = 4
+HYBRID_MODEL_VERSION = 5
 
 
 @dataclass(frozen=True)
 class HybridTrainingSettings:
-    image_size: int = 512
+    # Preserve small broken/missing-fin evidence. At 384 px a long blower crop
+    # can compress a visible defect into only one or two inference pixels.
+    image_size: int = 640
     backbone: str = "wide_resnet50_2"
     embedding_layers: tuple[str, ...] = ("layer1", "layer2", "layer3")
-    embedding_grid_size: int = 56
+    embedding_grid_size: int = 80
     projection_dim: int = 256
     max_training_images: int = 300
     coreset_ratio: float = 0.08
-    max_coreset_patches: int = 4096
-    coreset_candidate_patches: int = 80000
+    max_coreset_patches: int = 8192
+    coreset_candidate_patches: int = 120000
     padim_components: int = 128
     patchcore_weight: float = 0.55
     padim_weight: float = 0.45
     batch_size: int = 4
     random_seed: int = 42
-    runtime_memory_bank_limit: int = 512
+    runtime_memory_bank_limit: int = 1024
 
 
 def require_module(module_name: str) -> Any:
