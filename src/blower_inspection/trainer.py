@@ -117,6 +117,140 @@ def fan_ring_mask(shape: tuple[int, int], inner_ratio: float, outer_ratio: float
     return (radius >= inner_ratio * max_radius) & (radius <= outer_ratio * max_radius)
 
 
+def cylindrical_surface_mask(
+    shape: tuple[int, int], *, horizontal_margin_ratio: float = 0.02, vertical_margin_ratio: float = 0.08
+) -> np.ndarray:
+    """Mask the visible rectangular surface of a YOLO-cropped cylindrical part.
+
+    A blower wheel is long and horizontal in the exact YOLO crop. Applying the
+    old circular fan-ring mask to its square inference tensor excluded the
+    center of the curved surface and emphasized unrelated corners/edges.
+    """
+    height, width = shape
+    margin_x = max(1, int(round(width * horizontal_margin_ratio)))
+    margin_y = max(1, int(round(height * vertical_margin_ratio)))
+    mask = np.zeros((height, width), dtype=bool)
+    mask[margin_y : height - margin_y, margin_x : width - margin_x] = True
+    return mask
+
+
+def reflection_invariant_gray(image: np.ndarray, output_shape: tuple[int, int]) -> np.ndarray:
+    """Normalize slow illumination/glare while retaining local surface texture."""
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
+    width, height = output_shape[1], output_shape[0]
+    gray = cv2.resize(gray, (width, height), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
+    # Divisive illumination correction removes broad lamp gradients and exposure
+    # changes but preserves narrow cracks, missing fins, and weld boundaries.
+    sigma = max(5.0, min(height, width) / 18.0)
+    illumination = cv2.GaussianBlur(gray, (0, 0), sigmaX=sigma, sigmaY=sigma)
+    corrected = gray / np.maximum(illumination, 0.08)
+    median = float(np.median(corrected))
+    q10, q90 = np.percentile(corrected, (10.0, 90.0))
+    return np.clip((corrected - median) / max(float(q90 - q10), 0.08), -3.0, 3.0).astype(np.float32)
+
+
+def smooth_reflection_mask(image: np.ndarray, output_shape: tuple[int, int]) -> np.ndarray:
+    """Identify broad bright low-texture glare, not sharp white physical defects."""
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
+    gray = cv2.resize(gray, (output_shape[1], output_shape[0]), interpolation=cv2.INTER_AREA)
+    mean = cv2.GaussianBlur(gray.astype(np.float32), (0, 0), sigmaX=7.0)
+    mean_sq = cv2.GaussianBlur(gray.astype(np.float32) ** 2, (0, 0), sigmaX=7.0)
+    local_std = np.sqrt(np.maximum(mean_sq - mean**2, 0.0))
+    glare = (mean >= 210.0) & (local_std <= 12.0)
+    return cv2.dilate(glare.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+
+
+def normal_reference_statistics(images: list[np.ndarray], output_shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
+    """Fit a robust normal-only per-pixel reference from known-good images."""
+    stack = np.stack([reflection_invariant_gray(image, output_shape) for image in images], axis=0)
+    reference = np.median(stack, axis=0).astype(np.float32)
+    mad = np.median(np.abs(stack - reference), axis=0).astype(np.float32)
+    # A floor prevents tiny camera noise in very stable regions becoming FAIL.
+    scale = np.maximum(1.4826 * mad, 0.10).astype(np.float32)
+    return reference, scale
+
+
+def normal_reference_score(
+    image: np.ndarray, reference: np.ndarray, scale: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return fixed-calibration normal deviation and a smooth-reflection mask."""
+    normalized = reflection_invariant_gray(image, reference.shape)
+    score = np.abs(normalized - reference) / np.maximum(scale, 0.10)
+    return score.astype(np.float32), smooth_reflection_mask(image, reference.shape)
+
+
+def broken_fin_mask(image: np.ndarray, output_shape: tuple[int, int]) -> np.ndarray:
+    """Locate short discontinuities in otherwise continuous horizontal fins.
+
+    Deep PatchCore features are intentionally tolerant of small texture changes,
+    which can hide a physically broken thin fin. This high-resolution companion
+    detector finds gaps in horizontal edges while suppressing the full-height
+    vertical support ribs that legitimately interrupt every fin.
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    height, width = gray.shape
+    grad_y = np.abs(cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3))
+    grad_x = np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3))
+    interior = cylindrical_surface_mask(gray.shape, horizontal_margin_ratio=0.03, vertical_margin_ratio=0.08)
+    y_values = grad_y[interior]
+    x_values = grad_x[interior]
+    y_threshold = max(20.0, float(np.percentile(y_values, 70.0)))
+    x_threshold = max(20.0, float(np.percentile(x_values, 82.0)))
+    horizontal_edges = (grad_y >= y_threshold) & interior
+
+    # A closing reconstructs only short missing sections between edge fragments.
+    max_gap = max(7, int(round(width * 0.035))) | 1
+    reconstructed = cv2.morphologyEx(
+        horizontal_edges.astype(np.uint8),
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (max_gap, 1)),
+    ).astype(bool)
+    existing = cv2.dilate(
+        horizontal_edges.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_RECT, (3, 1))
+    ).astype(bool)
+    gaps = reconstructed & ~existing & interior
+
+    # Normal blower geometry creates repeated interruptions at the same x
+    # coordinate across many fins. A real isolated broken fin affects only one
+    # or two horizontal edge rows, so remove columns with repeated gaps.
+    repeated_gap_columns = np.count_nonzero(gaps, axis=0) >= max(3, int(height * 0.025))
+    repeated_gap_columns = cv2.dilate(
+        repeated_gap_columns.astype(np.uint8)[None, :],
+        cv2.getStructuringElement(cv2.MORPH_RECT, (max(3, width // 200), 1)),
+    )[0].astype(bool)
+    gaps[:, repeated_gap_columns] = False
+
+    # Support ribs have strong vertical edges through much of the crop height;
+    # suppress their columns without suppressing the short endpoints of a break.
+    vertical_edges = (grad_x >= x_threshold) & interior
+    rib_columns = np.count_nonzero(vertical_edges, axis=0) >= max(5, int(height * 0.18))
+    rib_columns = cv2.dilate(
+        rib_columns.astype(np.uint8)[None, :],
+        cv2.getStructuringElement(cv2.MORPH_RECT, (max(3, width // 160), 1)),
+    )[0].astype(bool)
+    gaps[:, rib_columns] = False
+
+    count, labels, stats, _centroids = cv2.connectedComponentsWithStats(gaps.astype(np.uint8), 8)
+    confirmed = np.zeros_like(gaps)
+    for label in range(1, count):
+        _x, _y, component_width, component_height, area = stats[label]
+        if area >= 2 and component_width >= 3 and component_width <= max_gap:
+            confirmed[labels == label] = True
+    # Fail safe: this detector is for isolated breaks. If it fires broadly, the
+    # pattern is normal repeated texture/lighting rather than a localized broken
+    # fin. Never allow that condition to paint or fail the entire component.
+    confirmed_count, _labels = cv2.connectedComponents(confirmed.astype(np.uint8), 8)
+    if confirmed_count - 1 > 12 or np.count_nonzero(confirmed) > interior.sum() * 0.01:
+        confirmed[:] = False
+    confirmed = cv2.dilate(
+        confirmed.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    ).astype(bool)
+    return cv2.resize(
+        confirmed.astype(np.uint8), (output_shape[1], output_shape[0]), interpolation=cv2.INTER_NEAREST
+    ).astype(bool)
+
+
 def clean_mask(mask: np.ndarray) -> np.ndarray:
     kernel = np.ones((3, 3), np.uint8)
     cleaned = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, kernel, iterations=1)
@@ -167,7 +301,13 @@ def inspection_overlay(
     mask_full_uint8 = cv2.resize(defect_mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST)
     mask_full = mask_full_uint8.astype(bool)
     heatmap = cv2.applyColorMap(np.clip(score_full * 255, 0, 255).astype(np.uint8), cv2.COLORMAP_JET)
-    annotated = cv2.addWeighted(base, 0.62, heatmap, 0.38, 0)
+    # Do not paint a full-frame relative heatmap: per-image normalization always
+    # has a hottest pixel and made flawless fins look deep red. Preserve the
+    # camera image everywhere except confirmed, thresholded anomaly regions.
+    annotated = base.copy()
+    if np.any(mask_full):
+        anomaly_pixels = cv2.addWeighted(base, 0.35, heatmap, 0.65, 0)
+        annotated[mask_full] = anomaly_pixels[mask_full]
     contours, _ = cv2.findContours(mask_full_uint8 * 255, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cv2.drawContours(annotated, contours, -1, (0, 0, 255), 2)
     area_scale = (width * height) / max(defect_mask.size, 1)
@@ -207,6 +347,31 @@ def sector_statistics(
     for sector, score in enumerate(sector_scores):
         if score > median + 6.0 * mad and score >= min_bad_score:
             bad_sectors.append(sector)
+    return len(bad_sectors) / max(expected_fins, 1), bad_sectors
+
+
+def cylindrical_sector_statistics(
+    mask: np.ndarray,
+    score_map: np.ndarray,
+    expected_fins: int,
+    *,
+    min_bad_score: float,
+) -> tuple[float, list[int]]:
+    """Evaluate a horizontal cylinder as vertical fin strips, not polar wedges."""
+    _height, width = mask.shape
+    sector_scores: list[float] = []
+    for sector in range(expected_fins):
+        x0 = int(round(sector * width / expected_fins))
+        x1 = int(round((sector + 1) * width / expected_fins))
+        pixels = mask[:, x0:x1]
+        score = float(np.percentile(score_map[:, x0:x1][pixels], 99.0)) if np.any(pixels) else 0.0
+        sector_scores.append(score)
+    median = float(np.median(sector_scores))
+    mad = float(np.median(np.abs(np.asarray(sector_scores) - median))) + 1e-6
+    bad_sectors = [
+        sector for sector, score in enumerate(sector_scores)
+        if score >= min_bad_score and score > median + 6.0 * mad
+    ]
     return len(bad_sectors) / max(expected_fins, 1), bad_sectors
 
 

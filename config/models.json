@@ -14,7 +14,7 @@
       "min_defect_area_px": 120,
       "max_bad_sector_ratio": 0.18,
       "algorithm": "hybrid_patchcore_padim",
-      "image_size": 384,
+      "image_size": 640,
       "roi_ratios": [
         0.08,
         0.37,
@@ -38,7 +38,7 @@
       "min_defect_area_px": 120,
       "max_bad_sector_ratio": 0.18,
       "algorithm": "hybrid_patchcore_padim",
-      "image_size": 384,
+      "image_size": 640,
       "roi_ratios": [
         0.08,
         0.37,
@@ -62,7 +62,7 @@
       "min_defect_area_px": 140,
       "max_bad_sector_ratio": 0.18,
       "algorithm": "hybrid_patchcore_padim",
-      "image_size": 384,
+      "image_size": 640,
       "roi_ratios": [
         0.08,
         0.37,
@@ -86,7 +86,7 @@
       "min_defect_area_px": 140,
       "max_bad_sector_ratio": 0.18,
       "algorithm": "hybrid_patchcore_padim",
-      "image_size": 384,
+      "image_size": 640,
       "roi_ratios": [
         0.08,
         0.37,

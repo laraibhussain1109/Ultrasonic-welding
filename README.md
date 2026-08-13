@@ -74,7 +74,126 @@ Each part model stores its own camera mode and default inspection ROI in `config
 
 The blower fan ROI is still cropped before inference, but reducing USB/camera bandwidth can avoid a full-frame capture bottleneck when the full 8.3 MP image is not needed.
 
+## YOLO part localisation, rotation handling, and daily counts
+
+The live inspection path uses your own Ultralytics **YOLO12s** `best.pt` model to
+locate the exact part crop. In the UI, select the part model, press **YOLO PART
+MODEL**, and choose `best.pt`; the path is persisted in `config/models.json` for
+that part model. Install the optional dependency before deployment:
+
+```bash
+pip install -e .[industrial]
+```
+
+Each camera frame is passed to YOLO with Ultralytics `bytetrack.yaml` and the
+resulting persistent track ID is used to associate detections. PatchCore/PaDiM
+runs only inside the current YOLO bounding box. All views while a cylindrical
+part is rotating are accumulated into one physical inspection session; a failed
+view is latched and makes the final verdict `FAIL`, even when every later view is
+flawless. If brief occlusion changes ByteTrack's ID, an overlapping detection is
+reattached to the recent session instead of clearing that failure.
+
+The PASS/FAIL signal and production counters are updated only when the detected
+part center crosses the configured counting line (`counting_line_ratio`, default
+45% of frame width—slightly left of center—moving left-to-right). Disappearance or rotation in place
+does not count or complete a part. Set `counting_direction` to `right_to_left`
+when production flows in the opposite direction. The operator must rotate the
+complete curved surface before moving the part across the displayed count line.
+
+After upgrading to this version, retrain each hybrid model from its normal-image
+folder. Training now uses the same YOLO exact crop as live inference; old hybrid
+checkpoints trained on the larger fixed ROI can produce broad false positives and
+miss small surface marks because their feature positions do not match the live
+crop. The live overlay leaves normal pixels unchanged and colors only confirmed
+thresholded anomaly regions.
+
+The hybrid result also includes a high-resolution structural fin-continuity
+check. It detects short gaps in horizontal fins that the downsampled deep
+features may treat as harmless texture, while suppressing the normal full-height
+support ribs. Confirmed gaps are promoted to full overlay severity and participate
+in the same latched FAIL verdict. Repeated gap columns and any broad structural
+response are rejected as normal part texture, preventing the structural check
+from painting or failing the entire blower surface.
+
+Hybrid training also stores a robust median/MAD reference made from all known-good
+YOLO crops. Before comparison, broad illumination is removed with divisive
+normalization. Live deep anomalies must be corroborated by this fixed normal
+reference, so relative heatmap normalization cannot make every good part fail.
+Broad bright, low-texture lamp reflections are masked, while sharp white lines,
+cracks, and broken edges remain eligible as physical defects. Retraining is
+required once to add these reference statistics to an existing checkpoint.
+
+Train the anomaly model on the **YOLO-cropped component only**, not the complete
+camera FOV. Full-FOV training wastes PatchCore patches on the table, fixture,
+keyboard, and lighting and reduces the pixel resolution available for a small
+broken fin. The production profile uses a 640×640 input, an 80×80 embedding grid,
+an 8,192-patch training coreset, and up to 1,024 runtime memory patches. This is a
+deliberate detail/latency balance for the target RTX GPU and gives small defects
+substantially more representation than the old 384×384/56×56 profile. Retrain all
+part models after this upgrade because checkpoint version 6 contains the new
+resolution, PatchCore geometry, and student/teacher state.
+
+### Student/teacher anomaly detection
+
+Checkpoint version 6 adds an STFPM-style student/teacher detector. A frozen
+ImageNet ResNet-18 teacher and a trainable student observe the same known-good
+YOLO crops; the student learns to reproduce the teacher's multi-scale spatial
+features. During inspection, a local feature discrepancy that is outside the
+calibrated normal residual indicates an anomaly. This smooth learned mapping is
+the primary learned signal and does not depend on whether a small defect's
+nearest normal patch survived PatchCore coreset subsampling. PatchCore/PaDiM is
+retained as a corroborating ensemble signal, while normal-reference and glare
+masks still reject illumination changes. Retrain every part model after updating
+because older checkpoints do not contain the student or its residual calibration.
+
+Daily counters persist in `data/results/daily_statistics.json`. An operating day
+runs from local time 07:00 through the next local 07:00; the UI's reset control
+reloads those protected daily totals rather than erasing production records.
+
 ## Training workflow
+
+### Prepare normal crops from full-FOV images
+
+**You do not have to run this command before training.** Both the GUI **TRAIN
+SELECTED MODEL** action and `python -m blower_inspection.cli train BF-001`
+automatically run YOLO on every full-FOV normal image immediately before model
+training. Crops are held in memory, reused by PatchCore/PaDiM and normal-reference
+calibration, and the original images are not modified.
+
+The preparation command below is optional and intended only when you want to
+export and visually review the exact crops first.
+
+Keep the original camera captures outside the configured training output, then
+use the dataset preparation command. It loads the selected model's saved YOLO
+`best.pt`, detects the component in every image, and writes only the exact crop:
+
+```bash
+python -m blower_inspection.cli prepare-dataset BF-001 path/to/full-fov-good-images
+```
+
+The default output is the model's `normal_image_dir` (for example
+`data/training/BF-001/normal`). Use `--output path/to/crops` to review crops in a
+staging directory first, `--no-recursive` to ignore subfolders, or `--replace` to
+regenerate existing crops. Relative subfolders are retained to prevent duplicate
+filenames from overwriting each other. `crop_manifest.csv` lists every written,
+skipped, unreadable, or undetected source image. A failed/no-detection image is
+not copied into the normal dataset, and the command exits nonzero when any image
+fails so an incomplete dataset cannot be overlooked.
+
+If source and output intentionally refer to the same directory, add `--replace`;
+each crop is written to a temporary file and atomically replaces its full-FOV
+source. This is destructive, so keeping originals and using in-memory training or
+a separate staging `--output` is recommended. On Windows, quote every path that
+contains spaces:
+
+```powershell
+python -m blower_inspection.cli prepare-dataset BF-001 "C:\camera images" --output "C:\normal crops"
+```
+
+Review every crop before training: delete crops containing a defective part,
+incorrect detection, hand/tool occlusion, or unacceptable blur. Include normal
+rotation angles and acceptable lighting variation, but never include defective
+parts in the normal folder.
 
 Each configured model has its own normal-image folder:
 

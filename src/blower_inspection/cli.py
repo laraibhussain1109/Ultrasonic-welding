@@ -12,6 +12,7 @@ from .auth import AuthStore
 from .config import ModelRegistry, ensure_model_folders
 from .anomaly_models import HybridPatchcorePadimInspector
 from .esp32_output import ESP32FailOutput
+from .dataset import prepare_yolo_dataset
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -28,6 +29,14 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("model_id")
     inspect.add_argument("image")
     inspect.add_argument("--esp32-output", action="store_true", help="Send FAIL/PASS output to ESP32 after inspecting the image")
+
+    prepare = sub.add_parser("prepare-dataset", help="YOLO-crop known-good full-FOV images for training")
+    prepare.add_argument("model_id", help="Configured part model whose YOLO checkpoint should be used")
+    prepare.add_argument("source", help="Directory containing known-good full-FOV images")
+    prepare.add_argument("--output", help="Crop destination; defaults to the model normal_image_dir")
+    prepare.add_argument("--confidence", type=float, help="Override configured YOLO confidence")
+    prepare.add_argument("--no-recursive", action="store_true", help="Read only the source directory")
+    prepare.add_argument("--replace", action="store_true", help="Replace existing crops")
 
     add_user = sub.add_parser("add-user", help="Create or update a UI login")
     add_user.add_argument("username")
@@ -51,6 +60,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "train":
         model = registry.get(args.model_id)
+        if model.yolo_model_path is None:
+            raise SystemExit(f"No yolo_model_path is configured for {model.id}")
+        print(
+            f"Auto-cropping {model.normal_image_dir} in memory with {model.yolo_model_path} "
+            "before training (source images will not be modified)..."
+        )
         output = inspector.train(model)
         print(f"Trained {model.id}: {output}")
         return 0
@@ -71,6 +86,24 @@ def main(argv: list[str] | None = None) -> int:
             f"overlay={result.overlay_path} report={result.report_path}"
         )
         return 0
+
+    if args.command == "prepare-dataset":
+        model = registry.get(args.model_id)
+        if model.yolo_model_path is None:
+            raise SystemExit(f"No yolo_model_path is configured for {model.id}")
+        result = prepare_yolo_dataset(
+            args.source,
+            args.output or model.normal_image_dir,
+            model.yolo_model_path,
+            confidence=args.confidence if args.confidence is not None else model.yolo_confidence,
+            recursive=not args.no_recursive,
+            replace=args.replace,
+        )
+        print(
+            f"Dataset prepared: discovered={result.discovered} written={result.written} "
+            f"skipped={result.skipped} failed={result.failed} manifest={result.manifest}"
+        )
+        return 1 if result.failed else 0
 
     if args.command == "add-user":
         password = args.password or getpass.getpass("Password: ")
