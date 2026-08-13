@@ -47,7 +47,10 @@ def prepare_yolo_dataset(
     output = Path(output_dir).resolve()
     if not source.is_dir():
         raise NotADirectoryError(f"Dataset source directory does not exist: {source}")
-    if source == output or source in output.parents or output in source.parents:
+    in_place = source == output
+    if in_place and not replace:
+        raise ValueError("In-place dataset cropping requires --replace; normal training autocrops without modifying images")
+    if not in_place and (source in output.parents or output in source.parents):
         raise ValueError("Source and output directories must not contain one another")
     if detector is None:
         if yolo_model is None:
@@ -78,10 +81,13 @@ def prepare_yolo_dataset(
             rows.append((str(relative), f"FAILED_DETECTION: {exc}", ""))
             continue
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if not cv2.imwrite(str(destination), crop):
+        write_path = destination.with_name(f".{destination.stem}.crop{destination.suffix}") if in_place else destination
+        if not cv2.imwrite(str(write_path), crop):
             failed += 1
             rows.append((str(relative), "FAILED_WRITE", str(destination)))
             continue
+        if in_place:
+            write_path.replace(destination)
         written += 1
         rows.append((str(relative), "WRITTEN", str(destination)))
 

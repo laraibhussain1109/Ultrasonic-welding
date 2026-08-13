@@ -58,3 +58,21 @@ def test_prepare_dataset_rejects_nested_output(tmp_path):
 
     with pytest.raises(ValueError, match="must not contain"):
         prepare_yolo_dataset(source, source / "crops", detector=CenterCropDetector())
+
+
+def test_prepare_dataset_can_atomically_crop_in_place_with_replace(tmp_path):
+    source = tmp_path / "images"
+    write_image(source / "part.jpg")
+
+    result = prepare_yolo_dataset(source, source, replace=True, detector=CenterCropDetector())
+
+    assert result.written == 1
+    assert cv2.imread(str(source / "part.jpg")).shape[:2] == (40, 80)
+
+
+def test_prepare_dataset_requires_explicit_replace_for_in_place_crop(tmp_path):
+    source = tmp_path / "images"
+    source.mkdir()
+
+    with pytest.raises(ValueError, match="requires --replace"):
+        prepare_yolo_dataset(source, source, detector=CenterCropDetector())

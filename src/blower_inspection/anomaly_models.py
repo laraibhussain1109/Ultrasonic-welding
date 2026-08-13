@@ -129,6 +129,7 @@ class HybridPatchcorePadimInspector:
         self._checkpoint_cache: dict[Path, tuple[float, dict[str, Any]]] = {}
         self._training_roi_ratios: tuple[float, float, float, float] | None = None
         self._training_detector: YoloByteTrackDetector | None = None
+        self._training_crop_cache: dict[Path, np.ndarray] = {}
 
     def train(self, config: PartModelConfig) -> Path:
         self._apply_model_settings(config)
@@ -141,13 +142,19 @@ class HybridPatchcorePadimInspector:
         used_image_paths = self._select_training_images(image_paths)
         torch = require_module("torch")
         self._training_roi_ratios = config.roi_ratios
-        self._training_detector = (
-            YoloByteTrackDetector(config.yolo_model_path, config.yolo_confidence)
-            if config.yolo_model_path is not None
-            else None
-        )
+        if config.yolo_model_path is None:
+            raise ValueError(
+                f"No yolo_model_path is configured for {config.id}. Select best.pt before training."
+            )
+        self._training_detector = YoloByteTrackDetector(config.yolo_model_path, config.yolo_confidence)
+        # Autocrop every full-FOV source once, immediately before training. The
+        # originals remain untouched and the same crops feed both deep features
+        # and normal-reference calibration.
+        self._training_crop_cache = {
+            path: self._read_training_crop_uncached(path) for path in used_image_paths
+        }
         embeddings, grid_shape = self._extract_dataset_embeddings(used_image_paths)
-        reference_images = [self._read_training_crop(path) for path in used_image_paths]
+        reference_images = [self._training_crop_cache[path] for path in used_image_paths]
         normal_reference, normal_scale = normal_reference_statistics(
             reference_images, (self.settings.image_size, self.settings.image_size)
         )
@@ -183,6 +190,7 @@ class HybridPatchcorePadimInspector:
             },
             config.model_file,
         )
+        self._training_crop_cache.clear()
         return config.model_file
 
     def inspect(
@@ -486,6 +494,12 @@ class HybridPatchcorePadimInspector:
         return self._preprocess_image(self._read_training_crop(path))
 
     def _read_training_crop(self, path: Path) -> np.ndarray:
+        cached = self._training_crop_cache.get(path)
+        if cached is not None:
+            return cached
+        return self._read_training_crop_uncached(path)
+
+    def _read_training_crop_uncached(self, path: Path) -> np.ndarray:
         image = cv2.imread(str(path))
         if image is None:
             raise ValueError(f"Unable to read training image: {path}")

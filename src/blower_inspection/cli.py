@@ -60,6 +60,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "train":
         model = registry.get(args.model_id)
+        if model.yolo_model_path is None:
+            raise SystemExit(f"No yolo_model_path is configured for {model.id}")
+        print(
+            f"Auto-cropping {model.normal_image_dir} in memory with {model.yolo_model_path} "
+            "before training (source images will not be modified)..."
+        )
         output = inspector.train(model)
         print(f"Trained {model.id}: {output}")
         return 0

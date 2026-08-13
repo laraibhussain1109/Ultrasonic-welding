@@ -141,6 +141,15 @@ reloads those protected daily totals rather than erasing production records.
 
 ### Prepare normal crops from full-FOV images
 
+**You do not have to run this command before training.** Both the GUI **TRAIN
+SELECTED MODEL** action and `python -m blower_inspection.cli train BF-001`
+automatically run YOLO on every full-FOV normal image immediately before model
+training. Crops are held in memory, reused by PatchCore/PaDiM and normal-reference
+calibration, and the original images are not modified.
+
+The preparation command below is optional and intended only when you want to
+export and visually review the exact crops first.
+
 Keep the original camera captures outside the configured training output, then
 use the dataset preparation command. It loads the selected model's saved YOLO
 `best.pt`, detects the component in every image, and writes only the exact crop:
@@ -157,6 +166,16 @@ filenames from overwriting each other. `crop_manifest.csv` lists every written,
 skipped, unreadable, or undetected source image. A failed/no-detection image is
 not copied into the normal dataset, and the command exits nonzero when any image
 fails so an incomplete dataset cannot be overlooked.
+
+If source and output intentionally refer to the same directory, add `--replace`;
+each crop is written to a temporary file and atomically replaces its full-FOV
+source. This is destructive, so keeping originals and using in-memory training or
+a separate staging `--output` is recommended. On Windows, quote every path that
+contains spaces:
+
+```powershell
+python -m blower_inspection.cli prepare-dataset BF-001 "C:\camera images" --output "C:\normal crops"
+```
 
 Review every crop before training: delete crops containing a defective part,
 incorrect detection, hand/tool occlusion, or unacceptable blur. Include normal
