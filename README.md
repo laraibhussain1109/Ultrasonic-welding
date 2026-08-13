@@ -139,6 +139,30 @@ reloads those protected daily totals rather than erasing production records.
 
 ## Training workflow
 
+### Prepare normal crops from full-FOV images
+
+Keep the original camera captures outside the configured training output, then
+use the dataset preparation command. It loads the selected model's saved YOLO
+`best.pt`, detects the component in every image, and writes only the exact crop:
+
+```bash
+python -m blower_inspection.cli prepare-dataset BF-001 path/to/full-fov-good-images
+```
+
+The default output is the model's `normal_image_dir` (for example
+`data/training/BF-001/normal`). Use `--output path/to/crops` to review crops in a
+staging directory first, `--no-recursive` to ignore subfolders, or `--replace` to
+regenerate existing crops. Relative subfolders are retained to prevent duplicate
+filenames from overwriting each other. `crop_manifest.csv` lists every written,
+skipped, unreadable, or undetected source image. A failed/no-detection image is
+not copied into the normal dataset, and the command exits nonzero when any image
+fails so an incomplete dataset cannot be overlooked.
+
+Review every crop before training: delete crops containing a defective part,
+incorrect detection, hand/tool occlusion, or unacceptable blur. Include normal
+rotation angles and acceptable lighting variation, but never include defective
+parts in the normal folder.
+
 Each configured model has its own normal-image folder:
 
 ```text
