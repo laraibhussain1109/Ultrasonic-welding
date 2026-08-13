@@ -35,6 +35,7 @@ import numpy as np
 
 from .camera import crop_component_roi
 from .config import PartModelConfig
+from .distillation import build_student_teacher, discrepancy_map, feature_matching_loss, resnet_features
 from .trainer import (
     InspectionResult,
     broken_fin_mask,
@@ -48,7 +49,7 @@ from .trainer import (
 )
 from .yolo_tracking import YoloByteTrackDetector
 
-HYBRID_MODEL_VERSION = 5
+HYBRID_MODEL_VERSION = 6
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,9 @@ class HybridTrainingSettings:
     batch_size: int = 4
     random_seed: int = 42
     runtime_memory_bank_limit: int = 1024
+    distillation_epochs: int = 8
+    distillation_learning_rate: float = 0.001
+    distillation_weight: float = 0.65
 
 
 def require_module(module_name: str) -> Any:
@@ -130,6 +134,7 @@ class HybridPatchcorePadimInspector:
         self._training_roi_ratios: tuple[float, float, float, float] | None = None
         self._training_detector: YoloByteTrackDetector | None = None
         self._training_crop_cache: dict[Path, np.ndarray] = {}
+        self._distillation_cache: dict[Path, tuple[Any, Any]] = {}
 
     def train(self, config: PartModelConfig) -> Path:
         self._apply_model_settings(config)
@@ -157,6 +162,9 @@ class HybridPatchcorePadimInspector:
         reference_images = [self._training_crop_cache[path] for path in used_image_paths]
         normal_reference, normal_scale = normal_reference_statistics(
             reference_images, (self.settings.image_size, self.settings.image_size)
+        )
+        student_state, distillation_mean, distillation_scale = self._train_distillation(
+            used_image_paths, torch
         )
         embeddings_np = embeddings.cpu().numpy().astype(np.float32)
         rng = np.random.default_rng(self.settings.random_seed)
@@ -187,6 +195,9 @@ class HybridPatchcorePadimInspector:
                 "padim_inv_cov": torch.as_tensor(padim_inv_cov, dtype=torch.float32),
                 "normal_reference": torch.as_tensor(normal_reference, dtype=torch.float32),
                 "normal_scale": torch.as_tensor(normal_scale, dtype=torch.float32),
+                "student_state": student_state,
+                "distillation_mean": torch.as_tensor(distillation_mean, dtype=torch.float32),
+                "distillation_scale": torch.as_tensor(distillation_scale, dtype=torch.float32),
             },
             config.model_file,
         )
@@ -211,7 +222,7 @@ class HybridPatchcorePadimInspector:
             raise ValueError(f"Model file is not a hybrid PatchCore/PaDiM checkpoint: {config.model_file}")
         if int(checkpoint.get("version", 0)) < HYBRID_MODEL_VERSION:
             raise RuntimeError(
-                "This hybrid checkpoint predates calibrated normal-reference and reflection handling. "
+                "This checkpoint predates student/teacher distillation and calibrated reflection handling. "
                 f"Retrain {config.id} with TRAIN SELECTED MODEL before live inspection."
             )
         self._apply_checkpoint_settings(checkpoint)
@@ -252,11 +263,28 @@ class HybridPatchcorePadimInspector:
         # prevents per-frame normalization from making every normal part fail.
         reference_defects = (reference_map >= 6.0) & ~reflection_mask
         deep_defects = (fused >= threshold) & (reference_map >= 3.0) & ~reflection_mask
+        distillation_z = self._distillation_score(image, checkpoint, torch)
+        # Student/teacher discrepancy is calibrated exclusively on known-good
+        # crops and is the primary learned detector. Requiring a local reference
+        # deviation suppresses smooth lighting/orientation changes without the
+        # nearest-neighbour blind spots of a subsampled PatchCore memory bank.
+        distillation_defects = (
+            (distillation_z >= 5.0)
+            & (reference_map >= 2.0)
+            & ~reflection_mask
+        )
         fin_breaks = broken_fin_mask(image, fused.shape) & surface_mask
-        candidate_mask = clean_mask(((reference_defects | deep_defects) & surface_mask) | fin_breaks)
+        candidate_mask = clean_mask(
+            ((reference_defects | deep_defects | distillation_defects) & surface_mask) | fin_breaks
+        )
         # Give confirmed structural gaps full display severity so a subtle
         # broken fin is clearly localized even when deep features are tolerant.
         fused = np.maximum(fused, fin_breaks.astype(np.float32))
+        fused = np.maximum(
+            fused,
+            np.clip(distillation_z / 5.0, 0.0, 1.0).astype(np.float32)
+            * self.settings.distillation_weight,
+        )
         defect_area = int(candidate_mask.sum())
         surface_scores = fused[surface_mask]
         anomaly_score = float(np.max(surface_scores)) if surface_scores.size else 0.0
@@ -400,6 +428,56 @@ class HybridPatchcorePadimInspector:
         hook.attach(backbone)
         self._backbone_cache = (backbone, hook, torch)
         return self._backbone_cache
+
+    def _train_distillation(self, image_paths: list[Path], torch: Any) -> tuple[dict[str, Any], np.ndarray, np.ndarray]:
+        """Train an STFPM student on normal YOLO crops and calibrate its residual."""
+        models = require_module("torchvision.models")
+        device = self._device(torch)
+        teacher, student = build_student_teacher(torch, models, device)
+        optimizer = torch.optim.Adam(student.parameters(), lr=self.settings.distillation_learning_rate)
+        for _epoch in range(self.settings.distillation_epochs):
+            student.train()
+            for start in range(0, len(image_paths), self.settings.batch_size):
+                paths = image_paths[start : start + self.settings.batch_size]
+                batch = torch.cat([self._preprocess_path(path) for path in paths], dim=0).to(device)
+                # no_grad (rather than inference_mode) keeps teacher outputs
+                # usable as constants in the student's autograd loss.
+                with torch.no_grad():
+                    teacher_features = resnet_features(teacher, batch)
+                student_features = resnet_features(student, batch)
+                loss = feature_matching_loss(torch, teacher_features, student_features)
+                optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                optimizer.step()
+        student.eval()
+        maps = []
+        for start in range(0, len(image_paths), self.settings.batch_size):
+            paths = image_paths[start : start + self.settings.batch_size]
+            batch = torch.cat([self._preprocess_path(path) for path in paths], dim=0).to(device)
+            maps.append(discrepancy_map(torch, teacher, student, batch, self.settings.image_size).cpu().numpy())
+        stack = np.concatenate(maps, axis=0).astype(np.float32)
+        mean = np.mean(stack, axis=0).astype(np.float32)
+        scale = np.maximum(np.std(stack, axis=0), 1e-4).astype(np.float32)
+        state = {key: value.detach().cpu() for key, value in student.state_dict().items()}
+        return state, mean, scale
+
+    def _distillation_score(self, image: np.ndarray, checkpoint: dict[str, Any], torch: Any) -> np.ndarray:
+        model_file = Path(checkpoint.get("model_config", {}).get("model_file", "distillation"))
+        cached = self._distillation_cache.get(model_file)
+        if cached is None:
+            state = checkpoint.get("student_state")
+            if not isinstance(state, dict):
+                raise RuntimeError("Hybrid checkpoint is missing the trained distillation student")
+            teacher, student = build_student_teacher(torch, require_module("torchvision.models"), self._device(torch))
+            student.load_state_dict(state, strict=True)
+            student.eval()
+            cached = (teacher, student)
+            self._distillation_cache[model_file] = cached
+        tensor = self._preprocess_image(image).to(self._device(torch))
+        residual = discrepancy_map(torch, cached[0], cached[1], tensor, self.settings.image_size)[0].cpu().numpy()
+        mean = self._checkpoint_array(checkpoint["distillation_mean"])
+        scale = self._checkpoint_array(checkpoint["distillation_scale"])
+        return ((residual - mean) / np.maximum(scale, 1e-4)).astype(np.float32)
 
     def _load_runtime_checkpoint(self, torch: Any, model_file: Path) -> dict[str, Any]:
         stamp = model_file.stat().st_mtime

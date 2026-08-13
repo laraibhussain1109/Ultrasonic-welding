@@ -75,6 +75,8 @@ def test_default_hybrid_profile_preserves_small_defect_detail():
     assert inspector.settings.embedding_grid_size == 80
     assert inspector.settings.max_coreset_patches == 8192
     assert inspector.settings.runtime_memory_bank_limit == 1024
+    assert inspector.settings.distillation_epochs == 8
+    assert inspector.settings.distillation_weight == 0.65
 
 
 def test_training_requires_yolo_for_automatic_exact_crops(tmp_path):

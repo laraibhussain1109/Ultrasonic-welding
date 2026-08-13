@@ -130,8 +130,21 @@ broken fin. The production profile uses a 640×640 input, an 80×80 embedding gr
 an 8,192-patch training coreset, and up to 1,024 runtime memory patches. This is a
 deliberate detail/latency balance for the target RTX GPU and gives small defects
 substantially more representation than the old 384×384/56×56 profile. Retrain all
-part models after this upgrade because checkpoint version 5 contains the new
-resolution and PatchCore geometry.
+part models after this upgrade because checkpoint version 6 contains the new
+resolution, PatchCore geometry, and student/teacher state.
+
+### Student/teacher anomaly detection
+
+Checkpoint version 6 adds an STFPM-style student/teacher detector. A frozen
+ImageNet ResNet-18 teacher and a trainable student observe the same known-good
+YOLO crops; the student learns to reproduce the teacher's multi-scale spatial
+features. During inspection, a local feature discrepancy that is outside the
+calibrated normal residual indicates an anomaly. This smooth learned mapping is
+the primary learned signal and does not depend on whether a small defect's
+nearest normal patch survived PatchCore coreset subsampling. PatchCore/PaDiM is
+retained as a corroborating ensemble signal, while normal-reference and glare
+masks still reject illumination changes. Retrain every part model after updating
+because older checkpoints do not contain the student or its residual calibration.
 
 Daily counters persist in `data/results/daily_statistics.json`. An operating day
 runs from local time 07:00 through the next local 07:00; the UI's reset control
