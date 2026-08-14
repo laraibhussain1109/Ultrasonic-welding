@@ -62,6 +62,30 @@ def _as_numpy(value: Any) -> np.ndarray:
     return np.asarray(value)
 
 
+def localize_anomaly_scores(
+    score_map: np.ndarray,
+    surface_mask: np.ndarray,
+    *,
+    minimum_contrast_span: float = 0.15,
+) -> tuple[np.ndarray, float]:
+    """Remove a broad model offset while retaining localized defects.
+
+    SuperSimpleNet can assign a high common offset to an otherwise normal crop
+    when lighting or colour handling shifts slightly. Treating that absolute
+    offset as a pixel defect paints the complete component red. Physical weld
+    and fin defects are local responses, so scores are measured above the 20th
+    percentile of the inspected surface. The fixed minimum contrast span avoids
+    amplifying tiny sensor noise into an anomaly.
+    """
+    surface_scores = score_map[surface_mask]
+    if surface_scores.size == 0:
+        return np.zeros_like(score_map, dtype=np.float32), 0.0
+    baseline = float(np.percentile(surface_scores, 20.0))
+    contrast_span = max(1.0 - baseline, minimum_contrast_span)
+    localized = np.clip((score_map.astype(np.float32) - baseline) / contrast_span, 0.0, 1.0)
+    return localized.astype(np.float32), baseline
+
+
 class SuperSimpleNetInspector:
     """Train anomalib SuperSimpleNet and inspect exact YOLO component crops."""
 
@@ -155,9 +179,14 @@ class SuperSimpleNetInspector:
             image = crop_component_roi(image, roi_ratios=config.roi_ratios)
         model_file = self._ensure_inference_model(config.model_file)
 
-        prediction = self._inferencer(model_file).predict(image=image)
-        score_map = self._prediction_map(prediction, image.shape[:2])
-        surface = cylindrical_surface_mask(score_map.shape)
+        # OpenCV frames are BGR, while anomalib's ndarray inference contract is
+        # RGB. Passing BGR here creates a train/inference colour shift and was
+        # the primary cause of normal components scoring ~0.97 everywhere.
+        inference_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) if image.ndim == 3 else image
+        prediction = self._inferencer(model_file).predict(image=inference_image)
+        raw_score_map = self._prediction_map(prediction, image.shape[:2])
+        surface = cylindrical_surface_mask(raw_score_map.shape)
+        score_map, score_baseline = localize_anomaly_scores(raw_score_map, surface)
         # anomalib anomaly maps are calibrated to 0..1 by the trained model.
         threshold = float(np.clip(config.anomaly_threshold / 10.0, 0.05, 0.95))
         defect_mask = clean_mask((score_map >= threshold) & surface)
@@ -180,7 +209,7 @@ class SuperSimpleNetInspector:
         overlay_path = report_path = None
         if save_outputs:
             overlay_path, report_path = self._save_outputs(
-                config, display, status, anomaly_score, defect_area, bad_ratio, bad_sectors
+                config, display, status, anomaly_score, defect_area, bad_ratio, bad_sectors, score_baseline
             )
         return InspectionResult(
             status, anomaly_score, defect_area, bad_ratio, bad_sectors,
@@ -284,6 +313,7 @@ class SuperSimpleNetInspector:
         defect_area: int,
         bad_ratio: float,
         bad_sectors: list[int],
+        score_baseline: float,
     ) -> tuple[Path, Path]:
         config.result_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -295,6 +325,7 @@ class SuperSimpleNetInspector:
             "algorithm": "supersimplenet", "model_id": config.id, "status": status,
             "anomaly_score": anomaly_score, "defect_area_px": defect_area,
             "bad_sector_ratio": bad_ratio, "bad_sectors": bad_sectors,
+            "raw_score_baseline": score_baseline,
             "created_at": datetime.now().isoformat(), "overlay_path": str(overlay_path),
         }, indent=2) + "\n", encoding="utf-8")
         return overlay_path, report_path

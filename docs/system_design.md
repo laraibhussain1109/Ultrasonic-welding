@@ -32,10 +32,14 @@ checkpoints are deliberately not loaded.
 ## Runtime decisions
 
 The anomalib pixel anomaly map is resized to the YOLO crop, restricted to the
-cylindrical inspection surface, cleaned morphologically, and evaluated for both
-minimum defect area and bad fin-sector ratio. A failure is latched across all
-tracked views of a rotating part. Production counters and ESP32 output are
-updated only by the existing count-line/session state machine.
+cylindrical inspection surface, and converted from its broad surface baseline
+to a localized defect score. A fixed minimum contrast span prevents sensor noise
+from being amplified when the map is nearly uniform. The localized map is then
+cleaned morphologically and evaluated for both minimum defect area and bad
+fin-sector ratio. OpenCV BGR crops are explicitly converted to RGB before
+anomalib inference so live preprocessing matches training. A failure is latched
+across all tracked views of a rotating part. Production counters and ESP32
+output are updated only by the existing count-line/session state machine.
 
 ## Deployment controls
 
