@@ -54,7 +54,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "list-models":
         for model in registry.all():
-            trained = "trained" if model.model_file.exists() else "not trained"
+            checkpoint = model.model_file.with_suffix(".ckpt")
+            trained = "trained" if model.model_file.exists() or checkpoint.exists() else "not trained"
             print(f"{model.id}\t{model.name}\t{trained}\ttraining={model.normal_image_dir}")
         return 0
 

@@ -12,7 +12,7 @@ The production path combines **YOLO + anomalib SuperSimpleNet**:
 4. The map is restricted to the fin/weld surface and evaluated by defect area and fin sector.
 5. ByteTrack associates all rotation views with one part so any failed view remains latched.
 
-This replaces the PatchCore/PaDiM memory-bank approach, which was too sensitive to coreset coverage and valid appearance variation. Existing hybrid checkpoints are incompatible and every part model must be retrained.
+This replaces the PatchCore/PaDiM memory-bank approach, which was too sensitive to coreset coverage and valid appearance variation. Training retains anomalib's `.ckpt` and exports a `.pt` model for live `TorchInferencer` use. Existing hybrid checkpoints are incompatible and every part model must be retrained.
 
 ## UI
 

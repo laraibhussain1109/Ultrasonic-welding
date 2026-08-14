@@ -22,9 +22,12 @@ a discriminative normal/anomalous boundary using synthetic anomalies generated
 from normal component crops. This removes the runtime patch memory bank and its
 sensitivity to coreset coverage.
 
-Every part number has an independent `.ckpt` file and a JSON metadata sidecar.
-Old hybrid checkpoints are deliberately not loaded: every part model must be
-retrained after this migration.
+Every part number has an exported `.pt` inference model, a retained Lightning
+`.ckpt` training checkpoint, and a JSON metadata sidecar. `TorchInferencer`
+loads only the exported `.pt` model. Checkpoints created by the first
+SuperSimpleNet release are automatically exported on first inspection, so a
+completed 100-epoch training run does not need to be repeated. Old hybrid
+checkpoints are deliberately not loaded.
 
 ## Runtime decisions
 

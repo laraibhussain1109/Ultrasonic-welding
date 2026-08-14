@@ -121,7 +121,14 @@ class SuperSimpleNetInspector:
             if not best_path.is_file():
                 raise RuntimeError("anomalib did not produce a SuperSimpleNet checkpoint")
             config.model_file.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(best_path, config.model_file)
+            # ``Engine.fit`` produces a Lightning ``.ckpt`` training
+            # checkpoint.  TorchInferencer does *not* accept that format; it
+            # consumes the Torch model produced by ``Engine.export``.  Keep the
+            # checkpoint beside the exported model so it can be re-exported
+            # after an anomalib upgrade without repeating 100 epochs.
+            checkpoint_path = config.model_file.with_suffix(".ckpt")
+            shutil.copy2(best_path, checkpoint_path)
+            self._export_checkpoint(checkpoint_path, config.model_file, model=model, engine=engine)
 
         metadata = {
             "version": SUPERSIMPLENET_MODEL_VERSION,
@@ -146,10 +153,9 @@ class SuperSimpleNetInspector:
     ) -> InspectionResult:
         if crop_to_component:
             image = crop_component_roi(image, roi_ratios=config.roi_ratios)
-        if not config.model_file.is_file():
-            raise FileNotFoundError(f"SuperSimpleNet model has not been trained: {config.model_file}")
+        model_file = self._ensure_inference_model(config.model_file)
 
-        prediction = self._inferencer(config.model_file).predict(image=image)
+        prediction = self._inferencer(model_file).predict(image=image)
         score_map = self._prediction_map(prediction, image.shape[:2])
         surface = cylindrical_surface_mask(score_map.shape)
         # anomalib anomaly maps are calibrated to 0..1 by the trained model.
@@ -183,6 +189,61 @@ class SuperSimpleNetInspector:
 
     def runtime_device_name(self) -> str:
         return self.device or ("cuda" if _require("torch").cuda.is_available() else "cpu")
+
+    def _ensure_inference_model(self, configured_path: Path) -> Path:
+        """Return an exported Torch model, upgrading an existing ckpt once.
+
+        The first SuperSimpleNet implementation incorrectly copied Lightning's
+        training checkpoint to the configured path.  Existing installations
+        may consequently have ``supersimplenet.ckpt`` where the application now
+        expects ``supersimplenet.pt``. A sibling checkpoint is used for a safe
+        automatic migration; a configured ``.ckpt`` is migrated directly.
+        """
+        if configured_path.suffix.lower() in {".pt", ".pth"} and configured_path.is_file():
+            return configured_path
+
+        output_path = configured_path.with_suffix(".pt")
+        checkpoint_candidates = (
+            configured_path if configured_path.suffix.lower() == ".ckpt" else None,
+            configured_path.with_suffix(".ckpt"),
+        )
+        checkpoint = next((path for path in checkpoint_candidates if path is not None and path.is_file()), None)
+        if checkpoint is None:
+            raise FileNotFoundError(
+                f"SuperSimpleNet model has not been trained: {configured_path}. "
+                "Train the selected model to create an exported .pt model."
+            )
+        return self._export_checkpoint(checkpoint, output_path)
+
+    def _export_checkpoint(
+        self,
+        checkpoint_path: Path,
+        output_path: Path,
+        *,
+        model: Any | None = None,
+        engine: Any | None = None,
+    ) -> Path:
+        """Export an anomalib Lightning checkpoint to TorchInferencer format."""
+        deploy = _require("anomalib.deploy")
+        if model is None:
+            model = _require("anomalib.models").Supersimplenet()
+        if engine is None:
+            engine = _require("anomalib.engine").Engine()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="supersimplenet-export-") as temporary:
+            exported = Path(engine.export(
+                model=model,
+                export_type=deploy.ExportType.TORCH,
+                export_root=Path(temporary),
+                ckpt_path=checkpoint_path,
+            ))
+            if not exported.is_file():
+                raise RuntimeError(f"anomalib did not export a Torch model from {checkpoint_path}")
+            temporary_output = output_path.with_suffix(output_path.suffix + ".tmp")
+            shutil.copy2(exported, temporary_output)
+            temporary_output.replace(output_path)
+        self._inferencers.pop(output_path, None)
+        return output_path
 
     def _inferencer(self, model_file: Path) -> Any:
         stamp = model_file.stat().st_mtime
