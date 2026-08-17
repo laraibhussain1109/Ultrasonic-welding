@@ -65,6 +65,21 @@ def test_broken_fin_detector_marks_small_horizontal_discontinuity():
     assert np.count_nonzero(detected[50:63, 145:175]) > 0
 
 
+def test_broken_fin_detector_marks_a_complete_support_bay_discontinuity():
+    image = np.full((160, 1000, 3), 35, dtype=np.uint8)
+    for y in range(20, 145, 14):
+        cv2.line(image, (10, y), (990, y), (175, 175, 175), 2)
+    for x in range(100, 1000, 100):
+        cv2.line(image, (x, 10), (x, 150), (120, 120, 120), 4)
+    # One missing span between neighboring support ribs, matching the physical
+    # failure seen on the production blower rather than a tiny synthetic chip.
+    cv2.rectangle(image, (405, 70), (495, 78), (35, 35, 35), -1)
+
+    detected = broken_fin_mask(image, (160, 1000))
+
+    assert np.count_nonzero(detected[65:83, 400:500]) > 0
+
+
 def test_broken_fin_detector_does_not_mark_continuous_fins():
     detected = broken_fin_mask(fin_image(), (120, 600))
 

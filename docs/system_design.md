@@ -46,6 +46,9 @@ classified as broad model/background drift and is not drawn as a physical
 defect. This prevents normal fin edges from joining into one component-sized red
 contour. The independent fin-continuity detector runs after this guard, retaining
 localized broken-fin evidence even when a broad neural response is suppressed.
+The continuity detector bridges missing spans up to approximately one support
+bay (14% of crop width) and only suppresses gap columns repeated across many fin
+rows; this lets a single complete broken-fin bay survive the geometry filters.
 
 The operator tolerance buttons represent allowed anomalous surface coverage.
 At 0%, any confirmed region that passes the minimum noise-area filter fails;

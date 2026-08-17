@@ -181,12 +181,12 @@ def normal_reference_score(
 
 
 def broken_fin_mask(image: np.ndarray, output_shape: tuple[int, int]) -> np.ndarray:
-    """Locate short discontinuities in otherwise continuous horizontal fins.
+    """Locate local discontinuities in otherwise continuous horizontal fins.
 
-    Deep PatchCore features are intentionally tolerant of small texture changes,
-    which can hide a physically broken thin fin. This high-resolution companion
-    detector finds gaps in horizontal edges while suppressing the full-height
-    vertical support ribs that legitimately interrupt every fin.
+    Neural features can be tolerant of a physically broken thin fin. This
+    high-resolution companion detector finds gaps in horizontal edges while
+    suppressing the full-height vertical support ribs that legitimately
+    interrupt every fin.
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
@@ -200,8 +200,10 @@ def broken_fin_mask(image: np.ndarray, output_shape: tuple[int, int]) -> np.ndar
     x_threshold = max(20.0, float(np.percentile(x_values, 82.0)))
     horizontal_edges = (grad_y >= y_threshold) & interior
 
-    # A closing reconstructs only short missing sections between edge fragments.
-    max_gap = max(7, int(round(width * 0.035))) | 1
+    # A complete broken bay can span the distance between two support ribs. The
+    # former 3.5%-of-width limit only detected tiny chips and could not bridge
+    # the operator's roughly one-bay (10%-of-width) missing fin segment.
+    max_gap = max(7, int(round(width * 0.14))) | 1
     reconstructed = cv2.morphologyEx(
         horizontal_edges.astype(np.uint8),
         cv2.MORPH_CLOSE,
@@ -215,7 +217,11 @@ def broken_fin_mask(image: np.ndarray, output_shape: tuple[int, int]) -> np.ndar
     # Normal blower geometry creates repeated interruptions at the same x
     # coordinate across many fins. A real isolated broken fin affects only one
     # or two horizontal edge rows, so remove columns with repeated gaps.
-    repeated_gap_columns = np.count_nonzero(gaps, axis=0) >= max(3, int(height * 0.025))
+    # A 2-4 px thick fin produces two horizontal edges and therefore several
+    # adjacent response rows. The old three-row cutoff incorrectly classified
+    # one real break as a repeated column. Require evidence across many fin rows
+    # before treating a column as normal repeated geometry.
+    repeated_gap_columns = np.count_nonzero(gaps, axis=0) >= max(8, int(height * 0.08))
     repeated_gap_columns = cv2.dilate(
         repeated_gap_columns.astype(np.uint8)[None, :],
         cv2.getStructuringElement(cv2.MORPH_RECT, (max(3, width // 200), 1)),
