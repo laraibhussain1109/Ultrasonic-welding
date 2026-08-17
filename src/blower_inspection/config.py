@@ -19,6 +19,10 @@ class PartModelConfig:
     inner_radius_ratio: float = 0.22
     anomaly_threshold: float = 4.0
     min_defect_area_px: int = 120
+    # Maximum fraction of the inspected component surface that may be marked
+    # anomalous before the part fails. The operator tolerance buttons override
+    # this value for live inspection.
+    max_defect_area_ratio: float = 0.05
     max_bad_sector_ratio: float = 0.18
     roi_ratios: tuple[float, float, float, float] | None = None
     camera_width: int = 1920
@@ -107,6 +111,7 @@ class ModelRegistry:
             inner_radius_ratio=float(entry.get("inner_radius_ratio", 0.22)),
             anomaly_threshold=float(entry.get("anomaly_threshold", 4.0)),
             min_defect_area_px=int(entry.get("min_defect_area_px", 120)),
+            max_defect_area_ratio=float(entry.get("max_defect_area_ratio", 0.05)),
             max_bad_sector_ratio=float(entry.get("max_bad_sector_ratio", 0.18)),
             roi_ratios=tuple(float(value) for value in roi) if roi is not None else None,
             camera_width=int(entry.get("camera_width", 1920)),

@@ -92,15 +92,15 @@ def suppress_broad_response(
     defect_mask: np.ndarray,
     surface_mask: np.ndarray,
     *,
-    maximum_coverage_ratio: float = 0.08,
+    maximum_coverage_ratio: float = 0.50,
 ) -> tuple[np.ndarray, np.ndarray, bool]:
     """Reject non-local model responses that cover most of a valid component.
 
     A pixel anomaly model does not know that a long normal fin edge is not one
     physical defect. When those responses connect, contour rendering outlines
     the complete blower even though no localized fault exists. Production
-    defects for this station are local; a response covering more than eight per
-    cent of the inspected surface is therefore treated as model/background
+    defects for this station are local; a response covering more than half of
+    the inspected surface is therefore treated as model/background
     drift rather than painted as a defect. The independent fin-continuity check
     is added after this guard, so a real broken fin remains visible.
     """
@@ -109,6 +109,17 @@ def suppress_broad_response(
     if coverage <= maximum_coverage_ratio:
         return score_map, defect_mask, False
     return np.zeros_like(score_map, dtype=np.float32), np.zeros_like(defect_mask, dtype=bool), True
+
+
+def exceeds_defect_tolerance(
+    defect_area: int,
+    surface_area: int,
+    minimum_pixels: int,
+    maximum_ratio: float,
+) -> bool:
+    """Return whether confirmed defect coverage exceeds operator tolerance."""
+    ratio = defect_area / max(surface_area, 1)
+    return defect_area >= minimum_pixels and ratio >= maximum_ratio
 
 
 class SuperSimpleNetInspector:
@@ -225,12 +236,16 @@ class SuperSimpleNetInspector:
         defect_mask = clean_mask(defect_mask | fin_breaks)
         score_map = np.maximum(score_map, fin_breaks.astype(np.float32))
         defect_area = int(defect_mask.sum())
+        surface_area = int(np.count_nonzero(surface))
+        defect_area_ratio = defect_area / max(surface_area, 1)
         anomaly_score = float(np.max(score_map[surface])) if np.any(surface) else 0.0
         bad_ratio, bad_sectors = cylindrical_sector_statistics(
             surface, score_map, config.expected_fins, min_bad_score=threshold
         )
-        fail_area = max(config.min_defect_area_px, int(0.0004 * score_map.size))
-        status = "FAIL" if defect_area >= fail_area or bad_ratio >= config.max_bad_sector_ratio else "PASS"
+        coverage_failed = exceeds_defect_tolerance(
+            defect_area, surface_area, config.min_defect_area_px, config.max_defect_area_ratio
+        )
+        status = "FAIL" if coverage_failed or bad_ratio >= config.max_bad_sector_ratio else "PASS"
         display, boxes = inspection_overlay(
             image,
             score_map,
@@ -244,11 +259,11 @@ class SuperSimpleNetInspector:
         if save_outputs:
             overlay_path, report_path = self._save_outputs(
                 config, display, status, anomaly_score, defect_area, bad_ratio, bad_sectors,
-                score_baseline, broad_response_suppressed,
+                defect_area_ratio, score_baseline, broad_response_suppressed,
             )
         return InspectionResult(
             status, anomaly_score, defect_area, bad_ratio, bad_sectors,
-            overlay_path, report_path, display, boxes,
+            overlay_path, report_path, display, boxes, defect_area_ratio,
         )
 
     def runtime_device_name(self) -> str:
@@ -348,6 +363,7 @@ class SuperSimpleNetInspector:
         defect_area: int,
         bad_ratio: float,
         bad_sectors: list[int],
+        defect_area_ratio: float,
         score_baseline: float,
         broad_response_suppressed: bool,
     ) -> tuple[Path, Path]:
@@ -360,6 +376,7 @@ class SuperSimpleNetInspector:
         report_path.write_text(json.dumps({
             "algorithm": "supersimplenet", "model_id": config.id, "status": status,
             "anomaly_score": anomaly_score, "defect_area_px": defect_area,
+            "defect_area_ratio": defect_area_ratio,
             "bad_sector_ratio": bad_ratio, "bad_sectors": bad_sectors,
             "raw_score_baseline": score_baseline,
             "broad_response_suppressed": broad_response_suppressed,

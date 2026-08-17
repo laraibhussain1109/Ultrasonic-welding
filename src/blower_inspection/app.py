@@ -260,12 +260,17 @@ class InspectionWindow(QWidget):
         layout.addWidget(self._section("TOLERANCE SETTING"))
         layout.addWidget(QLabel("DEFECT SIZE THRESHOLD — LOWER = STRICTER"))
         tolerance_grid = QGridLayout()
-        for index, value in enumerate([1, 5, 8, 10, 13, 15, 18, 20]):
+        self.tolerance_buttons: dict[int, QPushButton] = {}
+        for index, value in enumerate([1, 3, 5, 8, 10, 13, 15, 20]):
             button = QPushButton(f"{value}%")
-            if value == 5:
-                button.setStyleSheet("border-color:#d29b00;color:#f5c542;")
+            button.setCheckable(True)
+            button.setChecked(value == self.tolerance_percent)
+            button.setStyleSheet(
+                "QPushButton:checked { border-color:#d29b00; color:#f5c542; background:#17203a; }"
+            )
             button.clicked.connect(lambda _checked=False, v=value: self.set_tolerance(v))
             tolerance_grid.addWidget(button, index // 4, index % 4)
+            self.tolerance_buttons[value] = button
         layout.addLayout(tolerance_grid)
         layout.addSpacing(25)
         layout.addWidget(self._section("SURFACE SPEED"))
@@ -368,13 +373,15 @@ class InspectionWindow(QWidget):
         # The tolerance buttons are operator-facing strictness controls.  Lower
         # percentages must reject smaller detected regions/sectors, while higher
         # percentages allow larger confirmed defects before rejecting the part.
-        strictness_scale = max(self.tolerance_percent, 1) / 5.0
-        tolerance_area = max(1, int(model.min_defect_area_px * strictness_scale))
-        tolerance_threshold = max(model.anomaly_threshold, (0.65 + 0.30 * (self.tolerance_percent / 20.0)) * 10.0)
+        tolerance_ratio = max(1, min(self.tolerance_percent, 100)) / 100.0
+        # Percentage buttons control allowed defect *coverage*, not model score
+        # confidence. Keep the neural pixel threshold stable so changing from
+        # 1% to 20% has one predictable effect.
+        tolerance_threshold = max(model.anomaly_threshold, 7.5)
         return replace(
             model,
             anomaly_threshold=tolerance_threshold,
-            min_defect_area_px=tolerance_area,
+            max_defect_area_ratio=tolerance_ratio,
             max_bad_sector_ratio=max(0.01, self.tolerance_percent / 100.0),
         )
 
@@ -617,7 +624,8 @@ class InspectionWindow(QWidget):
             bad_sector_text += ",..."
         self.last_result.setText(
             f"TRACK:  {track_id} (rotation in progress)\nSCORE:  {result.anomaly_score:.3f}\n"
-            f"COVERAGE:  {result.defect_area_px}px\nBOXES:  {len(result.defect_boxes)}\n"
+            f"COVERAGE:  {result.defect_area_px}px ({result.defect_area_ratio:.2%})\n"
+            f"BOXES:  {len(result.defect_boxes)}\n"
             f"BAD SECTORS:  {bad_sector_text}\nSECTOR RATIO:  {result.bad_sector_ratio:.2%}\n"
             f"LATENCY:  {latency_ms:.1f} ms"
         )
@@ -780,8 +788,10 @@ class InspectionWindow(QWidget):
 
     def set_tolerance(self, value: int) -> None:
         self.tolerance_percent = value
+        for tolerance, button in self.tolerance_buttons.items():
+            button.setChecked(tolerance == value)
         self.tolerance_top.setText(f"TOLERANCE:  {value}%")
-        self.log.addItem(f"TOLERANCE SET TO {value}%")
+        self.log.addItem(f"TOLERANCE SET TO {value}% DEFECT COVERAGE")
 
     def _tick(self) -> None:
         self.time_label.setText(time.strftime("%H:%M:%S"))

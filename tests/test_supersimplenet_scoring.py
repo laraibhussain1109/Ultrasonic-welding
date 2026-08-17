@@ -75,3 +75,20 @@ def test_local_defect_response_is_not_suppressed():
     assert not was_suppressed
     assert np.array_equal(filtered_mask, mask)
     assert np.array_equal(filtered_scores, scores)
+
+
+def test_operator_percentage_changes_allowed_defect_coverage():
+    exceeds = _load_function("exceeds_defect_tolerance")
+    surface_area = 100_000
+    defect_area = 4_000
+
+    assert exceeds(defect_area, surface_area, 120, 0.01)
+    assert exceeds(defect_area, surface_area, 120, 0.03)
+    assert not exceeds(defect_area, surface_area, 120, 0.05)
+    assert not exceeds(defect_area, surface_area, 120, 0.20)
+
+
+def test_minimum_pixel_count_still_rejects_isolated_noise():
+    exceeds = _load_function("exceeds_defect_tolerance")
+
+    assert not exceeds(5, 100, 20, 0.01)

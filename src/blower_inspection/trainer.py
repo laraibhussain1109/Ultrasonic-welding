@@ -33,6 +33,7 @@ class InspectionResult:
     report_path: Path | None = None
     display_image: np.ndarray | None = None
     defect_boxes: list[tuple[int, int, int, int]] = field(default_factory=list)
+    defect_area_ratio: float = 0.0
 
     @property
     def is_pass(self) -> bool:
