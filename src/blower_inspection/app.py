@@ -261,7 +261,7 @@ class InspectionWindow(QWidget):
         layout.addWidget(QLabel("DEFECT SIZE THRESHOLD — LOWER = STRICTER"))
         tolerance_grid = QGridLayout()
         self.tolerance_buttons: dict[int, QPushButton] = {}
-        for index, value in enumerate([1, 3, 5, 8, 10, 13, 15, 20]):
+        for index, value in enumerate([0, 1, 3, 5, 8, 10, 13, 15, 20]):
             button = QPushButton(f"{value}%")
             button.setCheckable(True)
             button.setChecked(value == self.tolerance_percent)
@@ -373,7 +373,7 @@ class InspectionWindow(QWidget):
         # The tolerance buttons are operator-facing strictness controls.  Lower
         # percentages must reject smaller detected regions/sectors, while higher
         # percentages allow larger confirmed defects before rejecting the part.
-        tolerance_ratio = max(1, min(self.tolerance_percent, 100)) / 100.0
+        tolerance_ratio = max(0, min(self.tolerance_percent, 100)) / 100.0
         # Percentage buttons control allowed defect *coverage*, not model score
         # confidence. Keep the neural pixel threshold stable so changing from
         # 1% to 20% has one predictable effect.

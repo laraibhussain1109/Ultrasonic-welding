@@ -47,11 +47,12 @@ defect. This prevents normal fin edges from joining into one component-sized red
 contour. The independent fin-continuity detector runs after this guard, retaining
 localized broken-fin evidence even when a broad neural response is suppressed.
 
-The operator tolerance buttons represent allowed anomalous surface coverage:
-1% fails once confirmed defect pixels cover 1% of the component, while 20%
-allows up to 20%. They do not change neural confidence, so selecting a tolerance
-has a predictable monotonic effect. A separate minimum pixel count continues to
-reject isolated noise.
+The operator tolerance buttons represent allowed anomalous surface coverage.
+At 0%, any confirmed region that passes the minimum noise-area filter fails;
+1% fails once confirmed defect pixels cover 1% of the component; 3% fails at 3%;
+and 20% allows up to 20%. They do not change neural confidence, so selecting a
+tolerance has a predictable monotonic effect. The separate minimum pixel count
+continues to reject isolated noise even at 0%.
 
 ## Deployment controls
 

@@ -82,6 +82,7 @@ def test_operator_percentage_changes_allowed_defect_coverage():
     surface_area = 100_000
     defect_area = 4_000
 
+    assert exceeds(defect_area, surface_area, 120, 0.00)
     assert exceeds(defect_area, surface_area, 120, 0.01)
     assert exceeds(defect_area, surface_area, 120, 0.03)
     assert not exceeds(defect_area, surface_area, 120, 0.05)
@@ -92,3 +93,4 @@ def test_minimum_pixel_count_still_rejects_isolated_noise():
     exceeds = _load_function("exceeds_defect_tolerance")
 
     assert not exceeds(5, 100, 20, 0.01)
+    assert not exceeds(5, 100, 20, 0.00)
