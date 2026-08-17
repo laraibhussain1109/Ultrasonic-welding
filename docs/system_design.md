@@ -41,6 +41,12 @@ anomalib inference so live preprocessing matches training. A failure is latched
 across all tracked views of a rotating part. Production counters and ESP32
 output are updated only by the existing count-line/session state machine.
 
+A connected anomaly response covering more than 8% of the inspected surface is
+classified as broad model/background drift and is not drawn as a physical
+defect. This prevents normal fin edges from joining into one component-sized red
+contour. The independent fin-continuity detector runs after this guard, retaining
+localized broken-fin evidence even when a broad neural response is suppressed.
+
 ## Deployment controls
 
 - Lock camera exposure, gain, focus, and lighting.

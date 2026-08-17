@@ -25,6 +25,7 @@ from .camera import crop_component_roi
 from .config import PartModelConfig
 from .trainer import (
     InspectionResult,
+    broken_fin_mask,
     clean_mask,
     cylindrical_sector_statistics,
     cylindrical_surface_mask,
@@ -84,6 +85,30 @@ def localize_anomaly_scores(
     contrast_span = max(1.0 - baseline, minimum_contrast_span)
     localized = np.clip((score_map.astype(np.float32) - baseline) / contrast_span, 0.0, 1.0)
     return localized.astype(np.float32), baseline
+
+
+def suppress_broad_response(
+    score_map: np.ndarray,
+    defect_mask: np.ndarray,
+    surface_mask: np.ndarray,
+    *,
+    maximum_coverage_ratio: float = 0.08,
+) -> tuple[np.ndarray, np.ndarray, bool]:
+    """Reject non-local model responses that cover most of a valid component.
+
+    A pixel anomaly model does not know that a long normal fin edge is not one
+    physical defect. When those responses connect, contour rendering outlines
+    the complete blower even though no localized fault exists. Production
+    defects for this station are local; a response covering more than eight per
+    cent of the inspected surface is therefore treated as model/background
+    drift rather than painted as a defect. The independent fin-continuity check
+    is added after this guard, so a real broken fin remains visible.
+    """
+    surface_area = int(np.count_nonzero(surface_mask))
+    coverage = int(np.count_nonzero(defect_mask & surface_mask)) / max(surface_area, 1)
+    if coverage <= maximum_coverage_ratio:
+        return score_map, defect_mask, False
+    return np.zeros_like(score_map, dtype=np.float32), np.zeros_like(defect_mask, dtype=bool), True
 
 
 class SuperSimpleNetInspector:
@@ -190,6 +215,15 @@ class SuperSimpleNetInspector:
         # anomalib anomaly maps are calibrated to 0..1 by the trained model.
         threshold = float(np.clip(config.anomaly_threshold / 10.0, 0.05, 0.95))
         defect_mask = clean_mask((score_map >= threshold) & surface)
+        score_map, defect_mask, broad_response_suppressed = suppress_broad_response(
+            score_map, defect_mask, surface
+        )
+        # SuperSimpleNet handles general texture/weld anomalies. Preserve an
+        # independent geometry signal for the specific failure visible in the
+        # operator's marked example: a localized interruption of a long fin.
+        fin_breaks = broken_fin_mask(image, score_map.shape) & surface
+        defect_mask = clean_mask(defect_mask | fin_breaks)
+        score_map = np.maximum(score_map, fin_breaks.astype(np.float32))
         defect_area = int(defect_mask.sum())
         anomaly_score = float(np.max(score_map[surface])) if np.any(surface) else 0.0
         bad_ratio, bad_sectors = cylindrical_sector_statistics(
@@ -209,7 +243,8 @@ class SuperSimpleNetInspector:
         overlay_path = report_path = None
         if save_outputs:
             overlay_path, report_path = self._save_outputs(
-                config, display, status, anomaly_score, defect_area, bad_ratio, bad_sectors, score_baseline
+                config, display, status, anomaly_score, defect_area, bad_ratio, bad_sectors,
+                score_baseline, broad_response_suppressed,
             )
         return InspectionResult(
             status, anomaly_score, defect_area, bad_ratio, bad_sectors,
@@ -314,6 +349,7 @@ class SuperSimpleNetInspector:
         bad_ratio: float,
         bad_sectors: list[int],
         score_baseline: float,
+        broad_response_suppressed: bool,
     ) -> tuple[Path, Path]:
         config.result_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -326,6 +362,7 @@ class SuperSimpleNetInspector:
             "anomaly_score": anomaly_score, "defect_area_px": defect_area,
             "bad_sector_ratio": bad_ratio, "bad_sectors": bad_sectors,
             "raw_score_baseline": score_baseline,
+            "broad_response_suppressed": broad_response_suppressed,
             "created_at": datetime.now().isoformat(), "overlay_path": str(overlay_path),
         }, indent=2) + "\n", encoding="utf-8")
         return overlay_path, report_path
