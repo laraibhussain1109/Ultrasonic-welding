@@ -223,9 +223,16 @@ class SuperSimpleNetInspector:
         raw_score_map = self._prediction_map(prediction, image.shape[:2])
         surface = cylindrical_surface_mask(raw_score_map.shape)
         score_map, score_baseline = localize_anomaly_scores(raw_score_map, surface)
-        # anomalib anomaly maps are calibrated to 0..1 by the trained model.
+        # Use anomalib's calibrated segmentation mask. Applying a hand-written
+        # 0.75 cutoff to the heatmap selected normal high-contrast fin/border
+        # pixels while missing the lower-contrast physical fault.
         threshold = float(np.clip(config.anomaly_threshold / 10.0, 0.05, 0.95))
-        defect_mask = clean_mask((score_map >= threshold) & surface)
+        calibrated_mask = self._prediction_mask(prediction, image.shape[:2])
+        if calibrated_mask is None:
+            # Compatibility fallback for anomalib versions/export formats that
+            # do not emit pred_mask.
+            calibrated_mask = score_map >= threshold
+        defect_mask = clean_mask(calibrated_mask & surface)
         score_map, defect_mask, broad_response_suppressed = suppress_broad_response(
             score_map, defect_mask, surface
         )
@@ -349,6 +356,23 @@ class SuperSimpleNetInspector:
         if result.shape != shape:
             result = cv2.resize(result, (shape[1], shape[0]), interpolation=cv2.INTER_CUBIC)
         return np.clip(result, 0.0, 1.0)
+
+    @staticmethod
+    def _prediction_mask(prediction: Any, shape: tuple[int, int]) -> np.ndarray | None:
+        """Return anomalib's trained/post-processed pixel decision mask."""
+        value = getattr(prediction, "pred_mask", None)
+        if value is None and isinstance(prediction, dict):
+            value = prediction.get("pred_mask")
+        if value is None:
+            return None
+        result = np.squeeze(_as_numpy(value))
+        if result.ndim != 2:
+            raise RuntimeError(f"Unexpected SuperSimpleNet prediction-mask shape: {result.shape}")
+        if result.shape != shape:
+            result = cv2.resize(
+                result.astype(np.uint8), (shape[1], shape[0]), interpolation=cv2.INTER_NEAREST
+            )
+        return result.astype(bool)
 
     @staticmethod
     def _metadata_path(model_file: Path) -> Path:

@@ -49,6 +49,13 @@ def test_live_inference_explicitly_converts_opencv_bgr_to_rgb():
     assert "cv2.cvtColor(image, cv2.COLOR_BGR2RGB)" in source
 
 
+def test_live_pixel_decisions_use_anomalib_calibrated_mask():
+    source = Path("src/blower_inspection/supersimplenet.py").read_text(encoding="utf-8")
+
+    assert "calibrated_mask = self._prediction_mask(prediction" in source
+    assert "defect_mask = clean_mask(calibrated_mask & surface)" in source
+
+
 def test_component_sized_response_is_suppressed_before_overlay():
     suppress = _load_function("suppress_broad_response")
     surface = np.ones((40, 120), dtype=bool)

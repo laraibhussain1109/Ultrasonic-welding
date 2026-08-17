@@ -54,6 +54,11 @@ and 20% allows up to 20%. They do not change neural confidence, so selecting a
 tolerance has a predictable monotonic effect. The separate minimum pixel count
 continues to reject isolated noise even at 0%.
 
+Pixel selection uses anomalib's exported `pred_mask`, including the threshold
+calibrated by the trained model. The raw heatmap is retained for score display,
+but it is no longer binarized with an application-defined cutoff that can select
+normal high-contrast component edges instead of a lower-contrast physical fault.
+
 ## Deployment controls
 
 - Lock camera exposure, gain, focus, and lighting.
