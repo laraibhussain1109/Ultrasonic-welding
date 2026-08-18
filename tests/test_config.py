@@ -38,6 +38,8 @@ def test_model_registry_defaults_camera_and_allows_missing_roi(tmp_path):
     assert model.camera_fps == 30
     assert model.image_size == 640
     assert model.max_defect_area_ratio == 0.05
+    assert model.scoring_end_exclusion_ratio == 0.12
+    assert model.scoring_mask_erosion_px == 8
     assert model.counting_line_ratio == 0.45
     assert model.counting_direction == "left_to_right"
 

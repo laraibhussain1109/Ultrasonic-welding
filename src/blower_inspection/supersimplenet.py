@@ -122,6 +122,25 @@ def exceeds_defect_tolerance(
     return defect_area >= minimum_pixels and ratio >= maximum_ratio
 
 
+def inspection_scoring_mask(
+    shape: tuple[int, int],
+    *,
+    end_exclusion_ratio: float,
+    erosion_px: int,
+) -> np.ndarray:
+    """Build an inward scoring ROI that excludes unstable component tips."""
+    mask = cylindrical_surface_mask(
+        shape,
+        horizontal_margin_ratio=float(np.clip(end_exclusion_ratio, 0.0, 0.45)),
+    )
+    erosion = max(0, int(erosion_px))
+    if erosion:
+        kernel_size = erosion * 2 + 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        mask = cv2.erode(mask.astype(np.uint8), kernel, iterations=1).astype(bool)
+    return mask
+
+
 class SuperSimpleNetInspector:
     """Train anomalib SuperSimpleNet and inspect exact YOLO component crops."""
 
@@ -221,7 +240,11 @@ class SuperSimpleNetInspector:
         inference_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) if image.ndim == 3 else image
         prediction = self._inferencer(model_file).predict(image=inference_image)
         raw_score_map = self._prediction_map(prediction, image.shape[:2])
-        surface = cylindrical_surface_mask(raw_score_map.shape)
+        surface = inspection_scoring_mask(
+            raw_score_map.shape,
+            end_exclusion_ratio=config.scoring_end_exclusion_ratio,
+            erosion_px=config.scoring_mask_erosion_px,
+        )
         score_map, score_baseline = localize_anomaly_scores(raw_score_map, surface)
         # Use anomalib's calibrated segmentation mask. Applying a hand-written
         # 0.75 cutoff to the heatmap selected normal high-contrast fin/border

@@ -56,6 +56,14 @@ def test_live_pixel_decisions_use_anomalib_calibrated_mask():
     assert "defect_mask = clean_mask(calibrated_mask & surface)" in source
 
 
+def test_live_scoring_uses_eroded_tip_excluding_mask():
+    source = Path("src/blower_inspection/supersimplenet.py").read_text(encoding="utf-8")
+
+    assert "surface = inspection_scoring_mask(" in source
+    assert "horizontal_margin_ratio=float(np.clip(end_exclusion_ratio" in source
+    assert "cv2.erode(mask.astype(np.uint8)" in source
+
+
 def test_component_sized_response_is_suppressed_before_overlay():
     suppress = _load_function("suppress_broad_response")
     surface = np.ones((40, 120), dtype=bool)

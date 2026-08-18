@@ -62,6 +62,23 @@ calibrated by the trained model. The raw heatmap is retained for score display,
 but it is no longer binarized with an application-defined cutoff that can select
 normal high-contrast component edges instead of a lower-contrast physical fault.
 
+## Boundary controls
+
+Anomaly scoring excludes the outer 12% at each end of the YOLO component crop.
+The remaining scoring mask is eroded inward by 8 pixels before either neural or
+structural scores are evaluated. This prevents receptive fields and mask pixels
+from straddling the component/background boundary, and removes the optically
+unstable molded tips from PASS/FAIL coverage. These defaults are configurable per
+part as `scoring_end_exclusion_ratio` and `scoring_mask_erosion_px`.
+
+YOLO confidence cannot by itself remove a jagged anomaly contour: YOLO supplies
+the rectangular component crop, while the red contour comes from anomaly-mask
+pixels. Nevertheless, the YOLO training set should include all valid tip poses,
+lighting conditions, and rotations so its bounding box remains stable. The
+SuperSimpleNet normal set should likewise contain acceptable edge and near-edge
+appearance variation; SuperSimpleNet does not use a PatchCore memory bank, but
+normal-set coverage still determines what appearance it learns as acceptable.
+
 ## Deployment controls
 
 - Lock camera exposure, gain, focus, and lighting.

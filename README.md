@@ -64,6 +64,11 @@ The live inspector automatically selects CUDA when a CUDA-capable PyTorch build 
 
 Select each part's YOLO `best.pt` from **YOLO PART MODEL**. The path is persisted in `config/models.json`. Full-FOV training images are YOLO-cropped in memory immediately before anomalib training; live images use the tracked YOLO bounding box. This train/inference symmetry keeps background and fixture variation out of SuperSimpleNet.
 
+For scoring, the default profile excludes the outer 12% of component length at
+both tips and erodes the remaining surface mask inward by 8 pixels. This keeps
+part/background boundary patches out of PASS/FAIL decisions. Both values can be
+tuned per model in `config/models.json`.
+
 The PASS/FAIL result is latched over all rotation views and counted only when the tracked part crosses the configured production line. See `docs/system_design.md` for the full architecture.
 
 ## Training workflow

@@ -13,6 +13,8 @@
       "anomaly_threshold": 3.5,
       "min_defect_area_px": 120,
       "max_bad_sector_ratio": 0.18,
+      "scoring_end_exclusion_ratio": 0.12,
+      "scoring_mask_erosion_px": 8,
       "algorithm": "supersimplenet",
       "image_size": 640,
       "roi_ratios": [
@@ -38,6 +40,8 @@
       "anomaly_threshold": 3.5,
       "min_defect_area_px": 120,
       "max_bad_sector_ratio": 0.18,
+      "scoring_end_exclusion_ratio": 0.12,
+      "scoring_mask_erosion_px": 8,
       "algorithm": "supersimplenet",
       "image_size": 640,
       "roi_ratios": [
@@ -63,6 +67,8 @@
       "anomaly_threshold": 3.8,
       "min_defect_area_px": 140,
       "max_bad_sector_ratio": 0.18,
+      "scoring_end_exclusion_ratio": 0.12,
+      "scoring_mask_erosion_px": 8,
       "algorithm": "supersimplenet",
       "image_size": 640,
       "roi_ratios": [
@@ -88,6 +94,8 @@
       "anomaly_threshold": 3.8,
       "min_defect_area_px": 140,
       "max_bad_sector_ratio": 0.18,
+      "scoring_end_exclusion_ratio": 0.12,
+      "scoring_mask_erosion_px": 8,
       "algorithm": "supersimplenet",
       "image_size": 640,
       "roi_ratios": [

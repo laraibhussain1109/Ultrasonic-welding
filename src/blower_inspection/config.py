@@ -24,6 +24,10 @@ class PartModelConfig:
     # this value for live inspection.
     max_defect_area_ratio: float = 0.05
     max_bad_sector_ratio: float = 0.18
+    # Do not score unstable YOLO crop tips; erode the remaining surface so no
+    # anomaly pixel straddles component and background.
+    scoring_end_exclusion_ratio: float = 0.12
+    scoring_mask_erosion_px: int = 8
     roi_ratios: tuple[float, float, float, float] | None = None
     camera_width: int = 1920
     camera_height: int = 1080
@@ -113,6 +117,8 @@ class ModelRegistry:
             min_defect_area_px=int(entry.get("min_defect_area_px", 120)),
             max_defect_area_ratio=float(entry.get("max_defect_area_ratio", 0.05)),
             max_bad_sector_ratio=float(entry.get("max_bad_sector_ratio", 0.18)),
+            scoring_end_exclusion_ratio=float(entry.get("scoring_end_exclusion_ratio", 0.12)),
+            scoring_mask_erosion_px=int(entry.get("scoring_mask_erosion_px", 8)),
             roi_ratios=tuple(float(value) for value in roi) if roi is not None else None,
             camera_width=int(entry.get("camera_width", 1920)),
             camera_height=int(entry.get("camera_height", 1080)),
