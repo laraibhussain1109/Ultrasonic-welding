@@ -58,6 +58,48 @@ docker run --rm --gpus all `
 That is only an environment check. A successful `nvidia-smi` is not model
 training and does not make the Cosmos-RL image suitable for defect detection.
 
+### Fix for `nvidia-smi: cannot execute binary file`
+
+Do not run `bash nvidia-smi`. That asks Bash to parse the compiled
+`/usr/bin/nvidia-smi` executable as if it were a shell script, which produces the
+error shown above. Run the executable directly:
+
+```powershell
+docker run --rm --gpus all --shm-size=16g `
+  --ulimit memlock=-1 --ulimit stack=67108864 `
+  nvcr.io/nvidia/tao/tao-toolkit:7.1.0-pyt nvidia-smi
+```
+
+Or, when a shell is actually needed, pass a command string with `-lc`:
+
+```powershell
+docker run --rm --gpus all --shm-size=16g `
+  --ulimit memlock=-1 --ulimit stack=67108864 `
+  nvcr.io/nvidia/tao/tao-toolkit:7.1.0-pyt `
+  /bin/bash -lc "nvidia-smi"
+```
+
+The shared-memory and `ulimit` flags also address the warning printed by the TAO
+entrypoint. The successful Cosmos-RL output in the screenshot already confirms
+that Docker, the NVIDIA container runtime, and the GPU are connected. Repeating
+the check with `7.1.0-pyt` verifies that specific image, but still does not prove
+that it contains a supported visual-anomaly recipe.
+
+Next, inspect the tasks actually exposed by the PyTorch image rather than
+guessing a training command:
+
+```powershell
+docker run --rm --gpus all --shm-size=16g `
+  --ulimit memlock=-1 --ulimit stack=67108864 `
+  nvcr.io/nvidia/tao/tao-toolkit:7.1.0-pyt `
+  /bin/bash -lc "tao --help || python -m tao --help || find /opt -maxdepth 3 -iname '*anomal*' -print"
+```
+
+Only continue if the image/documentation identifies a real visual anomaly
+training and export task. Save the complete help output; the exact task name and
+experiment-spec schema are needed before this repository can provide a truthful
+training command.
+
 There are therefore two distinct operations:
 
 1. **TAO training/export:** performed outside this application; produces a real

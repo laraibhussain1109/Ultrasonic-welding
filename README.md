@@ -52,6 +52,11 @@ use it to manufacture or rename an ONNX artifact for this application; first
 confirm an NVIDIA-supported visual anomaly localization recipe and its export
 contract in the deployment guide.
 
+For Docker diagnostics, run `nvidia-smi` directly or through
+`/bin/bash -lc "nvidia-smi"`; `bash nvidia-smi` incorrectly treats the executable
+as a shell script. The deployment guide includes the complete PowerShell command
+and TAO-recommended shared-memory limits.
+
 Use the component crop for model training. The optional dataset preparation command applies the configured YOLO detector to full-camera known-good images while retaining a manifest:
 
 ```bash
