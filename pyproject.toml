@@ -33,6 +33,11 @@ industrial = [
   "pyserial>=3.5",
   "ultralytics>=8.3"
 ]
+tao = [
+  "onnxruntime-gpu>=1.18",
+  "opencv-python>=4.8",
+  "numpy>=1.24"
+]
 
 [project.scripts]
 blower-inspection = "blower_inspection.cli:main"

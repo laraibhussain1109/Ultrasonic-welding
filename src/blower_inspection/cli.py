@@ -10,7 +10,7 @@ import cv2
 
 from .auth import AuthStore
 from .config import ModelRegistry, ensure_model_folders
-from .anomaly_models import HybridPatchcorePadimInspector
+from .tao_inspector import inspector_for_model
 from .esp32_output import ESP32FailOutput
 from .dataset import prepare_yolo_dataset
 
@@ -50,8 +50,6 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     registry = ModelRegistry(args.models)
     ensure_model_folders(registry)
-    inspector = HybridPatchcorePadimInspector()
-
     if args.command == "list-models":
         for model in registry.all():
             trained = "trained" if model.model_file.exists() else "not trained"
@@ -60,18 +58,23 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "train":
         model = registry.get(args.model_id)
-        if model.yolo_model_path is None:
+        inspector = inspector_for_model(model)
+        if model.algorithm == "hybrid_patchcore_padim" and model.yolo_model_path is None:
             raise SystemExit(f"No yolo_model_path is configured for {model.id}")
-        print(
-            f"Auto-cropping {model.normal_image_dir} in memory with {model.yolo_model_path} "
-            "before training (source images will not be modified)..."
-        )
+        if model.algorithm == "nvidia_tao":
+            print(f"Calibrating TAO export {model.model_file} with normals in {model.normal_image_dir}...")
+        else:
+            print(
+                f"Auto-cropping {model.normal_image_dir} in memory with {model.yolo_model_path} "
+                "before training (source images will not be modified)..."
+            )
         output = inspector.train(model)
         print(f"Trained {model.id}: {output}")
         return 0
 
     if args.command == "inspect":
         model = registry.get(args.model_id)
+        inspector = inspector_for_model(model)
         image = cv2.imread(str(Path(args.image)))
         if image is None:
             raise SystemExit(f"Unable to read image: {args.image}")

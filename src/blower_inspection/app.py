@@ -32,7 +32,6 @@ from PyQt6.QtWidgets import (
     QFileDialog,
 )
 
-from .anomaly_models import HybridPatchcorePadimInspector
 from .auth import AuthStore, User
 from .camera import (
     DEFAULT_COMPONENT_ROI_RATIOS,
@@ -48,6 +47,7 @@ from .config import ModelRegistry, PartModelConfig, ensure_model_folders
 from .daily_stats import DailyStatistics, operating_day
 from .fail_output import ESP32FailOutputBridge
 from .trainer import InspectionResult
+from .tao_inspector import inspector_for_model
 from .yolo_tracking import RotatingPartInspector, TrackedPart, YoloByteTrackDetector
 
 
@@ -115,7 +115,7 @@ class TrainWorker(QThread):
     finished_ok = pyqtSignal(str)
     failed = pyqtSignal(str)
 
-    def __init__(self, inspector: HybridPatchcorePadimInspector, model: PartModelConfig) -> None:
+    def __init__(self, inspector, model: PartModelConfig) -> None:
         super().__init__()
         self.inspector = inspector
         self.model = model
@@ -132,7 +132,7 @@ class InspectionWorker(QThread):
     finished_result = pyqtSignal(int, object, float)
     failed = pyqtSignal(str)
 
-    def __init__(self, inspector: HybridPatchcorePadimInspector, model: PartModelConfig, track_id: int, frame) -> None:
+    def __init__(self, inspector, model: PartModelConfig, track_id: int, frame) -> None:
         super().__init__()
         self.inspector = inspector
         self.model = model
@@ -155,7 +155,7 @@ class InspectionWindow(QWidget):
         self.user = user
         self.registry = ModelRegistry()
         ensure_model_folders(self.registry)
-        self.inspector = HybridPatchcorePadimInspector()
+        self.inspector = inspector_for_model(self.registry.active())
         self.fail_output = ESP32FailOutputBridge()
         active_model = self.registry.active()
         self.camera = USBCamera(width=active_model.camera_width, height=active_model.camera_height, fps=active_model.camera_fps)
@@ -398,6 +398,7 @@ class InspectionWindow(QWidget):
         if not getattr(self, "model_by_label", None) or self.inspection_running:
             return
         model = self.selected_model()
+        self.inspector = inspector_for_model(model)
         self.camera = USBCamera(width=model.camera_width, height=model.camera_height, fps=model.camera_fps)
 
     def load_image(self) -> None:
@@ -698,6 +699,15 @@ class InspectionWindow(QWidget):
         if not self.inspection_running:
             return
         self.stop_camera()
+        # A runtime/model/calibration fault is never equivalent to a good part.
+        # Stop acquisition and assert the reject/inhibit output until an
+        # operator explicitly restarts a healthy inspection session.
+        self.fail_output.send_result(True)
+        self.status_badge.setObjectName("statusFail")
+        self.status_badge.setText("SYSTEM FAULT")
+        self.status_badge.style().unpolish(self.status_badge)
+        self.status_badge.style().polish(self.status_badge)
+        self.log.addItem(f"INSPECTION INHIBITED | {message}")
         QMessageBox.critical(self, "Live inspection stopped", message)
 
     def inspect_current(self) -> None:

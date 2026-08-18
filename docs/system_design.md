@@ -1,62 +1,24 @@
-# Industrial blower fan inspection system design
+# System design
 
-## Target hardware
+## Production flow
 
-- GPU/CPU: RTX 5070 12 GB, 32 GB DDR5 RAM, Intel Ultra i7 265K.
-- Camera: 8.3 MP USB3.0 industrial camera with locked exposure/focus/gain.
-- Fixture: rigid nest, repeatable angular key, part-present trigger.
-- Lighting: diffuse ring/coaxial light plus optional low-angle crack light.
+1. The USB3 camera supplies a locked-exposure frame.
+2. YOLO/ByteTrack locates and identifies the physical rotating component.
+3. The component crop is ImageNet-normalized and passed to the NVIDIA TAO ONNX export through ONNX Runtime TensorRT/CUDA.
+4. The runtime validates bindings, shapes, and finite outputs and refuses CPU fallback in the production profile.
+5. A SHA-256-bound normal calibration supplies native pixel and image-score thresholds.
+6. Surface ROI, connected-area, and cylindrical-sector gates create a per-view decision and localized overlay.
+7. The rotating-part state machine latches any failed view until the part crosses the counting line.
+8. JSON evidence, daily totals, and the ESP32/PLC result are updated for the completed physical part.
 
-## Algorithm
+## Fail-closed conditions
 
-The deployed anomaly model is a hybrid of PatchCore and PaDiM.
+Missing or changed artifacts, stale calibration, insufficient calibration samples, unavailable GPU providers, ambiguous bindings, dynamic spatial input, malformed tensors, and NaN/Inf outputs are equipment faults. Live acquisition stops and the reject/inhibit output is asserted. These conditions never produce PASS.
 
-### PatchCore branch
+## Artifact layout
 
-- Extract CNN patch embeddings from normal images.
-- Select a farthest-first coreset memory bank to keep inference fast.
-- Score each inspection patch by nearest-neighbour distance to the normal memory bank.
+Each part configuration owns a normal-image directory, TAO ONNX export, calibration JSON, result directory, YOLO model, camera profile, and ROI. TAO training artifacts remain outside the runtime repository; only the qualified immutable ONNX export is promoted.
 
-### PaDiM branch
+## Qualification
 
-- Use the same CNN patch grid.
-- Fit a per-patch multivariate Gaussian distribution over a memory-bounded random projection of normal embeddings.
-- Score each inspection patch with Mahalanobis distance.
-
-### Hybrid decision
-
-- Normalize both score maps robustly.
-- Fuse maps using configurable weights.
-- Bound RAM use by pooling CNN features to a 28×28 grid, projecting to 256 dimensions, fitting PaDiM on 128 selected components, sampling up to 300 training images, and limiting PatchCore memory/candidate patches.
-- Resize to the camera display size and smooth.
-- Restrict analysis to the annular fin/weld region.
-- Fail parts by defect area or abnormal fin-sector distribution.
-- Save overlay PNG and JSON result reports.
-
-## UI and roles
-
-The UI is PyQt6, dark, high-contrast, and modeled after the supplied NeuroIris reference image. Admin and operator sessions share the inspection screen, but only admins see the training control.
-
-- `admin`: inspect, capture/load images, train selected/new models.
-- `user`: inspect and operate only; training is hidden.
-
-## Four model support
-
-`config/models.json` defines four independent model records. Each record stores:
-
-- model ID and display name,
-- normal-image folder,
-- hybrid checkpoint path,
-- result folder,
-- fin count,
-- ROI radius ratios,
-- thresholds.
-
-## Validation plan
-
-1. Collect 100+ normal parts per model across normal process variation.
-2. Train hybrid checkpoints per model.
-3. Collect golden known-bad samples: cracked fin, missing weld, wrong weld, damaged fin, contamination, and part-position errors.
-4. Tune `anomaly_threshold`, `min_defect_area_px`, and `max_bad_sector_ratio` per model.
-5. Run repeatability trials by inspecting the same parts repeatedly across shifts.
-6. Freeze camera/lighting settings and version trained checkpoints before line release.
+See `docs/tao_deployment.md`. Commissioning requires a locked, part-disjoint validation set, defect-size coverage, false-accept/false-reject confidence limits, latency limits, golden-part challenges, and controlled change management. Software controls support this process but cannot replace it.
