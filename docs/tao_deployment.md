@@ -34,6 +34,10 @@ is the production recommendation), then run:
 python -m blower_inspection.cli train BF-001
 ```
 
+To import an export that is not already at the configured path, use
+`--model-file path/to/model.onnx`. The UI calibration button likewise asks for
+the ONNX export if it is missing.
+
 For TAO this command does **not** retrain the neural network. It runs the frozen
 export on the normal set and atomically writes a hash-bound calibration file.
 The 99.9th-percentile normal tails plus a three-sigma guard establish pixel and

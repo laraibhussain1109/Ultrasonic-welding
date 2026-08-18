@@ -48,6 +48,12 @@ Use the component crop for model training. The optional dataset preparation comm
 python -m blower_inspection.cli prepare-dataset BF-001 path/to/full-fov-good-images
 ```
 
+When the source is already the configured normal directory and `--output` is
+omitted, the command now creates a timestamped sibling backup and safely replaces
+each source with its crop. This directly supports the common capture-then-prepare
+workflow. Use an explicit separate `--output` if the full frames should remain in
+their original folder.
+
 Review every crop. Remove defects, wrong detections, hands/tools, blur, and uncontrolled glare. Split by physical part, not adjacent frames, to prevent validation leakage.
 
 After placing at least 20 reviewed normal images in the configured directory, calibrate the frozen TAO export:
@@ -55,6 +61,15 @@ After placing at least 20 reviewed normal images in the configured directory, ca
 ```bash
 python -m blower_inspection.cli train BF-001
 ```
+
+If the ONNX file is elsewhere, import and persist it in the same command:
+
+```bash
+python -m blower_inspection.cli train BF-001 --model-file C:\path\to\tao_anomaly.onnx
+```
+
+The UI's **CALIBRATE TAO MODEL** button opens an ONNX chooser when the configured
+export is missing, instead of failing with “TAO model export not found”.
 
 For `nvidia_tao`, `train` means **calibrate the exported model**; neural-network training remains in NVIDIA's supported TAO container. Use 100+ physical normal parts spanning accepted process, finish, pose, and lighting variation for production qualification.
 

@@ -70,3 +70,13 @@ def test_model_registry_persists_yolo_detector_path(tmp_path):
 
     assert str(updated.yolo_model_path) == "models/best.pt"
     assert str(ModelRegistry(path).get("BF-001").yolo_model_path) == "models/best.pt"
+
+
+def test_model_registry_persists_tao_artifact_path(tmp_path):
+    path = _registry_file(tmp_path)
+    registry = ModelRegistry(path)
+
+    updated = registry.update_model_settings("BF-001", model_file="models/export.onnx")
+
+    assert str(updated.model_file) == "models/export.onnx"
+    assert str(ModelRegistry(path).get("BF-001").model_file) == "models/export.onnx"

@@ -73,6 +73,7 @@ class ModelRegistry:
         camera_height: int | None = None,
         camera_fps: int | None = None,
         yolo_model_path: str | Path | None = None,
+        model_file: str | Path | None = None,
     ) -> PartModelConfig:
         for entry in self._data.get("models", []):
             if entry.get("id") != model_id:
@@ -87,6 +88,8 @@ class ModelRegistry:
                 entry["camera_fps"] = int(camera_fps)
             if yolo_model_path is not None:
                 entry["yolo_model_path"] = str(yolo_model_path)
+            if model_file is not None:
+                entry["model_file"] = str(model_file)
             self._save()
             self._data = self._load()
             return self.get(model_id)

@@ -123,7 +123,8 @@ class TrainWorker(QThread):
     def run(self) -> None:
         try:
             output = self.inspector.train(self.model)
-            self.finished_ok.emit(f"TRAINED {self.model.id}: {output}")
+            action = "CALIBRATED" if self.model.algorithm == "nvidia_tao" else "TRAINED"
+            self.finished_ok.emit(f"{action} {self.model.id}: {output}")
         except Exception as exc:
             self.failed.emit(f"TRAINING FAILED {self.model.id}: {exc}")
 
@@ -280,7 +281,7 @@ class InspectionWindow(QWidget):
         layout.addWidget(QLabel("FIXED LINE RATE — OPTIMISED @ 30 FPS"))
         layout.addStretch(1)
         if self.user.is_admin:
-            train = QPushButton("◆   TRAIN SELECTED MODEL")
+            train = QPushButton("◆   CALIBRATE TAO MODEL")
             train.setObjectName("train")
             train.clicked.connect(self.train_selected)
             layout.addWidget(train)
@@ -746,7 +747,26 @@ class InspectionWindow(QWidget):
             QMessageBox.warning(self, "Permission denied", "Training is available to admin users only.")
             return
         model = self.selected_model()
-        self.log.addItem(f"TRAINING STARTED {model.id}")
+        if model.algorithm == "nvidia_tao" and not model.model_file.is_file():
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                f"Select NVIDIA TAO ONNX export for {model.id}",
+                str(model.model_file.parent),
+                "ONNX models (*.onnx)",
+            )
+            if not path:
+                QMessageBox.information(
+                    self,
+                    "TAO model required",
+                    "Calibration was cancelled. Export the trained model from NVIDIA TAO as ONNX, "
+                    "then select that file here. Good images calibrate its production thresholds; "
+                    "this desktop application does not replace TAO training.",
+                )
+                return
+            model = self.registry.update_model_settings(model.id, model_file=Path(path).resolve())
+            self._refresh_models(selected_id=model.id)
+            self.inspector = inspector_for_model(model)
+        self.log.addItem(f"TAO CALIBRATION STARTED {model.id}")
         self.train_worker = TrainWorker(self.inspector, model)
         self.train_worker.finished_ok.connect(lambda message: self.log.addItem(message))
         self.train_worker.failed.connect(lambda message: QMessageBox.critical(self, "Training failed", message))

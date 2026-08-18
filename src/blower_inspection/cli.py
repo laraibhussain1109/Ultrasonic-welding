@@ -22,8 +22,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("list-models", help="Show configured part models")
 
-    train = sub.add_parser("train", help="Train selected part model from its normal-image folder")
+    train = sub.add_parser(
+        "train",
+        help="Train legacy models or calibrate a NVIDIA TAO ONNX export from normal images",
+    )
     train.add_argument("model_id")
+    train.add_argument("--model-file", help="TAO Deploy ONNX export to import before calibration")
 
     inspect = sub.add_parser("inspect", help="Inspect one image with a trained model")
     inspect.add_argument("model_id")
@@ -36,7 +40,11 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--output", help="Crop destination; defaults to the model normal_image_dir")
     prepare.add_argument("--confidence", type=float, help="Override configured YOLO confidence")
     prepare.add_argument("--no-recursive", action="store_true", help="Read only the source directory")
-    prepare.add_argument("--replace", action="store_true", help="Replace existing crops")
+    prepare.add_argument(
+        "--replace",
+        action="store_true",
+        help="Replace existing crops; in-place preparation always creates a sibling backup",
+    )
 
     add_user = sub.add_parser("add-user", help="Create or update a UI login")
     add_user.add_argument("username")
@@ -58,6 +66,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "train":
         model = registry.get(args.model_id)
+        if args.model_file:
+            candidate = Path(args.model_file).expanduser().resolve()
+            if not candidate.is_file() or candidate.suffix.lower() != ".onnx":
+                raise SystemExit(f"TAO model must be an existing .onnx file: {candidate}")
+            model = registry.update_model_settings(model.id, model_file=candidate)
         inspector = inspector_for_model(model)
         if model.algorithm == "hybrid_patchcore_padim" and model.yolo_model_path is None:
             raise SystemExit(f"No yolo_model_path is configured for {model.id}")
@@ -69,7 +82,8 @@ def main(argv: list[str] | None = None) -> int:
                 "before training (source images will not be modified)..."
             )
         output = inspector.train(model)
-        print(f"Trained {model.id}: {output}")
+        action = "Calibrated" if model.algorithm == "nvidia_tao" else "Trained"
+        print(f"{action} {model.id}: {output}")
         return 0
 
     if args.command == "inspect":
@@ -94,17 +108,28 @@ def main(argv: list[str] | None = None) -> int:
         model = registry.get(args.model_id)
         if model.yolo_model_path is None:
             raise SystemExit(f"No yolo_model_path is configured for {model.id}")
+        output = Path(args.output or model.normal_image_dir)
+        source = Path(args.source)
+        in_place = source.resolve() == output.resolve()
+        # The normal folder is the most natural place for operators to collect
+        # images.  Make that workflow safe and useful: an omitted --output means
+        # "prepare the configured normal folder", with an automatic backup.
+        replace = args.replace or (args.output is None and in_place)
+        if args.output is None and in_place and not args.replace:
+            print("Source is the configured normal folder; cropping in place after creating a full backup...")
         result = prepare_yolo_dataset(
             args.source,
-            args.output or model.normal_image_dir,
+            output,
             model.yolo_model_path,
             confidence=args.confidence if args.confidence is not None else model.yolo_confidence,
             recursive=not args.no_recursive,
-            replace=args.replace,
+            replace=replace,
+            backup_in_place=in_place,
         )
         print(
             f"Dataset prepared: discovered={result.discovered} written={result.written} "
-            f"skipped={result.skipped} failed={result.failed} manifest={result.manifest}"
+            f"skipped={result.skipped} failed={result.failed} manifest={result.manifest} "
+            f"backup={result.backup_dir or '-'}"
         )
         return 1 if result.failed else 0
 
