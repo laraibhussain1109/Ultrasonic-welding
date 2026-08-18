@@ -57,6 +57,10 @@ For Docker diagnostics, run `nvidia-smi` directly or through
 as a shell script. The deployment guide includes the complete PowerShell command
 and TAO-recommended shared-memory limits.
 
+After GPU verification, run `scripts\tao_probe.ps1` from PowerShell. It saves the
+container's actual TAO commands, packages, and anomaly-related files to
+`tao_probe.txt`; GPU output alone cannot establish that anomaly training exists.
+
 Use the component crop for model training. The optional dataset preparation command applies the configured YOLO detector to full-camera known-good images while retaining a manifest:
 
 ```bash

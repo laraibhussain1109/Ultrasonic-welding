@@ -100,6 +100,20 @@ training and export task. Save the complete help output; the exact task name and
 experiment-spec schema are needed before this repository can provide a truthful
 training command.
 
+The two `nvidia-smi` screenshots only complete the GPU check; they do not run
+this task inventory. From the repository root, the included PowerShell helper
+runs both checks and saves the information needed for the next decision:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\tao_probe.ps1
+```
+
+It writes `tao_probe.txt`. Review or share that text file—not another
+`nvidia-smi` screenshot. In particular, the report inventories the `tao`
+executable, TAO/Python help, installed relevant packages, and anomaly-related
+files. An empty anomaly section means the generic image does not contain the
+required recipe.
+
 There are therefore two distinct operations:
 
 1. **TAO training/export:** performed outside this application; produces a real
