@@ -21,6 +21,43 @@ a TAO architecture that produces a spatial anomaly map. TAO is a framework, so
 selecting and validating the actual visual-anomaly architecture is still
 required.
 
+### Do not use the Cosmos-RL image for this workflow
+
+`nvcr.io/nvidia/tao/tao-toolkit:7.1.0-cosmos-rl` is a Cosmos reinforcement-
+learning image. Pulling it proves that Docker can reach NGC, but it does **not**
+provide a visual surface-anomaly training recipe and it cannot be used to create
+the `tao_anomaly.onnx` artifact expected by this application.
+
+Do not start calibration and do not rename a checkpoint or an arbitrary ONNX
+file to `tao_anomaly.onnx`. The runtime contract requires a model that actually
+accepts an image and emits a spatial anomaly map.
+
+Before downloading another multi-gigabyte container, use the NVIDIA NGC catalog
+and the documentation for the exact TAO release to confirm all of the following:
+
+1. A supported **visual anomaly detection/localization** task or recipe exists.
+2. That recipe supports training on normal surface images (and any labels it
+   requires).
+3. Its export command produces ONNX, not only an encrypted or framework-specific
+   checkpoint.
+4. The exported model exposes a spatial anomaly-map output compatible with the
+   contract below.
+
+If the selected TAO release has no such recipe, TAO Toolkit is not itself a
+replacement anomaly algorithm. In that case this repository cannot honestly
+train the requested detector with TAO, and a supported NVIDIA model/recipe or a
+different validated anomaly architecture must be selected first.
+
+You can safely verify Docker GPU passthrough for the image you already pulled:
+
+```powershell
+docker run --rm --gpus all `
+  nvcr.io/nvidia/tao/tao-toolkit:7.1.0-cosmos-rl nvidia-smi
+```
+
+That is only an environment check. A successful `nvidia-smi` is not model
+training and does not make the Cosmos-RL image suitable for defect detection.
+
 There are therefore two distinct operations:
 
 1. **TAO training/export:** performed outside this application; produces a real

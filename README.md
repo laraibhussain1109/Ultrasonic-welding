@@ -47,6 +47,11 @@ NVIDIA TAO training toolkit separately through NVIDIA NGC when you do not alread
 have a qualified ONNX export. The project's `[tao]` extra is the deployment
 runtime only. See [the installation and two-stage explanation](docs/tao_deployment.md#what-must-be-installed).
 
+The `7.1.0-cosmos-rl` container is not a visual anomaly-training image. Do not
+use it to manufacture or rename an ONNX artifact for this application; first
+confirm an NVIDIA-supported visual anomaly localization recipe and its export
+contract in the deployment guide.
+
 Use the component crop for model training. The optional dataset preparation command applies the configured YOLO detector to full-camera known-good images while retaining a manifest:
 
 ```bash
