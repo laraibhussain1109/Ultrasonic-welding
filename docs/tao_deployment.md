@@ -5,6 +5,40 @@ designed to **fail closed**, be measurable, and prevent a model artifact from
 being promoted without validation. It does not remove the need for controlled
 lighting, gauge R&R, golden samples, or a safety-rated PLC interlock.
 
+## What must be installed
+
+TAO is NVIDIA's separate model-training toolkit; it is not an anomaly model and
+it is not bundled with this repository. The `tao` Python extra in this project
+installs only the **ONNX inference runtime**. It cannot create
+`tao_anomaly.onnx` from good images.
+
+If no qualified `.onnx` export exists yet, obtain NVIDIA TAO through NVIDIA NGC
+and use the TAO release/container compatible with the workstation's NVIDIA
+driver and CUDA environment. Follow the official instructions for that exact
+release. Containerized training normally requires an NVIDIA GPU, its driver, a
+supported Docker/WSL2 setup, access to NGC, a TAO experiment specification, and
+a TAO architecture that produces a spatial anomaly map. TAO is a framework, so
+selecting and validating the actual visual-anomaly architecture is still
+required.
+
+There are therefore two distinct operations:
+
+1. **TAO training/export:** performed outside this application; produces a real
+   `.onnx` file.
+2. **Line calibration:** performed by this application on reviewed good images;
+   produces `tao_calibration.json` and does not change neural-network weights.
+
+Passing `data/models/BF-001` to `--model-file` only passes a directory. It does
+not ask TAO to train there. Pass the exported file itself, for example:
+
+```powershell
+python -m src.blower_inspection.cli train BF-001 --model-file `
+  "C:\TAO\exports\bf001_anomaly.onnx"
+```
+
+If a directory contains exactly one `.onnx` file, the CLI will now locate it.
+If it contains none or more than one, it reports the precise corrective action.
+
 ## 1. Train and export
 
 Train the visual-anomaly model with the NVIDIA TAO release qualified for the

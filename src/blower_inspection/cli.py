@@ -15,6 +15,33 @@ from .esp32_output import ESP32FailOutput
 from .dataset import prepare_yolo_dataset
 
 
+def resolve_onnx_model(value: str | Path) -> Path:
+    """Resolve an ONNX file, accepting a directory only when unambiguous."""
+    candidate = Path(value).expanduser().resolve()
+    if candidate.is_dir():
+        exports = sorted(candidate.rglob("*.onnx"))
+        if len(exports) == 1:
+            return exports[0]
+        if not exports:
+            raise ValueError(
+                f"No .onnx export exists in {candidate}. You selected a folder, not a TAO model. "
+                "NVIDIA TAO is a separate training toolkit: train and export a visual-anomaly model "
+                "first, then pass the exact .onnx file to --model-file. See docs/tao_deployment.md."
+            )
+        names = ", ".join(str(path) for path in exports[:5])
+        raise ValueError(
+            f"Multiple ONNX exports were found in {candidate}; pass one exact file to --model-file: {names}"
+        )
+    if not candidate.is_file():
+        raise ValueError(
+            f"TAO ONNX export does not exist: {candidate}. --model-file must name the exported .onnx "
+            "file, not its intended output folder. See docs/tao_deployment.md."
+        )
+    if candidate.suffix.lower() != ".onnx":
+        raise ValueError(f"TAO model must be an .onnx export, not: {candidate}")
+    return candidate
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="blower-inspection")
     parser.add_argument("--models", default="config/models.json", help="Path to model registry JSON")
@@ -67,9 +94,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "train":
         model = registry.get(args.model_id)
         if args.model_file:
-            candidate = Path(args.model_file).expanduser().resolve()
-            if not candidate.is_file() or candidate.suffix.lower() != ".onnx":
-                raise SystemExit(f"TAO model must be an existing .onnx file: {candidate}")
+            try:
+                candidate = resolve_onnx_model(args.model_file)
+            except ValueError as exc:
+                raise SystemExit(str(exc)) from exc
             model = registry.update_model_settings(model.id, model_file=candidate)
         inspector = inspector_for_model(model)
         if model.algorithm == "hybrid_patchcore_padim" and model.yolo_model_path is None:

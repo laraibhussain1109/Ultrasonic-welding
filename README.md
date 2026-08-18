@@ -42,6 +42,11 @@ Start the UI with `python -m blower_inspection.app`.
 
 Each part in `config/models.json` points to its own TAO ONNX export, calibration file, normal-image directory, output directory, camera mode, ROI, and YOLO locator. Export a fixed-spatial-shape TAO visual-anomaly model as, for example, `data/models/BF-001/tao_anomaly.onnx`.
 
+**TAO is not downloaded or trained by this application.** Install/launch the
+NVIDIA TAO training toolkit separately through NVIDIA NGC when you do not already
+have a qualified ONNX export. The project's `[tao]` extra is the deployment
+runtime only. See [the installation and two-stage explanation](docs/tao_deployment.md#what-must-be-installed).
+
 Use the component crop for model training. The optional dataset preparation command applies the configured YOLO detector to full-camera known-good images while retaining a manifest:
 
 ```bash
