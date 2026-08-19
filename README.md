@@ -70,6 +70,12 @@ spatial change map. This is supervised paired change detection: the existing
 good images provide no-change pairs, but real representative defective images
 and pixel masks are still required to teach and validate actionable changes.
 
+The commands have intentionally separate meanings: `tao-train` trains weights
+inside the TAO Docker image, `tao-export` creates the ONNX artifact, and `train`
+calibrates that existing artifact for the line. Running only `train BF-001`
+before export now stops immediately with the corrective sequence instead of a
+deep `FileNotFoundError` traceback.
+
 Use the component crop for model training. The optional dataset preparation command applies the configured YOLO detector to full-camera known-good images while retaining a manifest:
 
 ```bash

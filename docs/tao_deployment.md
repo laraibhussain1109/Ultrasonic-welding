@@ -178,6 +178,43 @@ There are therefore two distinct operations:
 2. **Line calibration:** performed by this application on reviewed good images;
    produces `tao_calibration.json` and does not change neural-network weights.
 
+This distinction explains the `FileNotFoundError` shown by
+`python -m ...cli train BF-001`: that command reached calibration, looked for
+`data/models/BF-001/visual_changenet.onnx`, and correctly stopped because TAO
+training/export had not created it. Finding VisualChangeNet Python files in the
+container confirms availability; it does not mean a model has been trained.
+
+The repository now exposes the external tasks explicitly:
+
+```powershell
+# Experiment YAML and every dataset/result path it references must be inside
+# the repository mounted at /workspace/project in the container.
+python -m src.blower_inspection.cli tao-train BF-001 `
+  --spec specs/visual_changenet/bf001_train.yaml
+
+python -m src.blower_inspection.cli tao-export BF-001 `
+  --spec specs/visual_changenet/bf001_export.yaml
+
+python -m src.blower_inspection.cli train BF-001 `
+  --model-file data/models/BF-001/visual_changenet.onnx
+```
+
+The first command invokes TAO's installed module
+`nvidia_tao_pytorch.cv.visual_changenet.entrypoint.visual_changenet train`; the
+second invokes its `export` task; only the third performs line calibration.
+
+Before writing a spec, inspect the exact TAO 7.1 schema and bundled examples:
+
+```powershell
+docker run --rm --gpus all --shm-size=16g `
+  --ulimit memlock=-1 --ulimit stack=67108864 `
+  nvcr.io/nvidia/tao/tao-toolkit:7.1.0-pyt /bin/bash -lc `
+  "python -m nvidia_tao_pytorch.cv.visual_changenet.entrypoint.visual_changenet --help; find /usr/local/lib/python3.12/dist-packages/nvidia_tao_pytorch/cv/visual_changenet -iname '*.yaml' -o -iname '*.yml'"
+```
+
+Use the segmentation schema shipped by that installed version. Do not invent
+configuration keys from a different TAO release.
+
 Passing `data/models/BF-001` to `--model-file` only passes a directory. It does
 not ask TAO to train there. Pass the exported file itself, for example:
 

@@ -13,6 +13,7 @@ from .config import ModelRegistry, ensure_model_folders
 from .tao_inspector import inspector_for_model
 from .esp32_output import ESP32FailOutput
 from .dataset import prepare_yolo_dataset
+from .tao_training import run_visual_changenet_task
 
 
 def resolve_onnx_model(value: str | Path) -> Path:
@@ -55,6 +56,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     train.add_argument("model_id")
     train.add_argument("--model-file", help="TAO Deploy ONNX export to import before calibration")
+
+    tao_train = sub.add_parser("tao-train", help="Train VisualChangeNet in the TAO Docker image")
+    tao_train.add_argument("model_id")
+    tao_train.add_argument("--spec", required=True, help="VisualChangeNet training experiment YAML inside this project")
+    tao_train.add_argument("--image", default="nvcr.io/nvidia/tao/tao-toolkit:7.1.0-pyt")
+
+    tao_export = sub.add_parser("tao-export", help="Export VisualChangeNet in the TAO Docker image")
+    tao_export.add_argument("model_id")
+    tao_export.add_argument("--spec", required=True, help="VisualChangeNet export experiment YAML inside this project")
+    tao_export.add_argument("--image", default="nvcr.io/nvidia/tao/tao-toolkit:7.1.0-pyt")
 
     inspect = sub.add_parser("inspect", help="Inspect one image with a trained model")
     inspect.add_argument("model_id")
@@ -103,6 +114,12 @@ def main(argv: list[str] | None = None) -> int:
         if model.algorithm == "hybrid_patchcore_padim" and model.yolo_model_path is None:
             raise SystemExit(f"No yolo_model_path is configured for {model.id}")
         if model.algorithm == "nvidia_tao":
+            if not model.model_file.is_file():
+                raise SystemExit(
+                    f"VisualChangeNet export not found: {model.model_file}. The `train` command calibrates an "
+                    "exported model; it does not run TAO weight training. Run `tao-train --spec <train.yaml>`, "
+                    "then `tao-export --spec <export.yaml>`, or pass the resulting ONNX with --model-file."
+                )
             print(f"Calibrating TAO export {model.model_file} with normals in {model.normal_image_dir}...")
         else:
             print(
@@ -112,6 +129,16 @@ def main(argv: list[str] | None = None) -> int:
         output = inspector.train(model)
         action = "Calibrated" if model.algorithm == "nvidia_tao" else "Trained"
         print(f"{action} {model.id}: {output}")
+        return 0
+
+    if args.command in {"tao-train", "tao-export"}:
+        model = registry.get(args.model_id)
+        if model.algorithm != "nvidia_tao":
+            raise SystemExit(f"{model.id} is not configured for NVIDIA TAO")
+        task = "train" if args.command == "tao-train" else "export"
+        print(f"Starting TAO VisualChangeNet {task} with {args.spec} in {args.image}...")
+        run_visual_changenet_task(task, args.spec, image=args.image)
+        print(f"TAO VisualChangeNet {task} completed")
         return 0
 
     if args.command == "inspect":
