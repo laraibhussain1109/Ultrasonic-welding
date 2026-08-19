@@ -60,6 +60,9 @@ and TAO-recommended shared-memory limits.
 After GPU verification, run `scripts\tao_probe.ps1` from PowerShell. It saves the
 container's actual TAO commands, packages, and anomaly-related files to
 `tao_probe.txt`; GPU output alone cannot establish that anomaly training exists.
+PyTorch `autograd/anomaly_mode.py` and `test_anomaly_detect_nan` matches are
+gradient/NaN debugging code—not visual defect detection. The updated probe
+filters those false positives and prints an explicit capability verdict.
 
 Use the component crop for model training. The optional dataset preparation command applies the configured YOLO detector to full-camera known-good images while retaining a manifest:
 

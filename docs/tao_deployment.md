@@ -114,6 +114,44 @@ executable, TAO/Python help, installed relevant packages, and anomaly-related
 files. An empty anomaly section means the generic image does not contain the
 required recipe.
 
+### Interpreting the supplied TAO 7.1 probe report
+
+The reported `anomaly_mode.py`, `test_anomaly_detect_nan`, and
+`test_anomaly_grad_warnings` paths are **PyTorch autograd debugging utilities**.
+In PyTorch, “anomaly detection” in this context means detecting NaN values and
+invalid operations while differentiating a neural network; it does not inspect
+images for surface defects.
+
+Likewise, `onnx`, `onnxruntime-gpu`, and `nvidia_tao_pytorch` being installed
+only shows that the base image contains framework/export/runtime libraries. It
+does not identify a trainable visual-anomaly task. The decisive lines in the
+report are:
+
+```text
+tao: command not found
+No module named tao
+```
+
+and the absence of EfficientAD, a visual-anomaly module, or another documented
+surface-anomaly training recipe. Therefore this report does **not** demonstrate
+TAO visual anomaly support. Do not proceed to calibration: there is no trained
+model to calibrate.
+
+The probe now excludes PyTorch autograd/test false positives, inventories the
+top-level `nvidia_tao_pytorch` task modules, and prints an explicit verdict. Run
+the updated script once after pulling future TAO images.
+
+For this project there are only two technically valid ways forward:
+
+1. Select an NVIDIA-documented TAO visual-anomaly train/export recipe and use
+   the exact container/spec it names; or
+2. Change the requirement to a TAO-supported supervised detector/segmenter,
+   collect and label representative defective images, and update this
+   application for that model's real output contract.
+
+The second option cannot be trained from the 220 good-only images. A generic TAO
+base image and an ONNX filename do not create an anomaly algorithm.
+
 There are therefore two distinct operations:
 
 1. **TAO training/export:** performed outside this application; produces a real

@@ -25,16 +25,43 @@ tao --help 2>&1
 python -m tao --help 2>&1
 echo '=== INSTALLED PYTHON PACKAGES ==='
 python -m pip list 2>/dev/null | grep -Ei 'tao|anomal|efficientad|patchcore|onnx'
-echo '=== ANOMALY-RELATED FILES ==='
-find /opt /workspace /usr/local/lib/python* -maxdepth 5 \
-  \( -iname '*anomal*' -o -iname '*efficientad*' -o -iname '*patchcore*' \) \
-  -print 2>/dev/null | head -n 300
+echo '=== NVIDIA TAO PYTORCH TASK MODULES ==='
+python - <<'PY'
+import pkgutil
+try:
+    import nvidia_tao_pytorch
+except Exception as exc:
+    print(f'NVIDIA_TAO_IMPORT_ERROR: {exc}')
+else:
+    names = sorted(module.name for module in pkgutil.iter_modules(nvidia_tao_pytorch.__path__))
+    for name in names:
+        print(f'TAO_TASK_MODULE: {name}')
+    candidates = [name for name in names if any(word in name.lower() for word in ('anomal', 'efficientad', 'patchcore'))]
+    for name in candidates:
+        print(f'VISUAL_ANOMALY_CANDIDATE: {name}')
+PY
+echo '=== VISUAL-ANOMALY FILE CANDIDATES ==='
+# PyTorch's torch/autograd/anomaly_mode.py is a NaN/gradient debugger, not an
+# industrial visual-anomaly model. Exclude PyTorch internals and test fixtures.
+find /opt /workspace /usr/local/lib/python* -maxdepth 7 \
+  \( -iname '*efficientad*' -o -iname '*patchcore*' -o -iname '*visual*anomal*' \) \
+  ! -path '*/torch/*' ! -path '*/pytorch/test/*' -print 2>/dev/null | head -n 300
 '@
 
 $Result = docker run --rm --gpus all --shm-size=16g `
     --ulimit memlock=-1 --ulimit stack=67108864 `
     $Image /bin/bash -lc $Probe 2>&1
 $Result | Tee-Object -FilePath $Output
+
+$Report = $Result -join "`n"
+$HasCandidate = $Report -match "VISUAL_ANOMALY_CANDIDATE:" -or `
+    ($Report -match "=== VISUAL-ANOMALY FILE CANDIDATES ===\s*\r?\n\s*/")
+if ($HasCandidate) {
+    Write-Warning "A possible visual-anomaly component was found. Verify its official train/export documentation before use."
+} else {
+    Write-Warning "VERDICT: NO VISUAL-ANOMALY TRAINING TASK FOUND IN THIS IMAGE."
+    Write-Warning "PyTorch autograd anomaly_mode files are numerical debugging utilities, not defect detection."
+}
 
 Write-Host ""
 Write-Host "Probe saved to $((Resolve-Path $Output).Path)"
