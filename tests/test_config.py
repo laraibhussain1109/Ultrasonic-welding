@@ -39,6 +39,7 @@ def test_model_registry_defaults_camera_and_allows_missing_roi(tmp_path):
     assert model.image_size == 640
     assert model.counting_line_ratio == 0.45
     assert model.counting_direction == "left_to_right"
+    assert model.tao_change_class_index == 1
 
 
 def test_model_registry_persists_roi_and_camera_settings(tmp_path):

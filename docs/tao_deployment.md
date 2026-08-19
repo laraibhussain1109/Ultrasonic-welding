@@ -141,16 +141,35 @@ The probe now excludes PyTorch autograd/test false positives, inventories the
 top-level `nvidia_tao_pytorch` task modules, and prints an explicit verdict. Run
 the updated script once after pulling future TAO images.
 
-For this project there are only two technically valid ways forward:
+VisualChangeNet is the relevant TAO task when it is present. It is a **paired
+change-detection model**, not a good-only anomaly learner. Training examples
+must contain a registered reference image, a comparison image, and the target
+change label/mask required by the selected VisualChangeNet variant. Good/good
+pairs teach the no-change class, but good images alone provide no positive
+signal for scratches, broken fins, or missing welds.
 
-1. Select an NVIDIA-documented TAO visual-anomaly train/export recipe and use
-   the exact container/spec it names; or
-2. Change the requirement to a TAO-supported supervised detector/segmenter,
-   collect and label representative defective images, and update this
-   application for that model's real output contract.
+The application runtime is therefore VisualChangeNet-specific:
 
-The second option cannot be trained from the 220 good-only images. A generic TAO
-base image and an ONNX filename do not create an anomaly algorithm.
+* the ONNX export must have two image inputs (golden reference and inspected
+  part), not the previous generic single-image contract;
+* segmentation logits are converted to a configurable change-class probability
+  map (`tao_change_class_index`, default `1`);
+* calibration automatically selects and persists a reviewed normal medoid as
+  the golden reference when one is not configured;
+* both the model and reference SHA-256 are bound into calibration, so changing
+  either inhibits inspection.
+
+For this project there are two technically valid VisualChangeNet data paths:
+
+1. Train VisualChangeNet segmentation with aligned golden/part pairs and
+   pixel-level change masks for representative defects; or
+2. Train VisualChangeNet classification with paired images and change labels,
+   accepting that classification cannot localize defects for a heatmap/box UI.
+
+Neither option can be qualified from the 220 good-only images alone. For the
+surface-localization requirement, use the segmentation variant and collect real
+defective parts with masks. Synthetic defects may augment training, but must not
+replace locked validation on real defects.
 
 There are therefore two distinct operations:
 
@@ -164,7 +183,7 @@ not ask TAO to train there. Pass the exported file itself, for example:
 
 ```powershell
 python -m src.blower_inspection.cli train BF-001 --model-file `
-  "C:\TAO\exports\bf001_anomaly.onnx"
+  "C:\TAO\exports\bf001_visual_changenet.onnx"
 ```
 
 If a directory contains exactly one `.onnx` file, the CLI will now locate it.

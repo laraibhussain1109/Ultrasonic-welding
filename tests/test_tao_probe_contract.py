@@ -8,6 +8,7 @@ def test_tao_probe_checks_gpu_and_anomaly_training_inventory():
     assert "tao --help" in source
     assert "pip list" in source
     assert "VISUAL_ANOMALY_CANDIDATE" in source
+    assert "visual_changenet" in source
     assert "NO VISUAL-ANOMALY TRAINING TASK FOUND" in source
     assert "autograd/anomaly_mode.py" in source
     assert "tao_probe.txt" in source

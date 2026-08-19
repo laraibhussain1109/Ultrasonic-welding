@@ -37,9 +37,13 @@ class PartModelConfig:
     # separately so replacing an engine cannot silently retain stale limits.
     tao_calibration_file: Path | None = None
     tao_input_name: str | None = None
+    tao_reference_input_name: str | None = None
+    tao_test_input_name: str | None = None
     tao_output_name: str | None = None
     tao_score_output_name: str | None = None
     tao_require_gpu: bool = True
+    tao_reference_image: Path | None = None
+    tao_change_class_index: int = 1
 
 
 class ModelRegistry:
@@ -132,9 +136,13 @@ class ModelRegistry:
             algorithm=str(entry.get("algorithm", "nvidia_tao")),
             tao_calibration_file=Path(entry["tao_calibration_file"]) if entry.get("tao_calibration_file") else None,
             tao_input_name=entry.get("tao_input_name"),
+            tao_reference_input_name=entry.get("tao_reference_input_name"),
+            tao_test_input_name=entry.get("tao_test_input_name"),
             tao_output_name=entry.get("tao_output_name"),
             tao_score_output_name=entry.get("tao_score_output_name"),
             tao_require_gpu=bool(entry.get("tao_require_gpu", True)),
+            tao_reference_image=Path(entry["tao_reference_image"]) if entry.get("tao_reference_image") else None,
+            tao_change_class_index=max(0, int(entry.get("tao_change_class_index", 1))),
         )
 
 

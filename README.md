@@ -64,6 +64,12 @@ PyTorch `autograd/anomaly_mode.py` and `test_anomaly_detect_nan` matches are
 gradient/NaN debugging code—not visual defect detection. The updated probe
 filters those false positives and prints an explicit capability verdict.
 
+The supported TAO design target is now **VisualChangeNet segmentation**. Its
+export must accept a golden/reference image plus the inspected image and emit a
+spatial change map. This is supervised paired change detection: the existing
+good images provide no-change pairs, but real representative defective images
+and pixel masks are still required to teach and validate actionable changes.
+
 Use the component crop for model training. The optional dataset preparation command applies the configured YOLO detector to full-camera known-good images while retaining a manifest:
 
 ```bash

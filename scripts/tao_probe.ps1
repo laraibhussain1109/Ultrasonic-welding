@@ -36,7 +36,7 @@ else:
     names = sorted(module.name for module in pkgutil.iter_modules(nvidia_tao_pytorch.__path__))
     for name in names:
         print(f'TAO_TASK_MODULE: {name}')
-    candidates = [name for name in names if any(word in name.lower() for word in ('anomal', 'efficientad', 'patchcore'))]
+    candidates = [name for name in names if any(word in name.lower() for word in ('visual_changenet', 'changenet', 'anomal', 'efficientad', 'patchcore'))]
     for name in candidates:
         print(f'VISUAL_ANOMALY_CANDIDATE: {name}')
 PY
@@ -44,7 +44,7 @@ echo '=== VISUAL-ANOMALY FILE CANDIDATES ==='
 # PyTorch's torch/autograd/anomaly_mode.py is a NaN/gradient debugger, not an
 # industrial visual-anomaly model. Exclude PyTorch internals and test fixtures.
 find /opt /workspace /usr/local/lib/python* -maxdepth 7 \
-  \( -iname '*efficientad*' -o -iname '*patchcore*' -o -iname '*visual*anomal*' \) \
+  \( -iname '*visual_changenet*' -o -iname '*changenet*' -o -iname '*efficientad*' -o -iname '*patchcore*' -o -iname '*visual*anomal*' \) \
   ! -path '*/torch/*' ! -path '*/pytorch/test/*' -print 2>/dev/null | head -n 300
 '@
 
