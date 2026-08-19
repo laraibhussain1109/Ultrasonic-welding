@@ -187,19 +187,25 @@ container confirms availability; it does not mean a model has been trained.
 The repository now exposes the external tasks explicitly:
 
 ```powershell
-# Experiment YAML and every dataset/result path it references must be inside
-# the repository mounted at /workspace/project in the container.
+# Copy TAO 7.1's real segmentation spec out of the installed container.
+python -m src.blower_inspection.cli tao-init BF-001
+
+# Edit the copied YAML first. Every dataset/result path it references must be
+# under the repository and use /workspace/project/... inside the container.
+notepad specs/visual_changenet/bf-001_segmentation.yaml
+
 python -m src.blower_inspection.cli tao-train BF-001 `
-  --spec specs/visual_changenet/bf001_train.yaml
+  --spec specs/visual_changenet/bf-001_segmentation.yaml
 
 python -m src.blower_inspection.cli tao-export BF-001 `
-  --spec specs/visual_changenet/bf001_export.yaml
+  --spec specs/visual_changenet/bf-001_segmentation.yaml
 
 python -m src.blower_inspection.cli train BF-001 `
   --model-file data/models/BF-001/visual_changenet.onnx
 ```
 
-The first command invokes TAO's installed module
+`tao-init` copies the exact default spec from the installed container rather
+than generating an invented schema. The training command invokes TAO's installed module
 `nvidia_tao_pytorch.cv.visual_changenet.entrypoint.visual_changenet train`; the
 second invokes its `export` task; only the third performs line calibration.
 
@@ -214,6 +220,20 @@ docker run --rm --gpus all --shm-size=16g `
 
 Use the segmentation schema shipped by that installed version. Do not invent
 configuration keys from a different TAO release.
+
+The screenshot shows two separate CLI validation errors:
+
+* `tao-train BF-001` omitted mandatory `--spec` because TAO cannot train without
+  dataset/model/optimizer settings;
+* `tao-train --spec ...` omitted `model_id` in the previous CLI version.
+
+The model ID is now optional and defaults to `active_model`, so either ordering
+works after `tao-init` creates the file:
+
+```powershell
+python -m src.blower_inspection.cli tao-train BF-001 --spec specs/visual_changenet/bf-001_segmentation.yaml
+python -m src.blower_inspection.cli tao-train --spec specs/visual_changenet/bf-001_segmentation.yaml
+```
 
 Passing `data/models/BF-001` to `--model-file` only passes a directory. It does
 not ask TAO to train there. Pass the exported file itself, for example:

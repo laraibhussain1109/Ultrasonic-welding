@@ -8,6 +8,36 @@ from pathlib import Path
 VISUAL_CHANGENET_MODULE = (
     "nvidia_tao_pytorch.cv.visual_changenet.entrypoint.visual_changenet"
 )
+VISUAL_CHANGENET_SPECS = (
+    "/usr/local/lib/python3.12/dist-packages/nvidia_tao_pytorch/cv/"
+    "visual_changenet/experiment_specs"
+)
+
+
+def copy_default_visual_changenet_spec(
+    destination: str | Path,
+    *,
+    variant: str = "segmentation",
+    image: str = "nvcr.io/nvidia/tao/tao-toolkit:7.1.0-pyt",
+) -> Path:
+    """Copy the exact TAO-container default spec into the project."""
+    filenames = {
+        "segmentation": "experiment_spec.yaml",
+        "classification": "experiment_spec_classify.yaml",
+    }
+    if variant not in filenames:
+        raise ValueError(f"Unsupported VisualChangeNet variant: {variant}")
+    source = f"{VISUAL_CHANGENET_SPECS}/{filenames[variant]}"
+    command = ["docker", "run", "--rm", image, "cat", source]
+    completed = subprocess.run(command, check=True, capture_output=True, text=True)
+    if not completed.stdout.strip():
+        raise RuntimeError(f"TAO returned an empty VisualChangeNet spec: {source}")
+    output = Path(destination)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    temporary.write_text(completed.stdout, encoding="utf-8")
+    temporary.replace(output)
+    return output
 
 
 def run_visual_changenet_task(

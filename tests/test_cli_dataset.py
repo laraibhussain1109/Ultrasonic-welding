@@ -24,6 +24,18 @@ def test_train_accepts_tao_model_file():
     assert args.model_file == "export.onnx"
 
 
+def test_tao_train_defaults_to_active_model_but_requires_spec():
+    args = build_parser().parse_args(["tao-train", "--spec", "spec.yaml"])
+    assert args.model_id is None
+    assert args.spec == "spec.yaml"
+
+
+def test_tao_init_defaults_to_segmentation():
+    args = build_parser().parse_args(["tao-init", "BF-001"])
+    assert args.model_id == "BF-001"
+    assert args.variant == "segmentation"
+
+
 def test_onnx_directory_resolves_single_export(tmp_path):
     export = tmp_path / "exports" / "model.onnx"
     export.parent.mkdir()

@@ -76,6 +76,12 @@ calibrates that existing artifact for the line. Running only `train BF-001`
 before export now stops immediately with the corrective sequence instead of a
 deep `FileNotFoundError` traceback.
 
+Start with `python -m src.blower_inspection.cli tao-init BF-001`; it copies the
+exact TAO 7.1 VisualChangeNet segmentation YAML from the installed container.
+Edit its dataset/pretrained/results settings, then pass it to `tao-train
+--spec ...`. The model ID is optional for TAO commands and defaults to the
+configured active model.
+
 Use the component crop for model training. The optional dataset preparation command applies the configured YOLO detector to full-camera known-good images while retaining a manifest:
 
 ```bash

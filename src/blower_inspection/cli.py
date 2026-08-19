@@ -13,7 +13,7 @@ from .config import ModelRegistry, ensure_model_folders
 from .tao_inspector import inspector_for_model
 from .esp32_output import ESP32FailOutput
 from .dataset import prepare_yolo_dataset
-from .tao_training import run_visual_changenet_task
+from .tao_training import copy_default_visual_changenet_spec, run_visual_changenet_task
 
 
 def resolve_onnx_model(value: str | Path) -> Path:
@@ -58,14 +58,20 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--model-file", help="TAO Deploy ONNX export to import before calibration")
 
     tao_train = sub.add_parser("tao-train", help="Train VisualChangeNet in the TAO Docker image")
-    tao_train.add_argument("model_id")
+    tao_train.add_argument("model_id", nargs="?", help="Part model; defaults to active_model")
     tao_train.add_argument("--spec", required=True, help="VisualChangeNet training experiment YAML inside this project")
     tao_train.add_argument("--image", default="nvcr.io/nvidia/tao/tao-toolkit:7.1.0-pyt")
 
     tao_export = sub.add_parser("tao-export", help="Export VisualChangeNet in the TAO Docker image")
-    tao_export.add_argument("model_id")
+    tao_export.add_argument("model_id", nargs="?", help="Part model; defaults to active_model")
     tao_export.add_argument("--spec", required=True, help="VisualChangeNet export experiment YAML inside this project")
     tao_export.add_argument("--image", default="nvcr.io/nvidia/tao/tao-toolkit:7.1.0-pyt")
+
+    tao_init = sub.add_parser("tao-init", help="Copy the installed TAO VisualChangeNet default spec")
+    tao_init.add_argument("model_id", nargs="?", help="Part model; defaults to active_model")
+    tao_init.add_argument("--variant", choices=["segmentation", "classification"], default="segmentation")
+    tao_init.add_argument("--output", help="Destination YAML; defaults under specs/visual_changenet")
+    tao_init.add_argument("--image", default="nvcr.io/nvidia/tao/tao-toolkit:7.1.0-pyt")
 
     inspect = sub.add_parser("inspect", help="Inspect one image with a trained model")
     inspect.add_argument("model_id")
@@ -131,8 +137,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{action} {model.id}: {output}")
         return 0
 
+    if args.command == "tao-init":
+        model = registry.get(args.model_id) if args.model_id else registry.active()
+        output = Path(args.output or f"specs/visual_changenet/{model.id.lower()}_{args.variant}.yaml")
+        copied = copy_default_visual_changenet_spec(output, variant=args.variant, image=args.image)
+        print(f"Copied TAO 7.1 VisualChangeNet {args.variant} spec to {copied}")
+        print("Edit dataset, results, pretrained-model, and training fields before running tao-train.")
+        return 0
+
     if args.command in {"tao-train", "tao-export"}:
-        model = registry.get(args.model_id)
+        model = registry.get(args.model_id) if args.model_id else registry.active()
         if model.algorithm != "nvidia_tao":
             raise SystemExit(f"{model.id} is not configured for NVIDIA TAO")
         task = "train" if args.command == "tao-train" else "export"

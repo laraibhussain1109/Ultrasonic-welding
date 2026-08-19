@@ -3,7 +3,11 @@ from unittest.mock import patch
 
 import pytest
 
-from blower_inspection.tao_training import VISUAL_CHANGENET_MODULE, run_visual_changenet_task
+from blower_inspection.tao_training import (
+    VISUAL_CHANGENET_MODULE,
+    copy_default_visual_changenet_spec,
+    run_visual_changenet_task,
+)
 
 
 def test_visual_changenet_training_runs_official_module_in_docker(tmp_path: Path):
@@ -34,3 +38,15 @@ def test_visual_changenet_spec_must_be_in_project(tmp_path: Path):
             run_visual_changenet_task("export", outside, project_dir=tmp_path)
     finally:
         outside.unlink()
+
+
+def test_copy_default_segmentation_spec_from_installed_container(tmp_path: Path):
+    completed = type("Completed", (), {"stdout": "dataset:\n  segment:\n"})()
+    with patch("blower_inspection.tao_training.subprocess.run", return_value=completed) as run:
+        output = copy_default_visual_changenet_spec(tmp_path / "spec.yaml")
+
+    assert output.read_text(encoding="utf-8") == "dataset:\n  segment:\n"
+    command = run.call_args.args[0]
+    assert command[:3] == ["docker", "run", "--rm"]
+    assert command[-2:] == ["cat", "/usr/local/lib/python3.12/dist-packages/nvidia_tao_pytorch/cv/visual_changenet/experiment_specs/experiment_spec.yaml"]
+    assert run.call_args.kwargs == {"check": True, "capture_output": True, "text": True}
