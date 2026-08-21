@@ -82,6 +82,11 @@ Edit its dataset/pretrained/results settings, then pass it to `tao-train
 --spec ...`. The model ID is optional for TAO commands and defaults to the
 configured active model.
 
+If an older generated YAML begins with the TAO release/license banner, delete it
+and rerun `tao-init`. The copier now bypasses the container entrypoint with
+`--entrypoint cat`, and training preflight rejects banner-corrupted YAML with a
+direct repair message.
+
 Use the component crop for model training. The optional dataset preparation command applies the configured YOLO detector to full-camera known-good images while retaining a manifest:
 
 ```bash

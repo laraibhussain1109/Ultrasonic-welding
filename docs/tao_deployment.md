@@ -221,6 +221,29 @@ docker run --rm --gpus all --shm-size=16g `
 Use the segmentation schema shipped by that installed version. Do not invent
 configuration keys from a different TAO release.
 
+### Fix for `yaml.scanner.ScannerError` at line 12
+
+Earlier `tao-init` versions ran `cat` through TAO's default Docker entrypoint.
+That entrypoint printed the release banner, license URL, GPU warning, and SHMEM
+notice to stdout before printing the YAML. All of those lines were accidentally
+saved into `bf-001_segmentation.yaml`; the colon in the license URL then caused
+PyYAML's `mapping values are not allowed here` error. The banner displayed above
+`encryption_key:` in the supplied file confirms this corruption.
+
+The copier now runs Docker with `--entrypoint cat`, strips any pre-YAML output,
+and the trainer rejects a banner-corrupted file before launching TAO. Repair an
+existing checkout by regenerating the spec:
+
+```powershell
+Remove-Item .\specs\visual_changenet\bf-001_segmentation.yaml
+python -m src.blower_inspection.cli tao-init BF-001
+Get-Content .\specs\visual_changenet\bf-001_segmentation.yaml -First 5
+```
+
+The first line must be `encryption_key:`, not `=== TAO Toolkit PyTorch ===`.
+Then edit the default `/data`, `/results`, and pretrained checkpoint paths to
+valid `/workspace/project/...` paths before rerunning `tao-train`.
+
 The screenshot shows two separate CLI validation errors:
 
 * `tao-train BF-001` omitted mandatory `--spec` because TAO cannot train without

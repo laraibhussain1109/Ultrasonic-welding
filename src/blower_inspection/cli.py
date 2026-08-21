@@ -142,6 +142,7 @@ def main(argv: list[str] | None = None) -> int:
         output = Path(args.output or f"specs/visual_changenet/{model.id.lower()}_{args.variant}.yaml")
         copied = copy_default_visual_changenet_spec(output, variant=args.variant, image=args.image)
         print(f"Copied TAO 7.1 VisualChangeNet {args.variant} spec to {copied}")
+        print("The TAO Docker entrypoint was bypassed so its banner is not embedded in the YAML.")
         print("Edit dataset, results, pretrained-model, and training fields before running tao-train.")
         return 0
 

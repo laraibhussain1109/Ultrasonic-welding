@@ -5,15 +5,17 @@ import pytest
 
 from blower_inspection.tao_training import (
     VISUAL_CHANGENET_MODULE,
+    _clean_spec_output,
     copy_default_visual_changenet_spec,
     run_visual_changenet_task,
+    validate_visual_changenet_spec,
 )
 
 
 def test_visual_changenet_training_runs_official_module_in_docker(tmp_path: Path):
     spec = tmp_path / "specs" / "train.yaml"
     spec.parent.mkdir()
-    spec.write_text("train: {}\n", encoding="utf-8")
+    spec.write_text("task: segment\ntrain: {}\n", encoding="utf-8")
 
     with patch("blower_inspection.tao_training.subprocess.run") as run:
         run_visual_changenet_task("train", spec, project_dir=tmp_path)
@@ -32,7 +34,7 @@ def test_visual_changenet_spec_must_exist(tmp_path: Path):
 
 def test_visual_changenet_spec_must_be_in_project(tmp_path: Path):
     outside = tmp_path.parent / "outside_visual_changenet.yaml"
-    outside.write_text("export: {}\n", encoding="utf-8")
+    outside.write_text("task: segment\nexport: {}\n", encoding="utf-8")
     try:
         with pytest.raises(ValueError, match="inside the mounted project"):
             run_visual_changenet_task("export", outside, project_dir=tmp_path)
@@ -41,12 +43,32 @@ def test_visual_changenet_spec_must_be_in_project(tmp_path: Path):
 
 
 def test_copy_default_segmentation_spec_from_installed_container(tmp_path: Path):
-    completed = type("Completed", (), {"stdout": "dataset:\n  segment:\n"})()
+    completed = type("Completed", (), {"stdout": "encryption_key: key\ntask: segment\n"})()
     with patch("blower_inspection.tao_training.subprocess.run", return_value=completed) as run:
         output = copy_default_visual_changenet_spec(tmp_path / "spec.yaml")
 
-    assert output.read_text(encoding="utf-8") == "dataset:\n  segment:\n"
+    assert output.read_text(encoding="utf-8") == "encryption_key: key\ntask: segment\n"
     command = run.call_args.args[0]
     assert command[:3] == ["docker", "run", "--rm"]
-    assert command[-2:] == ["cat", "/usr/local/lib/python3.12/dist-packages/nvidia_tao_pytorch/cv/visual_changenet/experiment_specs/experiment_spec.yaml"]
+    assert command[3:5] == ["--entrypoint", "cat"]
+    assert command[-1] == "/usr/local/lib/python3.12/dist-packages/nvidia_tao_pytorch/cv/visual_changenet/experiment_specs/experiment_spec.yaml"
     assert run.call_args.kwargs == {"check": True, "capture_output": True, "text": True}
+
+
+def test_tao_banner_is_removed_from_copied_yaml():
+    output = _clean_spec_output(
+        "=== TAO Toolkit PyTorch ===\nNVIDIA Release 7.1.0\n\n"
+        "encryption_key: key\ntask: segment\n"
+    )
+    assert output == "encryption_key: key\ntask: segment\n"
+
+
+def test_banner_corrupted_existing_spec_is_rejected(tmp_path: Path):
+    spec = tmp_path / "bad.yaml"
+    spec.write_text(
+        "=== TAO Toolkit PyTorch ===\nNVIDIA Release 7.1.0\n"
+        "encryption_key: key\ntask: segment\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="banner before the YAML"):
+        validate_visual_changenet_spec(spec)
