@@ -7,6 +7,8 @@ from blower_inspection.tao_training import (
     VISUAL_CHANGENET_MODULE,
     _clean_spec_output,
     copy_default_visual_changenet_spec,
+    download_visual_changenet_pretrained,
+    find_visual_changenet_pretrained,
     run_visual_changenet_task,
     validate_visual_changenet_dataset,
     validate_visual_changenet_spec,
@@ -50,6 +52,26 @@ def test_existing_visual_changenet_dataset_is_validated_without_changes(tmp_path
     before = sorted(str(path.relative_to(root)) for path in root.rglob("*"))
     assert validate_visual_changenet_dataset(root) == root.resolve()
     assert sorted(str(path.relative_to(root)) for path in root.rglob("*")) == before
+
+
+def test_pretrained_checkpoint_is_found_below_ngc_download_folder(tmp_path: Path):
+    checkpoint = tmp_path / "visual_changenet_levircd_vtrainable_v1.0" / "changenet_segment_levir_cd.pth"
+    checkpoint.parent.mkdir()
+    checkpoint.write_bytes(b"weights")
+    assert find_visual_changenet_pretrained([tmp_path]) == checkpoint.resolve()
+
+
+def test_ngc_download_returns_discovered_checkpoint(tmp_path: Path):
+    def download(command, check):
+        checkpoint = tmp_path / "download" / "version" / "changenet_segment_levir_cd.pth"
+        checkpoint.parent.mkdir(parents=True)
+        checkpoint.write_bytes(b"weights")
+
+    with patch("blower_inspection.tao_training.subprocess.run", side_effect=download) as run:
+        checkpoint = download_visual_changenet_pretrained(tmp_path / "download")
+
+    assert checkpoint.name == "changenet_segment_levir_cd.pth"
+    assert run.call_args.args[0][:4] == ["ngc", "registry", "model", "download-version"]
 
 
 def test_visual_changenet_spec_must_exist(tmp_path: Path):

@@ -85,8 +85,13 @@ configured active model.
 An already converted dataset outside the repository is supported directly:
 pass `--dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET"`.
 It is mounted read-only and is never recreated, renamed, reorganized, or split.
-Training also requires either `--pretrained-model <checkpoint.pth>` or the
-explicit `--from-scratch` choice.
+Training uses an auto-discovered pretrained checkpoint, an explicit
+`--pretrained-model <checkpoint.pth>`, or the explicit `--from-scratch` choice.
+
+Run `python -m src.blower_inspection.cli tao-download-weights` to download
+NVIDIA's `visual_changenet_levircd:trainable_v1.0` through an installed,
+authenticated NGC CLI. The nested `changenet_segment_levir_cd.pth` path is found
+automatically; `tao-train` can then omit `--pretrained-model`.
 
 If an older generated YAML begins with the TAO release/license banner, delete it
 and rerun `tao-init`. The copier now bypasses the container entrypoint with

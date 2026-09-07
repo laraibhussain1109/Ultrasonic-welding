@@ -13,6 +13,48 @@ VISUAL_CHANGENET_SPECS = (
     "/usr/local/lib/python3.12/dist-packages/nvidia_tao_pytorch/cv/"
     "visual_changenet/experiment_specs"
 )
+PRETRAINED_FILENAME = "changenet_segment_levir_cd.pth"
+PRETRAINED_NGC_MODEL = "nvidia/tao/visual_changenet_levircd:trainable_v1.0"
+
+
+def find_visual_changenet_pretrained(search_roots: list[str | Path]) -> Path | None:
+    """Find the NVIDIA LEVIR-CD checkpoint without assuming its download folder."""
+    matches: set[Path] = set()
+    for value in search_roots:
+        root = Path(value).expanduser().resolve()
+        if root.is_file() and root.name == PRETRAINED_FILENAME:
+            matches.add(root)
+        elif root.is_dir():
+            matches.update(path.resolve() for path in root.rglob(PRETRAINED_FILENAME))
+    if len(matches) > 1:
+        choices = "\n  ".join(str(path) for path in sorted(matches))
+        raise ValueError(f"Multiple VisualChangeNet pretrained checkpoints found; select one with --pretrained-model:\n  {choices}")
+    return next(iter(matches), None)
+
+
+def download_visual_changenet_pretrained(
+    output_dir: str | Path = "data/models/pretrained",
+) -> Path:
+    """Download the TAO trainable checkpoint with NVIDIA's NGC CLI."""
+    output = Path(output_dir).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    command = [
+        "ngc", "registry", "model", "download-version", PRETRAINED_NGC_MODEL,
+        "--dest", str(output),
+    ]
+    try:
+        subprocess.run(command, check=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "NVIDIA NGC CLI (`ngc`) is not installed or not on PATH. Install the official NGC CLI, "
+            "authenticate it, then rerun `tao-download-weights`."
+        ) from exc
+    checkpoint = find_visual_changenet_pretrained([output])
+    if checkpoint is None:
+        raise FileNotFoundError(
+            f"NGC download completed but {PRETRAINED_FILENAME} was not found under {output}"
+        )
+    return checkpoint
 
 
 def _clean_spec_output(output: str) -> str:
@@ -160,6 +202,16 @@ def run_visual_changenet_task(
         dataset = validate_visual_changenet_dataset(dataset_dir)
         if pretrained_model is not None and from_scratch:
             raise ValueError("Use either --pretrained-model or --from-scratch, not both")
+        if pretrained_model is None and not from_scratch:
+            pretrained_model = find_visual_changenet_pretrained(
+                [project / "data/models/pretrained", dataset.parent, Path.home() / "Downloads"]
+            )
+            if pretrained_model is None:
+                raise FileNotFoundError(
+                    f"Unable to find {PRETRAINED_FILENAME}. Run `python -m src.blower_inspection.cli "
+                    "tao-download-weights`, pass its real path with --pretrained-model, or explicitly "
+                    "choose --from-scratch."
+                )
         runtime_text = _replace_yaml_scalar(runtime_text, "root_dir", "/data/TAO_VCN_DATASET")
         if pretrained_model is not None:
             pretrained = Path(pretrained_model).resolve()

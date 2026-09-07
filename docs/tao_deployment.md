@@ -268,9 +268,35 @@ python -m src.blower_inspection.cli tao-train BF-001 `
 The NVIDIA default spec points to a sample checkpoint under
 `/results/pretrained/...`, which is not present automatically. Supply the real
 downloaded `.pth` with `--pretrained-model`. If you deliberately accept training
-without pretrained weights, replace that option with `--from-scratch`; the CLI
-requires one choice so the missing example path cannot cause another delayed
-failure.
+without pretrained weights, replace that option with `--from-scratch`. When
+neither is supplied, the CLI searches the documented host locations and fails
+with a download command rather than using the missing example path.
+
+The exact checkpoint filename is `changenet_segment_levir_cd.pth`; NVIDIA's NGC
+model identifier encoded by the default TAO spec is
+`nvidia/tao/visual_changenet_levircd:trainable_v1.0`. Install and authenticate
+the NVIDIA NGC CLI, then let the application download and locate the nested file:
+
+```powershell
+python -m src.blower_inspection.cli tao-download-weights
+```
+
+The checkpoint is downloaded below `data/models/pretrained` and discovered
+recursively, so its NGC-generated version subdirectory does not need to be
+guessed. `tao-train` also searches that directory, the dataset parent, and the
+current user's Downloads directory automatically. After downloading, the
+training command can omit `--pretrained-model`:
+
+```powershell
+python -m src.blower_inspection.cli tao-train BF-001 `
+  --spec specs/visual_changenet/bf-001_segmentation.yaml `
+  --dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET" `
+  --results-dir data/results/BF-001/tao
+```
+
+If `ngc` is not installed, obtain the official NVIDIA NGC CLI, configure its API
+key, and rerun the download command. The launcher will never pretend that the
+example `/results/pretrained/...` path exists.
 
 The screenshot shows two separate CLI validation errors:
 

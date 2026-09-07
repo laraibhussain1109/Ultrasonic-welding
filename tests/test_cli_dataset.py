@@ -38,6 +38,11 @@ def test_tao_init_defaults_to_segmentation():
     assert args.variant == "segmentation"
 
 
+def test_tao_download_weights_has_project_default_destination():
+    args = build_parser().parse_args(["tao-download-weights"])
+    assert args.output == "data/models/pretrained"
+
+
 def test_onnx_directory_resolves_single_export(tmp_path):
     export = tmp_path / "exports" / "model.onnx"
     export.parent.mkdir()

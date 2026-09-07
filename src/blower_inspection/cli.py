@@ -13,7 +13,11 @@ from .config import ModelRegistry, ensure_model_folders
 from .tao_inspector import inspector_for_model
 from .esp32_output import ESP32FailOutput
 from .dataset import prepare_yolo_dataset
-from .tao_training import copy_default_visual_changenet_spec, run_visual_changenet_task
+from .tao_training import (
+    copy_default_visual_changenet_spec,
+    download_visual_changenet_pretrained,
+    run_visual_changenet_task,
+)
 
 
 def resolve_onnx_model(value: str | Path) -> Path:
@@ -63,7 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
     tao_train.add_argument("--image", default="nvcr.io/nvidia/tao/tao-toolkit:7.1.0-pyt")
     tao_train.add_argument("--dataset", required=True, help="Existing TAO CNDataset root containing A/B/label/list")
     tao_train.add_argument("--results-dir", help="Host results directory inside this project")
-    weights = tao_train.add_mutually_exclusive_group(required=True)
+    weights = tao_train.add_mutually_exclusive_group()
     weights.add_argument("--pretrained-model", help="Host VisualChangeNet .pth checkpoint")
     weights.add_argument("--from-scratch", action="store_true", help="Explicitly train without pretrained weights")
 
@@ -78,6 +82,9 @@ def build_parser() -> argparse.ArgumentParser:
     tao_init.add_argument("--variant", choices=["segmentation", "classification"], default="segmentation")
     tao_init.add_argument("--output", help="Destination YAML; defaults under specs/visual_changenet")
     tao_init.add_argument("--image", default="nvcr.io/nvidia/tao/tao-toolkit:7.1.0-pyt")
+
+    tao_weights = sub.add_parser("tao-download-weights", help="Download NVIDIA's VisualChangeNet LEVIR-CD checkpoint")
+    tao_weights.add_argument("--output", default="data/models/pretrained")
 
     inspect = sub.add_parser("inspect", help="Inspect one image with a trained model")
     inspect.add_argument("model_id")
@@ -150,6 +157,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Copied TAO 7.1 VisualChangeNet {args.variant} spec to {copied}")
         print("The TAO Docker entrypoint was bypassed so its banner is not embedded in the YAML.")
         print("Edit dataset, results, pretrained-model, and training fields before running tao-train.")
+        return 0
+
+    if args.command == "tao-download-weights":
+        checkpoint = download_visual_changenet_pretrained(args.output)
+        print(f"VisualChangeNet pretrained checkpoint: {checkpoint}")
         return 0
 
     if args.command in {"tao-train", "tao-export"}:
