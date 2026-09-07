@@ -197,7 +197,8 @@ notepad specs/visual_changenet/bf-001_segmentation.yaml
 
 python -m src.blower_inspection.cli tao-train BF-001 `
   --spec specs/visual_changenet/bf-001_segmentation.yaml `
-  --dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET"
+  --dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET" `
+  --epochs 50
 
 python -m src.blower_inspection.cli tao-export BF-001 `
   --spec specs/visual_changenet/bf-001_segmentation.yaml
@@ -353,6 +354,33 @@ The launcher resolves `changenet_segment_levir_cd.pth` recursively. If both a
 root copy and a nested NGC copy exist and their bytes are identical, it chooses
 the shortest deterministic path. If their hashes differ, it stops and lists all
 choices instead of silently selecting incompatible weights.
+
+### Why TAO stopped at `max_epochs=1`
+
+The NVIDIA default spec intentionally contains `train.num_epochs: 1` as a smoke
+test. The message `Epoch 0/0 174/174` proves TAO completed all 174 training
+batches and validation for that single configured epoch; epoch indices are
+zero-based. `Trainer.fit stopped: max_epochs=1 reached` is a normal configured
+stop, not a crash.
+
+One epoch is not adequate production training. `tao-train` now defaults to 50
+epochs and writes that value only into its temporary runtime spec, leaving the
+vendor/source YAML unchanged. Override it explicitly when required:
+
+```powershell
+python -m src.blower_inspection.cli tao-train BF-001 `
+  --spec specs/visual_changenet/bf-001_segmentation.yaml `
+  --dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET" `
+  --results-dir data/results/BF-001/tao `
+  --epochs 100
+```
+
+Values below 2 are rejected before Docker starts. Select the final epoch count
+from validation convergence, not merely a fixed number. The shown `F1_1: 0.000`,
+`precision_1: 0.000`, and `recall_1: 0.000` mean the change/defect class was not
+detected in that validation pass. Do not export or commission that checkpoint;
+verify that NG masks contain nonzero class-1 pixels, NG samples occur in
+`train.txt` and `val.txt`, and continue training while monitoring class-1 F1/IoU.
 
 The screenshot shows two separate CLI validation errors:
 

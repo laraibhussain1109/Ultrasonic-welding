@@ -30,6 +30,7 @@ def test_tao_train_defaults_to_active_model_but_requires_spec():
     ])
     assert args.model_id is None
     assert args.spec == "spec.yaml"
+    assert args.epochs == 50
 
 
 def test_tao_init_defaults_to_segmentation():

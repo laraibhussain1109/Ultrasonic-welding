@@ -85,6 +85,11 @@ active model. `--skip-weights` is available only for intentional offline use.
 An existing manual download under the repository is discovered and copied into
 the canonical pretrained directory, so the successful NGC download is reused.
 
+TAO's bundled YAML uses `num_epochs: 1` only as a smoke test. The launcher now
+overrides the temporary runtime spec to 50 epochs by default (`--epochs N`) and
+rejects values below 2. A completed `174/174` display means the one configured
+epoch really ran, but class-1 F1/IoU must be nonzero and validated before export.
+
 An already converted dataset outside the repository is supported directly:
 pass `--dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET"`.
 It is mounted read-only and is never recreated, renamed, reorganized, or split.

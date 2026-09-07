@@ -23,12 +23,19 @@ def test_visual_changenet_training_runs_official_module_in_docker(tmp_path: Path
     spec.parent.mkdir()
     spec.write_text(
         "task: segment\ntrain:\n  pretrained_model_path: null\n"
+        "  num_epochs: 1\n"
         "results_dir: /results\ndataset:\n  segment:\n    root_dir: /data/example\n",
         encoding="utf-8",
     )
     dataset = _dataset(tmp_path)
 
-    with patch("blower_inspection.tao_training.subprocess.run") as run:
+    captured = {}
+
+    def execute(command, check):
+        runtime_relative = command[-1].removeprefix("/workspace/project/")
+        captured["spec"] = (tmp_path / runtime_relative).read_text(encoding="utf-8")
+
+    with patch("blower_inspection.tao_training.subprocess.run", side_effect=execute) as run:
         run_visual_changenet_task("train", spec, project_dir=tmp_path, dataset_dir=dataset, from_scratch=True)
 
     command = run.call_args.args[0]
@@ -36,7 +43,16 @@ def test_visual_changenet_training_runs_official_module_in_docker(tmp_path: Path
     assert VISUAL_CHANGENET_MODULE in command
     assert command[-3:] == ["train", "-e", "/workspace/project/specs/.train.runtime.yaml"]
     assert f"{dataset.resolve()}:/data/TAO_VCN_DATASET:ro" in command
+    assert "num_epochs: 50" in captured["spec"]
+    assert "num_epochs: 1" in spec.read_text(encoding="utf-8")
     assert run.call_args.kwargs == {"check": True}
+
+
+def test_visual_changenet_rejects_one_epoch_before_docker(tmp_path: Path):
+    spec = tmp_path / "spec.yaml"
+    spec.write_text("task: segment\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="at least 2 epochs"):
+        run_visual_changenet_task("train", spec, project_dir=tmp_path, epochs=1)
 
 
 def _dataset(tmp_path: Path) -> Path:

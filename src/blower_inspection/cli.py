@@ -69,6 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
     tao_train.add_argument("--image", default="nvcr.io/nvidia/tao/tao-toolkit:7.1.0-pyt")
     tao_train.add_argument("--dataset", required=True, help="Existing TAO CNDataset root containing A/B/label/list")
     tao_train.add_argument("--results-dir", help="Host results directory inside this project")
+    tao_train.add_argument("--epochs", type=int, default=50, help="Training epochs (default: 50; minimum: 2)")
     weights = tao_train.add_mutually_exclusive_group()
     weights.add_argument("--pretrained-model", help="Host VisualChangeNet .pth checkpoint")
     weights.add_argument("--from-scratch", action="store_true", help="Explicitly train without pretrained weights")
@@ -199,6 +200,7 @@ def main(argv: list[str] | None = None) -> int:
                 dataset_dir=args.dataset,
                 pretrained_model=args.pretrained_model,
                 from_scratch=args.from_scratch,
+                epochs=args.epochs,
             )
         run_visual_changenet_task(task, args.spec, **kwargs)
         print(f"TAO VisualChangeNet {task} completed")

@@ -223,6 +223,7 @@ def run_visual_changenet_task(
     results_dir: str | Path | None = None,
     pretrained_model: str | Path | None = None,
     from_scratch: bool = False,
+    epochs: int = 50,
 ) -> None:
     """Run a VisualChangeNet train/export task with the project mounted.
 
@@ -231,6 +232,8 @@ def run_visual_changenet_task(
     """
     if task not in {"train", "export"}:
         raise ValueError(f"Unsupported VisualChangeNet task: {task}")
+    if task == "train" and epochs < 2:
+        raise ValueError("VisualChangeNet training requires at least 2 epochs; use --epochs 50 or more")
     project = Path(project_dir).resolve()
     spec_path = Path(spec).resolve()
     if not spec_path.is_file():
@@ -274,6 +277,7 @@ def run_visual_changenet_task(
                     "choose --from-scratch."
                 )
         runtime_text = _replace_yaml_scalar(runtime_text, "root_dir", "/data/TAO_VCN_DATASET")
+        runtime_text = _replace_yaml_scalar(runtime_text, "num_epochs", str(epochs))
         if pretrained_model is not None:
             pretrained = resolve_visual_changenet_pretrained(pretrained_model)
             mounts.extend(["-v", f"{pretrained}:/pretrained/model.pth:ro"])
