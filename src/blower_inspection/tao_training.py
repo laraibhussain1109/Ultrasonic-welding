@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import re
 from pathlib import Path
 
 VISUAL_CHANGENET_MODULE = (
@@ -47,6 +48,40 @@ def validate_visual_changenet_spec(path: str | Path) -> None:
         )
 
 
+def validate_visual_changenet_dataset(path: str | Path) -> Path:
+    """Validate an existing CNDataset without changing it."""
+    root = Path(path).resolve()
+    if not root.is_dir():
+        raise NotADirectoryError(f"TAO VisualChangeNet dataset does not exist: {root}")
+    for name in ("A", "B", "label", "list"):
+        if not (root / name).is_dir():
+            raise ValueError(f"TAO dataset validation failed: missing directory {root / name}")
+    for name in ("train.txt", "val.txt", "test.txt"):
+        split = root / "list" / name
+        if not split.is_file() or not split.read_text(encoding="utf-8-sig").strip():
+            raise ValueError(f"TAO dataset validation failed: missing or empty split {split}")
+    image_names = {
+        folder: {item.name for item in (root / folder).iterdir() if item.is_file()}
+        for folder in ("A", "B", "label")
+    }
+    if not image_names["A"]:
+        raise ValueError(f"TAO dataset validation failed: no reference images in {root / 'A'}")
+    if image_names["A"] != image_names["B"] or image_names["A"] != image_names["label"]:
+        raise ValueError("TAO dataset validation failed: A, B, and label filenames do not match exactly")
+    return root
+
+
+def _replace_yaml_scalar(text: str, key: str, value: str, *, top_level: bool = False) -> str:
+    indent = "" if top_level else r"[ \t]+"
+    pattern = rf"(?m)^{indent}{re.escape(key)}\s*:\s*.*$"
+    matches = list(re.finditer(pattern, text))
+    if len(matches) != 1:
+        raise ValueError(f"VisualChangeNet spec must contain exactly one `{key}:` field; found {len(matches)}")
+    original = matches[0].group(0)
+    leading = original[: len(original) - len(original.lstrip())]
+    return text[:matches[0].start()] + f"{leading}{key}: {value}" + text[matches[0].end():]
+
+
 def copy_default_visual_changenet_spec(
     destination: str | Path,
     *,
@@ -81,6 +116,10 @@ def run_visual_changenet_task(
     *,
     image: str = "nvcr.io/nvidia/tao/tao-toolkit:7.1.0-pyt",
     project_dir: str | Path = ".",
+    dataset_dir: str | Path | None = None,
+    results_dir: str | Path | None = None,
+    pretrained_model: str | Path | None = None,
+    from_scratch: bool = False,
 ) -> None:
     """Run a VisualChangeNet train/export task with the project mounted.
 
@@ -101,11 +140,53 @@ def run_visual_changenet_task(
             f"Experiment spec must be inside the mounted project {project}: {spec_path}"
         ) from exc
     container_spec = Path("/workspace/project") / relative_spec
+    mounts = ["-v", f"{project}:/workspace/project"]
+    runtime_text = spec_path.read_text(encoding="utf-8-sig")
+    result_host = Path(results_dir or project / "data/results/tao_visual_changenet").resolve()
+    result_host.mkdir(parents=True, exist_ok=True)
+    try:
+        result_relative = result_host.relative_to(project)
+    except ValueError as exc:
+        raise ValueError(f"TAO results directory must be inside the project: {result_host}") from exc
+    runtime_text = _replace_yaml_scalar(
+        runtime_text,
+        "results_dir",
+        f'"{(Path("/workspace/project") / result_relative).as_posix()}"',
+        top_level=True,
+    )
+    if task == "train":
+        if dataset_dir is None:
+            raise ValueError("TAO training requires --dataset pointing to the existing TAO_VCN_DATASET")
+        dataset = validate_visual_changenet_dataset(dataset_dir)
+        if pretrained_model is not None and from_scratch:
+            raise ValueError("Use either --pretrained-model or --from-scratch, not both")
+        runtime_text = _replace_yaml_scalar(runtime_text, "root_dir", "/data/TAO_VCN_DATASET")
+        if pretrained_model is not None:
+            pretrained = Path(pretrained_model).resolve()
+            if not pretrained.is_file():
+                raise FileNotFoundError(f"TAO pretrained model not found: {pretrained}")
+            mounts.extend(["-v", f"{pretrained}:/pretrained/model.pth:ro"])
+            runtime_text = _replace_yaml_scalar(runtime_text, "pretrained_model_path", "/pretrained/model.pth")
+        elif from_scratch:
+            runtime_text = _replace_yaml_scalar(runtime_text, "pretrained_model_path", "null")
+        elif re.search(r"(?m)^\s+pretrained_model_path\s*:\s*/results/", runtime_text):
+            raise ValueError(
+                "The copied TAO spec still points to NVIDIA's unavailable /results/pretrained example. "
+                "Pass --pretrained-model <file.pth> or explicitly choose --from-scratch."
+            )
+        mounts.extend(["-v", f"{dataset}:/data/TAO_VCN_DATASET:ro"])
+    runtime_spec = spec_path.with_name(f".{spec_path.stem}.runtime.yaml")
+    runtime_spec.write_text(runtime_text, encoding="utf-8")
+    container_spec = Path("/workspace/project") / runtime_spec.relative_to(project)
     command = [
         "docker", "run", "--rm", "--gpus", "all", "--shm-size=16g",
         "--ulimit", "memlock=-1", "--ulimit", "stack=67108864",
-        "-v", f"{project}:/workspace/project", "-w", "/workspace/project",
+        *mounts, "-w", "/workspace/project",
         image, "python", "-m", VISUAL_CHANGENET_MODULE,
         task, "-e", container_spec.as_posix(),
     ]
-    subprocess.run(command, check=True)
+    try:
+        subprocess.run(command, check=True)
+    finally:
+        if runtime_spec is not None:
+            runtime_spec.unlink(missing_ok=True)

@@ -195,7 +195,9 @@ python -m src.blower_inspection.cli tao-init BF-001
 notepad specs/visual_changenet/bf-001_segmentation.yaml
 
 python -m src.blower_inspection.cli tao-train BF-001 `
-  --spec specs/visual_changenet/bf-001_segmentation.yaml
+  --spec specs/visual_changenet/bf-001_segmentation.yaml `
+  --dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET" `
+  --pretrained-model "C:\path\to\changenet_segment_levir_cd.pth"
 
 python -m src.blower_inspection.cli tao-export BF-001 `
   --spec specs/visual_changenet/bf-001_segmentation.yaml
@@ -241,8 +243,34 @@ Get-Content .\specs\visual_changenet\bf-001_segmentation.yaml -First 5
 ```
 
 The first line must be `encryption_key:`, not `=== TAO Toolkit PyTorch ===`.
-Then edit the default `/data`, `/results`, and pretrained checkpoint paths to
-valid `/workspace/project/...` paths before rerunning `tao-train`.
+The launcher described next safely overrides the default dataset/results/weights
+locations in a temporary runtime spec.
+
+### Using the already-prepared external `TAO_VCN_DATASET`
+
+Do not copy or reorganize the dataset. Supply its real Windows location with
+`--dataset`. The launcher validates only that `A`, `B`, `label`, and `list`
+exist, the required split lists are non-empty, and paired filenames match. It
+does not write to the dataset. Docker mounts it read-only at
+`/data/TAO_VCN_DATASET` and a temporary runtime copy of the YAML overrides
+`dataset.segment.root_dir` accordingly; the original YAML is retained.
+
+Use:
+
+```powershell
+python -m src.blower_inspection.cli tao-train BF-001 `
+  --spec specs/visual_changenet/bf-001_segmentation.yaml `
+  --dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET" `
+  --results-dir data/results/BF-001/tao `
+  --pretrained-model "C:\path\to\changenet_segment_levir_cd.pth"
+```
+
+The NVIDIA default spec points to a sample checkpoint under
+`/results/pretrained/...`, which is not present automatically. Supply the real
+downloaded `.pth` with `--pretrained-model`. If you deliberately accept training
+without pretrained weights, replace that option with `--from-scratch`; the CLI
+requires one choice so the missing example path cannot cause another delayed
+failure.
 
 The screenshot shows two separate CLI validation errors:
 
@@ -254,8 +282,8 @@ The model ID is now optional and defaults to `active_model`, so either ordering
 works after `tao-init` creates the file:
 
 ```powershell
-python -m src.blower_inspection.cli tao-train BF-001 --spec specs/visual_changenet/bf-001_segmentation.yaml
-python -m src.blower_inspection.cli tao-train --spec specs/visual_changenet/bf-001_segmentation.yaml
+python -m src.blower_inspection.cli tao-train BF-001 --spec specs/visual_changenet/bf-001_segmentation.yaml --dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET" --from-scratch
+python -m src.blower_inspection.cli tao-train --spec specs/visual_changenet/bf-001_segmentation.yaml --dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET" --from-scratch
 ```
 
 Passing `data/models/BF-001` to `--model-file` only passes a directory. It does

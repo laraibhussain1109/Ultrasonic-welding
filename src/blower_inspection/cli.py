@@ -61,11 +61,17 @@ def build_parser() -> argparse.ArgumentParser:
     tao_train.add_argument("model_id", nargs="?", help="Part model; defaults to active_model")
     tao_train.add_argument("--spec", required=True, help="VisualChangeNet training experiment YAML inside this project")
     tao_train.add_argument("--image", default="nvcr.io/nvidia/tao/tao-toolkit:7.1.0-pyt")
+    tao_train.add_argument("--dataset", required=True, help="Existing TAO CNDataset root containing A/B/label/list")
+    tao_train.add_argument("--results-dir", help="Host results directory inside this project")
+    weights = tao_train.add_mutually_exclusive_group(required=True)
+    weights.add_argument("--pretrained-model", help="Host VisualChangeNet .pth checkpoint")
+    weights.add_argument("--from-scratch", action="store_true", help="Explicitly train without pretrained weights")
 
     tao_export = sub.add_parser("tao-export", help="Export VisualChangeNet in the TAO Docker image")
     tao_export.add_argument("model_id", nargs="?", help="Part model; defaults to active_model")
     tao_export.add_argument("--spec", required=True, help="VisualChangeNet export experiment YAML inside this project")
     tao_export.add_argument("--image", default="nvcr.io/nvidia/tao/tao-toolkit:7.1.0-pyt")
+    tao_export.add_argument("--results-dir", help="Same host results directory used for training")
 
     tao_init = sub.add_parser("tao-init", help="Copy the installed TAO VisualChangeNet default spec")
     tao_init.add_argument("model_id", nargs="?", help="Part model; defaults to active_model")
@@ -152,7 +158,17 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"{model.id} is not configured for NVIDIA TAO")
         task = "train" if args.command == "tao-train" else "export"
         print(f"Starting TAO VisualChangeNet {task} with {args.spec} in {args.image}...")
-        run_visual_changenet_task(task, args.spec, image=args.image)
+        kwargs = {
+            "image": args.image,
+            "results_dir": args.results_dir or f"data/results/{model.id}/tao",
+        }
+        if task == "train":
+            kwargs.update(
+                dataset_dir=args.dataset,
+                pretrained_model=args.pretrained_model,
+                from_scratch=args.from_scratch,
+            )
+        run_visual_changenet_task(task, args.spec, **kwargs)
         print(f"TAO VisualChangeNet {task} completed")
         return 0
 

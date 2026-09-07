@@ -82,6 +82,12 @@ Edit its dataset/pretrained/results settings, then pass it to `tao-train
 --spec ...`. The model ID is optional for TAO commands and defaults to the
 configured active model.
 
+An already converted dataset outside the repository is supported directly:
+pass `--dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET"`.
+It is mounted read-only and is never recreated, renamed, reorganized, or split.
+Training also requires either `--pretrained-model <checkpoint.pth>` or the
+explicit `--from-scratch` choice.
+
 If an older generated YAML begins with the TAO release/license banner, delete it
 and rerun `tao-init`. The copier now bypasses the container entrypoint with
 `--entrypoint cat`, and training preflight rejects banner-corrupted YAML with a

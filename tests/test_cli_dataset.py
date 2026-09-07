@@ -25,7 +25,9 @@ def test_train_accepts_tao_model_file():
 
 
 def test_tao_train_defaults_to_active_model_but_requires_spec():
-    args = build_parser().parse_args(["tao-train", "--spec", "spec.yaml"])
+    args = build_parser().parse_args([
+        "tao-train", "--spec", "spec.yaml", "--dataset", "TAO_VCN_DATASET", "--from-scratch"
+    ])
     assert args.model_id is None
     assert args.spec == "spec.yaml"
 

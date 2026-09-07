@@ -8,6 +8,7 @@ from blower_inspection.tao_training import (
     _clean_spec_output,
     copy_default_visual_changenet_spec,
     run_visual_changenet_task,
+    validate_visual_changenet_dataset,
     validate_visual_changenet_spec,
 )
 
@@ -15,16 +16,40 @@ from blower_inspection.tao_training import (
 def test_visual_changenet_training_runs_official_module_in_docker(tmp_path: Path):
     spec = tmp_path / "specs" / "train.yaml"
     spec.parent.mkdir()
-    spec.write_text("task: segment\ntrain: {}\n", encoding="utf-8")
+    spec.write_text(
+        "task: segment\ntrain:\n  pretrained_model_path: null\n"
+        "results_dir: /results\ndataset:\n  segment:\n    root_dir: /data/example\n",
+        encoding="utf-8",
+    )
+    dataset = _dataset(tmp_path)
 
     with patch("blower_inspection.tao_training.subprocess.run") as run:
-        run_visual_changenet_task("train", spec, project_dir=tmp_path)
+        run_visual_changenet_task("train", spec, project_dir=tmp_path, dataset_dir=dataset, from_scratch=True)
 
     command = run.call_args.args[0]
     assert command[:3] == ["docker", "run", "--rm"]
     assert VISUAL_CHANGENET_MODULE in command
-    assert command[-3:] == ["train", "-e", "/workspace/project/specs/train.yaml"]
+    assert command[-3:] == ["train", "-e", "/workspace/project/specs/.train.runtime.yaml"]
+    assert f"{dataset.resolve()}:/data/TAO_VCN_DATASET:ro" in command
     assert run.call_args.kwargs == {"check": True}
+
+
+def _dataset(tmp_path: Path) -> Path:
+    root = tmp_path / "TAO_VCN_DATASET"
+    for folder in ("A", "B", "label", "list"):
+        (root / folder).mkdir(parents=True)
+    for folder in ("A", "B", "label"):
+        (root / folder / "part.png").write_bytes(b"png")
+    for split in ("train.txt", "val.txt", "test.txt", "predict.txt"):
+        (root / "list" / split).write_text("part.png\n", encoding="utf-8")
+    return root
+
+
+def test_existing_visual_changenet_dataset_is_validated_without_changes(tmp_path: Path):
+    root = _dataset(tmp_path)
+    before = sorted(str(path.relative_to(root)) for path in root.rglob("*"))
+    assert validate_visual_changenet_dataset(root) == root.resolve()
+    assert sorted(str(path.relative_to(root)) for path in root.rglob("*")) == before
 
 
 def test_visual_changenet_spec_must_exist(tmp_path: Path):
@@ -34,7 +59,7 @@ def test_visual_changenet_spec_must_exist(tmp_path: Path):
 
 def test_visual_changenet_spec_must_be_in_project(tmp_path: Path):
     outside = tmp_path.parent / "outside_visual_changenet.yaml"
-    outside.write_text("task: segment\nexport: {}\n", encoding="utf-8")
+    outside.write_text("task: segment\nresults_dir: /results\nexport: {}\n", encoding="utf-8")
     try:
         with pytest.raises(ValueError, match="inside the mounted project"):
             run_visual_changenet_task("export", outside, project_dir=tmp_path)
