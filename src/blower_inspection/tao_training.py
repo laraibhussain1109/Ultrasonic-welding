@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 import re
 import hashlib
+import shutil
 from pathlib import Path
 
 VISUAL_CHANGENET_MODULE = (
@@ -67,6 +68,9 @@ def download_visual_changenet_pretrained(
     """Download the TAO trainable checkpoint with NVIDIA's NGC CLI."""
     output = Path(output_dir).resolve()
     output.mkdir(parents=True, exist_ok=True)
+    existing = find_visual_changenet_pretrained([output])
+    if existing is not None:
+        return existing
     command = [
         "ngc", "registry", "model", "download-version", PRETRAINED_NGC_MODEL,
         "--dest", str(output),
@@ -91,6 +95,27 @@ def download_visual_changenet_pretrained(
             f"NGC download completed but {PRETRAINED_FILENAME} was not found under {output}"
         )
     return checkpoint
+
+
+def ensure_visual_changenet_pretrained(
+    output_dir: str | Path = "data/models/pretrained",
+    *,
+    search_roots: list[str | Path] | None = None,
+) -> Path:
+    """Install an existing manual download canonically, or download from NGC."""
+    output = Path(output_dir).resolve()
+    existing = find_visual_changenet_pretrained([output])
+    if existing is not None:
+        return existing
+    found = find_visual_changenet_pretrained(search_roots or [Path.cwd()])
+    if found is None:
+        return download_visual_changenet_pretrained(output)
+    destination = output / PRETRAINED_FILENAME
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    shutil.copy2(found, temporary)
+    temporary.replace(destination)
+    return destination
 
 
 def _clean_spec_output(output: str) -> str:

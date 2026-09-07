@@ -187,7 +187,8 @@ container confirms availability; it does not mean a model has been trained.
 The repository now exposes the external tasks explicitly:
 
 ```powershell
-# Copy TAO 7.1's real segmentation spec out of the installed container.
+# Download the correct pretrained weights to data/models/pretrained and copy
+# TAO 7.1's real segmentation spec out of the installed container.
 python -m src.blower_inspection.cli tao-init BF-001
 
 # Edit the copied YAML first. Every dataset/result path it references must be
@@ -196,8 +197,7 @@ notepad specs/visual_changenet/bf-001_segmentation.yaml
 
 python -m src.blower_inspection.cli tao-train BF-001 `
   --spec specs/visual_changenet/bf-001_segmentation.yaml `
-  --dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET" `
-  --pretrained-model "C:\path\to\changenet_segment_levir_cd.pth"
+  --dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET"
 
 python -m src.blower_inspection.cli tao-export BF-001 `
   --spec specs/visual_changenet/bf-001_segmentation.yaml
@@ -206,10 +206,16 @@ python -m src.blower_inspection.cli train BF-001 `
   --model-file data/models/BF-001/visual_changenet.onnx
 ```
 
-`tao-init` copies the exact default spec from the installed container rather
-than generating an invented schema. The training command invokes TAO's installed module
+`tao-init` downloads/reuses the exact LEVIR-CD pretrained checkpoint in the
+canonical `data/models/pretrained` directory and copies the exact default spec
+from the installed container rather than generating an invented schema. The
+training command invokes TAO's installed module
 `nvidia_tao_pytorch.cv.visual_changenet.entrypoint.visual_changenet train`; the
 second invokes its `export` task; only the third performs line calibration.
+
+If the checkpoint was manually downloaded somewhere below the repository root,
+`tao-init` finds it and atomically copies it to the canonical directory instead
+of contacting NGC again; the original manual download is retained.
 
 Before writing a spec, inspect the exact TAO 7.1 schema and bundled examples:
 
@@ -280,6 +286,12 @@ the NVIDIA NGC CLI, then let the application download and locate the nested file
 ```powershell
 python -m src.blower_inspection.cli tao-download-weights
 ```
+
+Normally this separate command is unnecessary: `tao-init BF-001` performs the
+same download automatically before creating the YAML. It reuses a checkpoint
+already present below `data/models/pretrained` and therefore does not redownload
+on every initialization. Use `tao-init --skip-weights` only when deliberately
+working offline or supplying a different explicit checkpoint.
 
 The checkpoint is downloaded below `data/models/pretrained` and discovered
 recursively, so its NGC-generated version subdirectory does not need to be

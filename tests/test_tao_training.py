@@ -10,6 +10,7 @@ from blower_inspection.tao_training import (
     copy_default_visual_changenet_spec,
     download_visual_changenet_pretrained,
     find_visual_changenet_pretrained,
+    ensure_visual_changenet_pretrained,
     run_visual_changenet_task,
     resolve_visual_changenet_pretrained,
     validate_visual_changenet_dataset,
@@ -91,6 +92,28 @@ def test_ngc_download_returns_discovered_checkpoint(tmp_path: Path):
     assert checkpoint.name == "changenet_segment_levir_cd.pth"
     assert run.call_args.args[0][:4] == ["ngc", "registry", "model", "download-version"]
     assert PRETRAINED_NGC_MODEL in run.call_args.args[0]
+
+
+def test_ngc_download_reuses_checkpoint_in_canonical_directory(tmp_path: Path):
+    checkpoint = tmp_path / "version" / "changenet_segment_levir_cd.pth"
+    checkpoint.parent.mkdir()
+    checkpoint.write_bytes(b"weights")
+    with patch("blower_inspection.tao_training.subprocess.run") as run:
+        result = download_visual_changenet_pretrained(tmp_path)
+    assert result == checkpoint.resolve()
+    run.assert_not_called()
+
+
+def test_tao_init_installs_manual_root_download_canonically(tmp_path: Path):
+    manual = tmp_path / "ngc-download" / "changenet_segment_levir_cd.pth"
+    manual.parent.mkdir()
+    manual.write_bytes(b"weights")
+    canonical = tmp_path / "data" / "models" / "pretrained"
+    with patch("blower_inspection.tao_training.subprocess.run") as run:
+        installed = ensure_visual_changenet_pretrained(canonical, search_roots=[tmp_path])
+    assert installed == canonical / "changenet_segment_levir_cd.pth"
+    assert installed.read_bytes() == b"weights"
+    run.assert_not_called()
 
 
 def test_ngc_access_denial_has_actionable_message(tmp_path: Path):

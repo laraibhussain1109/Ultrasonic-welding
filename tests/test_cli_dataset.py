@@ -36,6 +36,8 @@ def test_tao_init_defaults_to_segmentation():
     args = build_parser().parse_args(["tao-init", "BF-001"])
     assert args.model_id == "BF-001"
     assert args.variant == "segmentation"
+    assert args.weights_output == "data/models/pretrained"
+    assert args.skip_weights is False
 
 
 def test_tao_download_weights_has_project_default_destination():

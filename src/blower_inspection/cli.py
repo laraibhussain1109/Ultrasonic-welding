@@ -17,6 +17,7 @@ from .tao_training import (
     copy_default_visual_changenet_spec,
     download_visual_changenet_pretrained,
     find_visual_changenet_pretrained,
+    ensure_visual_changenet_pretrained,
     run_visual_changenet_task,
 )
 
@@ -83,6 +84,8 @@ def build_parser() -> argparse.ArgumentParser:
     tao_init.add_argument("--variant", choices=["segmentation", "classification"], default="segmentation")
     tao_init.add_argument("--output", help="Destination YAML; defaults under specs/visual_changenet")
     tao_init.add_argument("--image", default="nvcr.io/nvidia/tao/tao-toolkit:7.1.0-pyt")
+    tao_init.add_argument("--weights-output", default="data/models/pretrained", help="Canonical pretrained checkpoint directory")
+    tao_init.add_argument("--skip-weights", action="store_true", help="Create only the YAML (offline/advanced use)")
 
     tao_weights = sub.add_parser("tao-download-weights", help="Download NVIDIA's VisualChangeNet LEVIR-CD checkpoint")
     tao_weights.add_argument("--output", default="data/models/pretrained")
@@ -157,10 +160,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "tao-init":
         model = registry.get(args.model_id) if args.model_id else registry.active()
         output = Path(args.output or f"specs/visual_changenet/{model.id.lower()}_{args.variant}.yaml")
+        checkpoint = None
+        if args.variant == "segmentation" and not args.skip_weights:
+            print("Downloading NVIDIA VisualChangeNet segmentation pretrained weights...")
+            checkpoint = ensure_visual_changenet_pretrained(args.weights_output)
         copied = copy_default_visual_changenet_spec(output, variant=args.variant, image=args.image)
         print(f"Copied TAO 7.1 VisualChangeNet {args.variant} spec to {copied}")
+        if checkpoint is not None:
+            print(f"Pretrained checkpoint: {checkpoint}")
         print("The TAO Docker entrypoint was bypassed so its banner is not embedded in the YAML.")
-        print("Edit dataset, results, pretrained-model, and training fields before running tao-train.")
+        print("Edit dataset and training fields before running tao-train; the checkpoint is auto-discovered.")
         return 0
 
     if args.command == "tao-download-weights":

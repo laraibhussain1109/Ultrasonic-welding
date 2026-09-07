@@ -76,11 +76,14 @@ calibrates that existing artifact for the line. Running only `train BF-001`
 before export now stops immediately with the corrective sequence instead of a
 deep `FileNotFoundError` traceback.
 
-Start with `python -m src.blower_inspection.cli tao-init BF-001`; it copies the
-exact TAO 7.1 VisualChangeNet segmentation YAML from the installed container.
-Edit its dataset/pretrained/results settings, then pass it to `tao-train
---spec ...`. The model ID is optional for TAO commands and defaults to the
-configured active model.
+Start with `python -m src.blower_inspection.cli tao-init BF-001`; it now downloads
+the correct NVIDIA pretrained checkpoint into `data/models/pretrained` **and**
+copies the exact TAO 7.1 VisualChangeNet segmentation YAML from the installed
+container. Edit its dataset/training settings, then pass it to `tao-train --spec
+...`. The model ID is optional for TAO commands and defaults to the configured
+active model. `--skip-weights` is available only for intentional offline use.
+An existing manual download under the repository is discovered and copied into
+the canonical pretrained directory, so the successful NGC download is reused.
 
 An already converted dataset outside the repository is supported directly:
 pass `--dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET"`.
