@@ -14,7 +14,10 @@ VISUAL_CHANGENET_SPECS = (
     "visual_changenet/experiment_specs"
 )
 PRETRAINED_FILENAME = "changenet_segment_levir_cd.pth"
-PRETRAINED_NGC_MODEL = "nvidia/tao/visual_changenet_levircd:trainable_v1.0"
+PRETRAINED_NGC_MODEL = (
+    "nvidia/tao/visual_changenet_segmentation_levircd:"
+    "visual_changenet_levircd_trainable_v1.0"
+)
 
 
 def find_visual_changenet_pretrained(search_roots: list[str | Path]) -> Path | None:
@@ -48,6 +51,13 @@ def download_visual_changenet_pretrained(
         raise RuntimeError(
             "NVIDIA NGC CLI (`ngc`) is not installed or not on PATH. Install the official NGC CLI, "
             "authenticate it, then rerun `tao-download-weights`."
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            "NGC rejected the VisualChangeNet model download. This is not proof that the API key is "
+            "wrong: verify the fully-qualified public model identifier, accept any model terms in NGC, "
+            "and confirm access with `ngc registry model info "
+            f"{PRETRAINED_NGC_MODEL}`. If a key was shown in a screenshot or log, revoke it first."
         ) from exc
     checkpoint = find_visual_changenet_pretrained([output])
     if checkpoint is None:

@@ -273,8 +273,8 @@ neither is supplied, the CLI searches the documented host locations and fails
 with a download command rather than using the missing example path.
 
 The exact checkpoint filename is `changenet_segment_levir_cd.pth`; NVIDIA's NGC
-model identifier encoded by the default TAO spec is
-`nvidia/tao/visual_changenet_levircd:trainable_v1.0`. Install and authenticate
+model identifier encoded by the TAO 7.1 default directory name is
+`nvidia/tao/visual_changenet_segmentation_levircd:visual_changenet_levircd_trainable_v1.0`. Install and authenticate
 the NVIDIA NGC CLI, then let the application download and locate the nested file:
 
 ```powershell
@@ -297,6 +297,26 @@ python -m src.blower_inspection.cli tao-train BF-001 `
 If `ngc` is not installed, obtain the official NVIDIA NGC CLI, configure its API
 key, and rerun the download command. The launcher will never pretend that the
 example `/results/pretrained/...` path exists.
+
+An NGC `403 Access Denied` is not necessarily a bad API key. The earlier helper
+used the shortened, nonexistent/inaccessible resource
+`visual_changenet_levircd:trainable_v1.0`; NGC returned 403 while resolving that
+model. The corrected identifier mirrors both components encoded in TAO's default
+download directory. Verify access before downloading:
+
+```powershell
+ngc registry model info "nvidia/tao/visual_changenet_segmentation_levircd:visual_changenet_levircd_trainable_v1.0"
+```
+
+If NGC asks for terms to be accepted, complete that action in the NGC web UI and
+retry. If this exact public identifier still returns 403, the account lacks
+entitlement or NVIDIA has moved/retired the version; do not work around that by
+putting the API key into source code.
+
+**Security:** an API key visible in a screenshot, terminal transcript, or chat
+must be treated as compromised. Revoke it in NGC, create a replacement, rerun
+`ngc config set`, and remove/redact the screenshot. The application never needs
+the key as a CLI argument and never stores it in this repository.
 
 The screenshot shows two separate CLI validation errors:
 

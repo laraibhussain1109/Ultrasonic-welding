@@ -89,7 +89,7 @@ Training uses an auto-discovered pretrained checkpoint, an explicit
 `--pretrained-model <checkpoint.pth>`, or the explicit `--from-scratch` choice.
 
 Run `python -m src.blower_inspection.cli tao-download-weights` to download
-NVIDIA's `visual_changenet_levircd:trainable_v1.0` through an installed,
+NVIDIA's VisualChangeNet segmentation LEVIR-CD trainable v1.0 model through an installed,
 authenticated NGC CLI. The nested `changenet_segment_levir_cd.pth` path is found
 automatically; `tao-train` can then omit `--pretrained-model`.
 

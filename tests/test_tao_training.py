@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from blower_inspection.tao_training import (
+    PRETRAINED_NGC_MODEL,
     VISUAL_CHANGENET_MODULE,
     _clean_spec_output,
     copy_default_visual_changenet_spec,
@@ -72,6 +73,18 @@ def test_ngc_download_returns_discovered_checkpoint(tmp_path: Path):
 
     assert checkpoint.name == "changenet_segment_levir_cd.pth"
     assert run.call_args.args[0][:4] == ["ngc", "registry", "model", "download-version"]
+    assert PRETRAINED_NGC_MODEL in run.call_args.args[0]
+
+
+def test_ngc_access_denial_has_actionable_message(tmp_path: Path):
+    from subprocess import CalledProcessError
+
+    with patch(
+        "blower_inspection.tao_training.subprocess.run",
+        side_effect=CalledProcessError(1, ["ngc"]),
+    ):
+        with pytest.raises(RuntimeError, match="not proof that the API key is wrong"):
+            download_visual_changenet_pretrained(tmp_path)
 
 
 def test_visual_changenet_spec_must_exist(tmp_path: Path):
