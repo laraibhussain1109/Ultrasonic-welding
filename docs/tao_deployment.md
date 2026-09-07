@@ -318,6 +318,30 @@ must be treated as compromised. Revoke it in NGC, create a replacement, rerun
 `ngc config set`, and remove/redact the screenshot. The application never needs
 the key as a CLI argument and never stores it in this repository.
 
+If the manual NGC command has already created
+`visual_changenet_segmentation_levircd_vvisual_changenet_levircd_trainable_v1.0`
+in the repository root, no download is needed. Locate the exact checkpoint with:
+
+```powershell
+python -m src.blower_inspection.cli tao-find-weights
+```
+
+Then either omit `--pretrained-model` (the project root is searched
+automatically), pass the printed `.pth` path, or pass the NGC directory itself:
+
+```powershell
+python -m src.blower_inspection.cli tao-train BF-001 `
+  --spec specs/visual_changenet/bf-001_segmentation.yaml `
+  --dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET" `
+  --results-dir data/results/BF-001/tao `
+  --pretrained-model ".\visual_changenet_segmentation_levircd_vvisual_changenet_levircd_trainable_v1.0"
+```
+
+The launcher resolves `changenet_segment_levir_cd.pth` recursively. If both a
+root copy and a nested NGC copy exist and their bytes are identical, it chooses
+the shortest deterministic path. If their hashes differ, it stops and lists all
+choices instead of silently selecting incompatible weights.
+
 The screenshot shows two separate CLI validation errors:
 
 * `tao-train BF-001` omitted mandatory `--spec` because TAO cannot train without

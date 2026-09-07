@@ -92,6 +92,9 @@ Run `python -m src.blower_inspection.cli tao-download-weights` to download
 NVIDIA's VisualChangeNet segmentation LEVIR-CD trainable v1.0 model through an installed,
 authenticated NGC CLI. The nested `changenet_segment_levir_cd.pth` path is found
 automatically; `tao-train` can then omit `--pretrained-model`.
+If the NGC folder was downloaded manually into the repository root, run
+`tao-find-weights`; `tao-train` now searches the project root automatically and
+also accepts the downloaded directory itself as `--pretrained-model`.
 
 If an older generated YAML begins with the TAO release/license banner, delete it
 and rerun `tao-init`. The copier now bypasses the container entrypoint with

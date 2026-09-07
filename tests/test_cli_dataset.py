@@ -43,6 +43,11 @@ def test_tao_download_weights_has_project_default_destination():
     assert args.output == "data/models/pretrained"
 
 
+def test_tao_find_weights_defaults_to_project_root():
+    args = build_parser().parse_args(["tao-find-weights"])
+    assert args.search == "."
+
+
 def test_onnx_directory_resolves_single_export(tmp_path):
     export = tmp_path / "exports" / "model.onnx"
     export.parent.mkdir()

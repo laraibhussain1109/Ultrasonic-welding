@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import re
+import hashlib
 from pathlib import Path
 
 VISUAL_CHANGENET_MODULE = (
@@ -30,9 +31,34 @@ def find_visual_changenet_pretrained(search_roots: list[str | Path]) -> Path | N
         elif root.is_dir():
             matches.update(path.resolve() for path in root.rglob(PRETRAINED_FILENAME))
     if len(matches) > 1:
+        digests = {_file_sha256(path) for path in matches}
+        if len(digests) == 1:
+            # NGC/manual downloads often leave the same checkpoint both at the
+            # project root and in a versioned directory. Identical bytes are
+            # interchangeable; choose the shortest deterministic path.
+            return min(matches, key=lambda path: (len(path.parts), str(path)))
         choices = "\n  ".join(str(path) for path in sorted(matches))
         raise ValueError(f"Multiple VisualChangeNet pretrained checkpoints found; select one with --pretrained-model:\n  {choices}")
     return next(iter(matches), None)
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def resolve_visual_changenet_pretrained(value: str | Path) -> Path:
+    """Accept either the checkpoint itself or its NGC download directory."""
+    candidate = Path(value).expanduser().resolve()
+    found = find_visual_changenet_pretrained([candidate])
+    if found is None:
+        raise FileNotFoundError(
+            f"{PRETRAINED_FILENAME} was not found at or below: {candidate}"
+        )
+    return found
 
 
 def download_visual_changenet_pretrained(
@@ -214,7 +240,7 @@ def run_visual_changenet_task(
             raise ValueError("Use either --pretrained-model or --from-scratch, not both")
         if pretrained_model is None and not from_scratch:
             pretrained_model = find_visual_changenet_pretrained(
-                [project / "data/models/pretrained", dataset.parent, Path.home() / "Downloads"]
+                [project, project / "data/models/pretrained", dataset.parent, Path.home() / "Downloads"]
             )
             if pretrained_model is None:
                 raise FileNotFoundError(
@@ -224,9 +250,7 @@ def run_visual_changenet_task(
                 )
         runtime_text = _replace_yaml_scalar(runtime_text, "root_dir", "/data/TAO_VCN_DATASET")
         if pretrained_model is not None:
-            pretrained = Path(pretrained_model).resolve()
-            if not pretrained.is_file():
-                raise FileNotFoundError(f"TAO pretrained model not found: {pretrained}")
+            pretrained = resolve_visual_changenet_pretrained(pretrained_model)
             mounts.extend(["-v", f"{pretrained}:/pretrained/model.pth:ro"])
             runtime_text = _replace_yaml_scalar(runtime_text, "pretrained_model_path", "/pretrained/model.pth")
         elif from_scratch:

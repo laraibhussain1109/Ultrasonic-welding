@@ -11,6 +11,7 @@ from blower_inspection.tao_training import (
     download_visual_changenet_pretrained,
     find_visual_changenet_pretrained,
     run_visual_changenet_task,
+    resolve_visual_changenet_pretrained,
     validate_visual_changenet_dataset,
     validate_visual_changenet_spec,
 )
@@ -60,6 +61,22 @@ def test_pretrained_checkpoint_is_found_below_ngc_download_folder(tmp_path: Path
     checkpoint.parent.mkdir()
     checkpoint.write_bytes(b"weights")
     assert find_visual_changenet_pretrained([tmp_path]) == checkpoint.resolve()
+
+
+def test_pretrained_download_directory_can_be_passed_directly(tmp_path: Path):
+    checkpoint = tmp_path / "ngc-version" / "changenet_segment_levir_cd.pth"
+    checkpoint.parent.mkdir()
+    checkpoint.write_bytes(b"weights")
+    assert resolve_visual_changenet_pretrained(tmp_path) == checkpoint.resolve()
+
+
+def test_identical_duplicate_checkpoints_choose_shortest_path(tmp_path: Path):
+    direct = tmp_path / "changenet_segment_levir_cd.pth"
+    nested = tmp_path / "download" / "version" / direct.name
+    nested.parent.mkdir(parents=True)
+    direct.write_bytes(b"same weights")
+    nested.write_bytes(b"same weights")
+    assert find_visual_changenet_pretrained([tmp_path]) == direct.resolve()
 
 
 def test_ngc_download_returns_discovered_checkpoint(tmp_path: Path):

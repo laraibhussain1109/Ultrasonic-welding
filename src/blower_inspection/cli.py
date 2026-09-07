@@ -16,6 +16,7 @@ from .dataset import prepare_yolo_dataset
 from .tao_training import (
     copy_default_visual_changenet_spec,
     download_visual_changenet_pretrained,
+    find_visual_changenet_pretrained,
     run_visual_changenet_task,
 )
 
@@ -85,6 +86,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     tao_weights = sub.add_parser("tao-download-weights", help="Download NVIDIA's VisualChangeNet LEVIR-CD checkpoint")
     tao_weights.add_argument("--output", default="data/models/pretrained")
+
+    tao_find_weights = sub.add_parser("tao-find-weights", help="Print an existing VisualChangeNet checkpoint path")
+    tao_find_weights.add_argument("--search", default=".", help="File or directory to search recursively")
 
     inspect = sub.add_parser("inspect", help="Inspect one image with a trained model")
     inspect.add_argument("model_id")
@@ -162,6 +166,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "tao-download-weights":
         checkpoint = download_visual_changenet_pretrained(args.output)
         print(f"VisualChangeNet pretrained checkpoint: {checkpoint}")
+        return 0
+
+    if args.command == "tao-find-weights":
+        checkpoint = find_visual_changenet_pretrained([args.search])
+        if checkpoint is None:
+            raise SystemExit(f"changenet_segment_levir_cd.pth was not found under {Path(args.search).resolve()}")
+        print(checkpoint)
         return 0
 
     if args.command in {"tao-train", "tao-export"}:
