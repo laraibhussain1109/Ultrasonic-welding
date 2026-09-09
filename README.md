@@ -1,221 +1,161 @@
 # NeuroIris Blower Fan Industrial Vision Inspection
 
-Python/PyQt6 inspection software for ultrasonic-welded blower fan parts. The system is designed for an industrial line PC with an RTX 5070 12 GB GPU, 32 GB RAM, Intel Ultra i7 265K, and an 8.3 MP USB3 camera.
+Python/PyQt6 inspection software for ultrasonic-welded blower fan parts. The production anomaly path consumes an **NVIDIA TAO Deploy ONNX export**; PatchCore and SuperSimpleNet are not used for production decisions.
 
-## What changed for industry deployment
+## Safety and quality boundary
 
-This is no longer a simple template-difference demo. The production path uses a **hybrid PatchCore + PaDiM anomaly detector** trained from normal images:
+No machine-learning detector is literally foolproof. This implementation is intended to be fail-closed, traceable, and suitable for formal line qualification. A model must still pass a documented gauge R&R and locked golden-set validation before it controls a reject mechanism. Use a safety-rated PLC/interlock where the risk assessment requires one.
 
-1. A pretrained CNN extracts multi-scale patch embeddings from known-good blower fan images.
-2. **PatchCore** stores a coreset memory bank of representative normal patches.
-3. **PaDiM** fits per-location Gaussian distributions over normal patch features.
-4. Inspection fuses PatchCore nearest-neighbour distance and PaDiM Mahalanobis distance into a robust anomaly heatmap.
-5. The heatmap is restricted to the fin/weld ring and checked by fin sector to catch cracks, missing welds, wrongly welded fins, and abnormal local surface changes.
+The TAO runtime adds these production gates:
 
-This is a practical normal-only approach for factories because it does not require thousands of defect examples before first deployment.
+- TensorRT/CUDA execution is required by default; loss of the GPU provider inhibits inspection instead of silently falling back to a slow CPU path.
+- The model must have one fixed-size image input and a valid 2-D, finite anomaly-map output. Ambiguous bindings require explicit configuration.
+- Threshold calibration uses reviewed normal parts in the model's native score space, never per-frame min/max normalization.
+- The calibration stores the ONNX SHA-256; a changed model cannot run against stale limits.
+- Pixel area, whole-image score, and cylindrical-sector limits all participate in PASS/FAIL.
+- A failed view is latched across the rotating physical part, and a runtime fault stops inspection and asserts the reject/inhibit output.
+- Reports record the algorithm, model digest, thresholds, score, affected area, and sectors.
 
-## UI
+See [the TAO deployment and validation gate](docs/tao_deployment.md) before commissioning.
 
-The operator interface is built with **PyQt6** and follows the supplied dark neon NeuroIris layout:
+## Installation
 
-- top status bar with online state, speed, tolerance, FPS, latency, and clock,
-- left system-control panel with model selection, start, calibrate/load image, stop, reset, tolerance, surface speed, and admin training,
-- large central camera/overlay viewer with anomaly score bar,
-- right panel with PASS/FAIL/STANDBY badge, session statistics, last result, and inspection log.
-
-## Default logins
-
-| Username | Password | Role | Train button |
-| --- | --- | --- | --- |
-| `admin` | `admin123` | Admin | Visible/enabled |
-| `operator` | `operator123` | User | Hidden/disabled |
-
-Change these before production:
-
-```bash
-blower-inspection add-user admin --role admin --password "new-strong-password"
-```
-
-## Installation on the deployment PC
-
-Install NVIDIA drivers and a CUDA-compatible PyTorch build for the RTX 5070 first, then install the app:
+Install NVIDIA drivers compatible with the qualified TAO/CUDA stack, then:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .[industrial]
-python -m blower_inspection.app
+pip install -e '.[industrial,tao]'
 ```
 
-For Windows PowerShell:
+On Windows PowerShell:
 
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -e .[industrial]
-python -m blower_inspection.app
+pip install -e ".[industrial,tao]"
 ```
 
-## Runtime acceleration
+Start the UI with `python -m blower_inspection.app`.
 
-The live inspector automatically selects CUDA when a CUDA-capable PyTorch build and NVIDIA driver are available. You can override the runtime device with `BLOWER_INSPECTION_DEVICE` (`cuda`, `cpu`, or `directml`/`dml` when `torch-directml` is installed). During live inspection the CNN backbone, PatchCore distance search, and PaDiM scoring stay cached on the selected accelerator instead of being rebuilt on every frame.
+## Model and dataset workflow
 
-```powershell
-$env:BLOWER_INSPECTION_DEVICE = "cuda"
-python -m blower_inspection.app
-```
+Each part in `config/models.json` points to its own TAO ONNX export, calibration file, normal-image directory, output directory, camera mode, ROI, and YOLO locator. Export a fixed-spatial-shape TAO visual-anomaly model as, for example, `data/models/BF-001/tao_anomaly.onnx`.
 
-The UI also logs the active inference device when live inspection starts. If that log shows `cpu` on the deployment PC, install a CUDA-enabled PyTorch wheel for the RTX 5070 or set `BLOWER_INSPECTION_DEVICE=cuda` after confirming `python -c "import torch; print(torch.cuda.is_available())"` returns `True`.
+**TAO is not downloaded or trained by this application.** Install/launch the
+NVIDIA TAO training toolkit separately through NVIDIA NGC when you do not already
+have a qualified ONNX export. The project's `[tao]` extra is the deployment
+runtime only. See [the installation and two-stage explanation](docs/tao_deployment.md#what-must-be-installed).
 
-Each part model stores its own camera mode and default inspection ROI in `config/models.json`. Operators can update both from the GUI without editing code:
+The `7.1.0-cosmos-rl` container is not a visual anomaly-training image. Do not
+use it to manufacture or rename an ONNX artifact for this application; first
+confirm an NVIDIA-supported visual anomaly localization recipe and its export
+contract in the deployment guide.
 
-- **SET PART ROI** saves the selected model's normalized ROI percentages as that part's new default.
-- **CAMERA FPS / RESOLUTION** saves the selected model's camera width, height, and FPS, for example 3840×2160 @ 30 FPS for full 8.3 MP mode or 1920×1080 @ 60 FPS for high-speed mode.
+For Docker diagnostics, run `nvidia-smi` directly or through
+`/bin/bash -lc "nvidia-smi"`; `bash nvidia-smi` incorrectly treats the executable
+as a shell script. The deployment guide includes the complete PowerShell command
+and TAO-recommended shared-memory limits.
 
-The blower fan ROI is still cropped before inference, but reducing USB/camera bandwidth can avoid a full-frame capture bottleneck when the full 8.3 MP image is not needed.
+After GPU verification, run `scripts\tao_probe.ps1` from PowerShell. It saves the
+container's actual TAO commands, packages, and anomaly-related files to
+`tao_probe.txt`; GPU output alone cannot establish that anomaly training exists.
+PyTorch `autograd/anomaly_mode.py` and `test_anomaly_detect_nan` matches are
+gradient/NaN debugging code—not visual defect detection. The updated probe
+filters those false positives and prints an explicit capability verdict.
 
-## YOLO part localisation, rotation handling, and daily counts
+The supported TAO design target is now **VisualChangeNet segmentation**. Its
+export must accept a golden/reference image plus the inspected image and emit a
+spatial change map. This is supervised paired change detection: the existing
+good images provide no-change pairs, but real representative defective images
+and pixel masks are still required to teach and validate actionable changes.
 
-The live inspection path uses your own Ultralytics **YOLO12s** `best.pt` model to
-locate the exact part crop. In the UI, select the part model, press **YOLO PART
-MODEL**, and choose `best.pt`; the path is persisted in `config/models.json` for
-that part model. Install the optional dependency before deployment:
+The commands have intentionally separate meanings: `tao-train` trains weights
+inside the TAO Docker image, `tao-export` creates the ONNX artifact, and `train`
+calibrates that existing artifact for the line. Running only `train BF-001`
+before export now stops immediately with the corrective sequence instead of a
+deep `FileNotFoundError` traceback.
 
-```bash
-pip install -e .[industrial]
-```
+Start with `python -m src.blower_inspection.cli tao-init BF-001`; it now downloads
+the correct NVIDIA pretrained checkpoint into `data/models/pretrained` **and**
+copies the exact TAO 7.1 VisualChangeNet segmentation YAML from the installed
+container. Edit its dataset/training settings, then pass it to `tao-train --spec
+...`. The model ID is optional for TAO commands and defaults to the configured
+active model. `--skip-weights` is available only for intentional offline use.
+An existing manual download under the repository is discovered and copied into
+the canonical pretrained directory, so the successful NGC download is reused.
+NGC's nested versioned copy is retained, and `tao-init` also creates the stable
+direct path `data/models/pretrained/changenet_segment_levir_cd.pth` with hash
+verification.
 
-Each camera frame is passed to YOLO with Ultralytics `bytetrack.yaml` and the
-resulting persistent track ID is used to associate detections. PatchCore/PaDiM
-runs only inside the current YOLO bounding box. All views while a cylindrical
-part is rotating are accumulated into one physical inspection session; a failed
-view is latched and makes the final verdict `FAIL`, even when every later view is
-flawless. If brief occlusion changes ByteTrack's ID, an overlapping detection is
-reattached to the recent session instead of clearing that failure.
+TAO's bundled YAML uses `num_epochs: 1` only as a smoke test. The launcher now
+overrides the temporary runtime spec to 50 epochs by default (`--epochs N`) and
+rejects values below 2. A completed `174/174` display means the one configured
+epoch really ran, but class-1 F1/IoU must be nonzero and validated before export.
 
-The PASS/FAIL signal and production counters are updated only when the detected
-part center crosses the configured counting line (`counting_line_ratio`, default
-45% of frame width—slightly left of center—moving left-to-right). Disappearance or rotation in place
-does not count or complete a part. Set `counting_direction` to `right_to_left`
-when production flows in the opposite direction. The operator must rotate the
-complete curved surface before moving the part across the displayed count line.
+After training, run `tao-export BF-001 --spec
+specs/visual_changenet/bf-001_segmentation.yaml --results-dir
+data/results/BF-001/tao`, or press **EXPORT TAO MODEL** as an admin. The exporter
+finds the completed checkpoint and writes the configured ONNX; **CALIBRATE TAO
+MODEL** is the next separate operation.
 
-After upgrading to this version, retrain each hybrid model from its normal-image
-folder. Training now uses the same YOLO exact crop as live inference; old hybrid
-checkpoints trained on the larger fixed ROI can produce broad false positives and
-miss small surface marks because their feature positions do not match the live
-crop. The live overlay leaves normal pixels unchanged and colors only confirmed
-thresholded anomaly regions.
+An already converted dataset outside the repository is supported directly:
+pass `--dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET"`.
+It is mounted read-only and is never recreated, renamed, reorganized, or split.
+Training uses an auto-discovered pretrained checkpoint, an explicit
+`--pretrained-model <checkpoint.pth>`, or the explicit `--from-scratch` choice.
 
-The hybrid result also includes a high-resolution structural fin-continuity
-check. It detects short gaps in horizontal fins that the downsampled deep
-features may treat as harmless texture, while suppressing the normal full-height
-support ribs. Confirmed gaps are promoted to full overlay severity and participate
-in the same latched FAIL verdict. Repeated gap columns and any broad structural
-response are rejected as normal part texture, preventing the structural check
-from painting or failing the entire blower surface.
+Run `python -m src.blower_inspection.cli tao-download-weights` to download
+NVIDIA's VisualChangeNet segmentation LEVIR-CD trainable v1.0 model through an installed,
+authenticated NGC CLI. The nested `changenet_segment_levir_cd.pth` path is found
+automatically; `tao-train` can then omit `--pretrained-model`.
+If the NGC folder was downloaded manually into the repository root, run
+`tao-find-weights`; `tao-train` now searches the project root automatically and
+also accepts the downloaded directory itself as `--pretrained-model`.
 
-Hybrid training also stores a robust median/MAD reference made from all known-good
-YOLO crops. Before comparison, broad illumination is removed with divisive
-normalization. Live deep anomalies must be corroborated by this fixed normal
-reference, so relative heatmap normalization cannot make every good part fail.
-Broad bright, low-texture lamp reflections are masked, while sharp white lines,
-cracks, and broken edges remain eligible as physical defects. Retraining is
-required once to add these reference statistics to an existing checkpoint.
+If an older generated YAML begins with the TAO release/license banner, delete it
+and rerun `tao-init`. The copier now bypasses the container entrypoint with
+`--entrypoint cat`, and training preflight rejects banner-corrupted YAML with a
+direct repair message.
 
-Train the anomaly model on the **YOLO-cropped component only**, not the complete
-camera FOV. Full-FOV training wastes PatchCore patches on the table, fixture,
-keyboard, and lighting and reduces the pixel resolution available for a small
-broken fin. The production profile uses a 640×640 input, an 80×80 embedding grid,
-an 8,192-patch training coreset, and up to 1,024 runtime memory patches. This is a
-deliberate detail/latency balance for the target RTX GPU and gives small defects
-substantially more representation than the old 384×384/56×56 profile. Retrain all
-part models after this upgrade because checkpoint version 6 contains the new
-resolution, PatchCore geometry, and student/teacher state.
-
-### Student/teacher anomaly detection
-
-Checkpoint version 6 adds an STFPM-style student/teacher detector. A frozen
-ImageNet ResNet-18 teacher and a trainable student observe the same known-good
-YOLO crops; the student learns to reproduce the teacher's multi-scale spatial
-features. During inspection, a local feature discrepancy that is outside the
-calibrated normal residual indicates an anomaly. This smooth learned mapping is
-the primary learned signal and does not depend on whether a small defect's
-nearest normal patch survived PatchCore coreset subsampling. PatchCore/PaDiM is
-retained as a corroborating ensemble signal, while normal-reference and glare
-masks still reject illumination changes. Retrain every part model after updating
-because older checkpoints do not contain the student or its residual calibration.
-
-Daily counters persist in `data/results/daily_statistics.json`. An operating day
-runs from local time 07:00 through the next local 07:00; the UI's reset control
-reloads those protected daily totals rather than erasing production records.
-
-## Training workflow
-
-### Prepare normal crops from full-FOV images
-
-**You do not have to run this command before training.** Both the GUI **TRAIN
-SELECTED MODEL** action and `python -m blower_inspection.cli train BF-001`
-automatically run YOLO on every full-FOV normal image immediately before model
-training. Crops are held in memory, reused by PatchCore/PaDiM and normal-reference
-calibration, and the original images are not modified.
-
-The preparation command below is optional and intended only when you want to
-export and visually review the exact crops first.
-
-Keep the original camera captures outside the configured training output, then
-use the dataset preparation command. It loads the selected model's saved YOLO
-`best.pt`, detects the component in every image, and writes only the exact crop:
+Use the component crop for model training. The optional dataset preparation command applies the configured YOLO detector to full-camera known-good images while retaining a manifest:
 
 ```bash
 python -m blower_inspection.cli prepare-dataset BF-001 path/to/full-fov-good-images
 ```
 
-The default output is the model's `normal_image_dir` (for example
-`data/training/BF-001/normal`). Use `--output path/to/crops` to review crops in a
-staging directory first, `--no-recursive` to ignore subfolders, or `--replace` to
-regenerate existing crops. Relative subfolders are retained to prevent duplicate
-filenames from overwriting each other. `crop_manifest.csv` lists every written,
-skipped, unreadable, or undetected source image. A failed/no-detection image is
-not copied into the normal dataset, and the command exits nonzero when any image
-fails so an incomplete dataset cannot be overlooked.
+When the source is already the configured normal directory and `--output` is
+omitted, the command now creates a timestamped sibling backup and safely replaces
+each source with its crop. This directly supports the common capture-then-prepare
+workflow. Use an explicit separate `--output` if the full frames should remain in
+their original folder.
 
-If source and output intentionally refer to the same directory, add `--replace`;
-each crop is written to a temporary file and atomically replaces its full-FOV
-source. This is destructive, so keeping originals and using in-memory training or
-a separate staging `--output` is recommended. On Windows, quote every path that
-contains spaces:
+Review every crop. Remove defects, wrong detections, hands/tools, blur, and uncontrolled glare. Split by physical part, not adjacent frames, to prevent validation leakage.
 
-```powershell
-python -m blower_inspection.cli prepare-dataset BF-001 "C:\camera images" --output "C:\normal crops"
+After placing at least 20 reviewed normal images in the configured directory, calibrate the frozen TAO export:
+
+```bash
+python -m blower_inspection.cli train BF-001
 ```
 
-Review every crop before training: delete crops containing a defective part,
-incorrect detection, hand/tool occlusion, or unacceptable blur. Include normal
-rotation angles and acceptable lighting variation, but never include defective
-parts in the normal folder.
+If the ONNX file is elsewhere, import and persist it in the same command:
 
-Each configured model has its own normal-image folder:
-
-```text
-data/training/BF-001/normal
-data/training/BF-002/normal
-data/training/BF-003/normal
-data/training/BF-004/normal
+```bash
+python -m blower_inspection.cli train BF-001 --model-file C:\path\to\tao_anomaly.onnx
 ```
 
-For each part model:
+The UI's **CALIBRATE TAO MODEL** button opens an ONNX chooser when the configured
+export is missing, instead of failing with “TAO model export not found”.
 
-> The camera may see the whole table during capture. Live inspection, calibration image loading, CLI inspection, and training now automatically crop each frame to the long dark blower component ROI before the anomaly model runs, so keyboards, rails, cables, and bench clutter are excluded from scoring.
+For `nvidia_tao`, `train` means **calibrate the exported model**; neural-network training remains in NVIDIA's supported TAO container. Use 100+ physical normal parts spanning accepted process, finish, pose, and lighting variation for production qualification.
 
-1. Mount the camera rigidly and lock exposure, gain, focus, white balance, and lighting.
-2. Capture at least 100 known-good parts; the software enforces a minimum of 20 images and uses a deterministic, memory-bounded sample of up to 300 images for hybrid training.
-3. Put images in the model's `normal_image_dir`.
-4. Login as `admin`.
-5. Select the model and press **TRAIN SELECTED MODEL**.
-6. Validate thresholds with known-good and golden bad samples before automatic rejection.
+If output auto-discovery is ambiguous, configure `tao_input_name`, `tao_output_name`, and (when exported) `tao_score_output_name`. `tao_require_gpu` defaults to `true`.
 
-For a new part, add a new record to `config/models.json`, create its normal-image folder, collect normal samples, then train from the admin UI.
+## YOLO localization and rotating-part decisions
+
+The live path uses the configured Ultralytics detector and ByteTrack track ID to crop the current component. All views during rotation belong to one physical-part session. Any failed view is latched; later good views cannot erase it. Production totals and the ESP32 signal update when the tracked center crosses the configured count line, not when a part merely disappears.
+
+Camera exposure, gain, focus, white balance, lighting, fixture, working distance, resolution, and FPS must be locked to the validated setup. The UI can persist per-model ROI, detector, and camera settings.
 
 ## CLI
 
@@ -225,123 +165,23 @@ python -m blower_inspection.cli train BF-001
 python -m blower_inspection.cli inspect BF-001 path/to/test_image.png
 ```
 
-## Production recommendations
+## Login and records
 
-- Use a mechanical nest with angular keying; do not rely on software alignment for large pose variation.
-- Use diffuse ring/coaxial lighting for weld consistency and a low-angle secondary light for hairline cracks.
-- Keep a master set of golden PASS/FAIL samples for every model and re-run them after any threshold or lighting change.
-- Store failed overlays and JSON reports for process engineering review.
-- The hybrid trainer pools deep features to a 28×28 patch grid, projects them to 256 dimensions, caps PaDiM at 128 components, and caps PatchCore memory to prevent multi-gigabyte covariance allocations on line PCs.
-- Use line PLC handshaking before enabling automatic reject gates.
-
-## ESP32 fail output
-
-The inspection UI can drive an ESP32 output pin when a part fails inspection. Flash
-`firmware/esp32_fail_output/esp32_fail_output.ino` to the ESP32 with the Arduino
-IDE or `arduino-cli`. The sketch uses GPIO 4 by default, which is commonly
-labeled `D4` on ESP32 development boards. On every detected `FAIL`, the Python
-app sends a wireless HTTP command to the ESP32 and the firmware drives GPIO 4
-HIGH. On `PASS`, `STOP`, or standby/reset states, it drives GPIO 4 LOW.
-
-### Recommended WiFi / hotspot mode
-
-USB serial is no longer required for production triggering. By default the ESP32
-creates its own hotspot:
-
-| Setting | Default |
-| --- | --- |
-| SSID | `NeuroIris-ESP32` |
-| Password | `neuroiris123` |
-| ESP32 URL | `http://192.168.4.1` |
-
-Deployment steps:
-
-1. Flash the ESP32 firmware once.
-2. On the production PC, connect WiFi to the `NeuroIris-ESP32` hotspot.
-3. Start the app normally:
-
-```powershell
-python -m blower_inspection.app
-```
-
-The app defaults to WiFi transport and calls:
-
-- `http://192.168.4.1/ping` to verify the ESP32 is reachable,
-- `http://192.168.4.1/fail` when inspection result is FAIL,
-- `http://192.168.4.1/pass` when inspection result is PASS or inspection stops.
-
-If you put the ESP32 and production PC on another WiFi network, set the ESP32 URL
-before launching:
-
-```powershell
-$env:BLOWER_ESP32_TRANSPORT = "wifi"
-$env:BLOWER_ESP32_URL = "http://192.168.1.50"
-python -m blower_inspection.app
-```
-
-For one-off CLI inspections, add `--esp32-output` after setting the same WiFi
-environment variables if needed:
+Default development logins are `admin` / `admin123` and `operator` / `operator123`. Change them before deployment:
 
 ```bash
-python -m blower_inspection.cli inspect BF-001 path/to/test_image.png --esp32-output
+blower-inspection add-user admin --role admin --password 'new-strong-password'
 ```
 
-### Optional USB serial fallback
+Daily totals are stored in `data/results/daily_statistics.json`; an operating day runs from local 07:00 through the following 07:00. Failed overlays and JSON reports are written below each configured `result_dir`.
 
-USB serial remains available for bench testing or if you explicitly prefer a
-cabled trigger path:
+## ESP32 reject output
 
-```powershell
-$env:BLOWER_ESP32_TRANSPORT = "serial"
-$env:BLOWER_ESP32_PORT = "COM7"
-$env:BLOWER_ESP32_BAUD = "115200"
-python -m blower_inspection.app
+Flash `firmware/esp32_fail_output/esp32_fail_output.ino` and configure the serial bridge for the deployment port. The app asserts FAIL for a rejected completed part. It also asserts FAIL/inhibit after a live inference fault; production PLC logic must distinguish and latch equipment faults according to the line risk assessment.
+
+## Tests
+
+```bash
+pip install -e '.[dev]'
+pytest -q
 ```
-
-When serial mode is enabled, the app scans available serial ports, sends a `PING`
-handshake to the firmware, and only logs `ESP32 READY <port>` after the firmware
-replies with `PONG` or `ESP32_FAIL_OUTPUT_READY`. Keep
-`BLOWER_ESP32_REQUIRE_HANDSHAKE=1` unless you intentionally replaced the provided
-firmware.
-
-### Python serial dependency
-
-You do **not** need the Arduino IDE on the deployment PC just to run inspection.
-The Arduino IDE or `arduino-cli` is only needed on whichever computer you use to
-flash `firmware/esp32_fail_output/esp32_fail_output.ino` onto the ESP32. The
-deployment PC only needs `pyserial` if you choose optional USB serial mode. WiFi
-mode uses Python's standard library HTTP client.
-
-If serial mode says `No module named serial`, install `pyserial` into the same
-Python environment that launches the app:
-
-```powershell
-python -m pip install pyserial
-```
-
-If you are running from this source checkout, reinstall the app dependencies:
-
-```powershell
-python -m pip install -e .[industrial]
-python -m blower_inspection.app
-```
-
-Avoid launching as `python -m src.blower_inspection.app`; use
-`python -m blower_inspection.app` after installation so the same environment gets
-the package dependencies.
-
-Use level shifting, an opto-isolator, or an interposing relay/PLC input module as
-required by the connected machine. Do not connect ESP32 GPIO directly to voltages
-above 3.3 V. If the ESP32 HTTP `/fail` response shows
-`FAIL_OUTPUT=ACTIVE ... LEVEL=HIGH` but the relay does not energize, check whether
-the relay module is active-low; if it is, change `FAIL_ACTIVE_LEVEL` in the
-firmware from `HIGH` to `LOW` and re-flash.
-
-## Production recommendations
-
-- Use a mechanical nest with angular keying; do not rely on software alignment for large pose variation.
-- Use diffuse ring/coaxial lighting for weld consistency and a low-angle secondary light for hairline cracks.
-- Keep a master set of golden PASS/FAIL samples for every model and re-run them after any threshold or lighting change.
-- Store failed overlays and JSON reports for process engineering review.
-- The hybrid trainer pools deep features to a 28×28 patch grid, projects them to 256 dimensions, caps PaDiM at 128 components, and caps PatchCore memory to prevent multi-gigabyte covariance allocations on line PCs.
-- Use line PLC handshaking before enabling automatic reject gates.

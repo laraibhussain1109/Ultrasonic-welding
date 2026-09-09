@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import csv
+import shutil
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -25,6 +27,7 @@ class DatasetPreparationResult:
     skipped: int
     failed: int
     manifest: Path
+    backup_dir: Path | None = None
 
 
 def prepare_yolo_dataset(
@@ -35,6 +38,7 @@ def prepare_yolo_dataset(
     confidence: float = 0.40,
     recursive: bool = True,
     replace: bool = False,
+    backup_in_place: bool = False,
     detector: CropDetector | None = None,
 ) -> DatasetPreparationResult:
     """Crop all source images with YOLO and write an auditable training dataset.
@@ -49,7 +53,10 @@ def prepare_yolo_dataset(
         raise NotADirectoryError(f"Dataset source directory does not exist: {source}")
     in_place = source == output
     if in_place and not replace:
-        raise ValueError("In-place dataset cropping requires --replace; normal training autocrops without modifying images")
+        raise ValueError(
+            "Source and output are the same folder. Add --replace to crop in place "
+            "(the CLI will create a backup), or use --output <another-folder>."
+        )
     if not in_place and (source in output.parents or output in source.parents):
         raise ValueError("Source and output directories must not contain one another")
     if detector is None:
@@ -59,6 +66,13 @@ def prepare_yolo_dataset(
 
     iterator = source.rglob("*") if recursive else source.glob("*")
     images = sorted(path for path in iterator if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS)
+    backup_dir = None
+    if in_place and backup_in_place and images:
+        backup_dir = source.parent / f"{source.name}_uncropped_{datetime.now():%Y%m%d_%H%M%S}"
+        for image_path in images:
+            backup_path = backup_dir / image_path.relative_to(source)
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(image_path, backup_path)
     output.mkdir(parents=True, exist_ok=True)
     rows: list[tuple[str, str, str]] = []
     written = skipped = failed = 0
@@ -96,4 +110,4 @@ def prepare_yolo_dataset(
         writer = csv.writer(handle)
         writer.writerow(("source_relative_path", "status", "output_path"))
         writer.writerows(rows)
-    return DatasetPreparationResult(len(images), written, skipped, failed, manifest)
+    return DatasetPreparationResult(len(images), written, skipped, failed, manifest, backup_dir)
