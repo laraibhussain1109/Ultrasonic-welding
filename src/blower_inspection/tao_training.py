@@ -195,6 +195,30 @@ def _replace_yaml_scalar(text: str, key: str, value: str, *, top_level: bool = F
     return text[:matches[0].start()] + f"{leading}{key}: {value}" + text[matches[0].end():]
 
 
+def _replace_yaml_section_scalar(text: str, section: str, key: str, value: str) -> str:
+    """Replace a direct scalar child in one top-level YAML section."""
+    section_match = re.search(rf"(?m)^{re.escape(section)}:\s*$", text)
+    if section_match is None:
+        raise ValueError(f"VisualChangeNet spec is missing `{section}:`")
+    next_section = re.search(r"(?m)^\S[^\n]*:\s*(?:.*)?$", text[section_match.end():])
+    end = section_match.end() + (next_section.start() if next_section else len(text[section_match.end():]))
+    block = text[section_match.end():end]
+    updated = _replace_yaml_scalar(block, key, value)
+    return text[:section_match.end()] + updated + text[end:]
+
+
+def find_training_checkpoint(results_dir: str | Path) -> Path:
+    """Select the stable checkpoint, or the newest completed TAO checkpoint."""
+    train_dir = Path(results_dir).resolve() / "train"
+    preferred = train_dir / "changenet.pth"
+    if preferred.is_file():
+        return preferred
+    candidates = [path for path in train_dir.rglob("*.pth") if path.is_file()]
+    if not candidates:
+        raise FileNotFoundError(f"No trained VisualChangeNet .pth checkpoint found under {train_dir}")
+    return max(candidates, key=lambda path: (path.stat().st_mtime_ns, str(path)))
+
+
 def copy_default_visual_changenet_spec(
     destination: str | Path,
     *,
@@ -234,6 +258,7 @@ def run_visual_changenet_task(
     pretrained_model: str | Path | None = None,
     from_scratch: bool = False,
     epochs: int = 50,
+    export_file: str | Path | None = None,
 ) -> None:
     """Run a VisualChangeNet train/export task with the project mounted.
 
@@ -270,6 +295,25 @@ def run_visual_changenet_task(
         f'"{(Path("/workspace/project") / result_relative).as_posix()}"',
         top_level=True,
     )
+    expected_export: Path | None = None
+    if task == "export":
+        checkpoint = find_training_checkpoint(result_host)
+        checkpoint_relative = checkpoint.relative_to(project)
+        expected_export = Path(export_file or project / "data/models/visual_changenet.onnx").resolve()
+        try:
+            export_relative = expected_export.relative_to(project)
+        except ValueError as exc:
+            raise ValueError(f"TAO ONNX export path must be inside the project: {expected_export}") from exc
+        expected_export.parent.mkdir(parents=True, exist_ok=True)
+        runtime_text = _replace_yaml_section_scalar(
+            runtime_text, "export", "checkpoint",
+            f'"{(Path("/workspace/project") / checkpoint_relative).as_posix()}"',
+        )
+        runtime_text = _replace_yaml_section_scalar(
+            runtime_text, "export", "onnx_file",
+            f'"{(Path("/workspace/project") / export_relative).as_posix()}"',
+        )
+        runtime_text = _replace_yaml_section_scalar(runtime_text, "export", "batch_size", "1")
     if task == "train":
         if dataset_dir is None:
             raise ValueError("TAO training requires --dataset pointing to the existing TAO_VCN_DATASET")
@@ -312,6 +356,10 @@ def run_visual_changenet_task(
     ]
     try:
         subprocess.run(command, check=True)
+        if expected_export is not None and not expected_export.is_file():
+            raise FileNotFoundError(
+                f"TAO export command completed but ONNX was not created at {expected_export}"
+            )
     finally:
         if runtime_spec is not None:
             runtime_spec.unlink(missing_ok=True)

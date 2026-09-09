@@ -400,6 +400,33 @@ detected in that validation pass. Do not export or commission that checkpoint;
 verify that NG masks contain nonzero class-1 pixels, NG samples occur in
 `train.txt` and `val.txt`, and continue training while monitoring class-1 F1/IoU.
 
+### Export after a completed training run
+
+Training deliberately does not export automatically: export is a separately
+audited TAO operation. The exporter now discovers
+`data/results/BF-001/tao/train/changenet.pth` or, when TAO uses epoch-named files,
+the newest completed `.pth`. It writes directly to the configured
+`data/models/BF-001/visual_changenet.onnx` path and verifies that the file was
+actually created.
+
+Run:
+
+```powershell
+python -m src.blower_inspection.cli tao-export BF-001 `
+  --spec specs/visual_changenet/bf-001_segmentation.yaml `
+  --results-dir data/results/BF-001/tao
+```
+
+Then calibrate:
+
+```powershell
+python -m src.blower_inspection.cli train BF-001
+```
+
+Admins can perform the same export from the GUI with **EXPORT TAO MODEL**, then
+use **CALIBRATE TAO MODEL**. Export failures identify the missing checkpoint or
+missing ONNX destination rather than reporting success prematurely.
+
 The screenshot shows two separate CLI validation errors:
 
 * `tao-train BF-001` omitted mandatory `--spec` because TAO cannot train without

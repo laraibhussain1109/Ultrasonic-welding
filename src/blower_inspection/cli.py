@@ -79,6 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
     tao_export.add_argument("--spec", required=True, help="VisualChangeNet export experiment YAML inside this project")
     tao_export.add_argument("--image", default="nvcr.io/nvidia/tao/tao-toolkit:7.1.0-pyt")
     tao_export.add_argument("--results-dir", help="Same host results directory used for training")
+    tao_export.add_argument("--output", help="ONNX destination; defaults to the model_file in models.json")
 
     tao_init = sub.add_parser("tao-init", help="Copy the installed TAO VisualChangeNet default spec")
     tao_init.add_argument("model_id", nargs="?", help="Part model; defaults to active_model")
@@ -202,8 +203,13 @@ def main(argv: list[str] | None = None) -> int:
                 from_scratch=args.from_scratch,
                 epochs=args.epochs,
             )
+        else:
+            kwargs["export_file"] = args.output or model.model_file
         run_visual_changenet_task(task, args.spec, **kwargs)
         print(f"TAO VisualChangeNet {task} completed")
+        if task == "export":
+            print(f"ONNX export ready for calibration: {Path(args.output or model.model_file).resolve()}")
+            print(f"Next: python -m src.blower_inspection.cli train {model.id}")
         return 0
 
     if args.command == "inspect":

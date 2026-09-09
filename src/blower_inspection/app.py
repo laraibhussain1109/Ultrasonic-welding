@@ -48,6 +48,7 @@ from .daily_stats import DailyStatistics, operating_day
 from .fail_output import ESP32FailOutputBridge
 from .trainer import InspectionResult
 from .tao_inspector import inspector_for_model
+from .tao_training import run_visual_changenet_task
 from .yolo_tracking import RotatingPartInspector, TrackedPart, YoloByteTrackDetector
 
 
@@ -150,6 +151,26 @@ class InspectionWorker(QThread):
         self.finished_result.emit(self.track_id, result, (time.perf_counter() - start) * 1000.0)
 
 
+class TaoExportWorker(QThread):
+    finished_ok = pyqtSignal(str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, model: PartModelConfig) -> None:
+        super().__init__()
+        self.model = model
+
+    def run(self) -> None:
+        spec = Path(f"specs/visual_changenet/{self.model.id.lower()}_segmentation.yaml")
+        results = Path(f"data/results/{self.model.id}/tao")
+        try:
+            run_visual_changenet_task(
+                "export", spec, results_dir=results, export_file=self.model.model_file
+            )
+            self.finished_ok.emit(f"EXPORTED {self.model.id}: {self.model.model_file}")
+        except Exception as exc:
+            self.failed.emit(f"EXPORT FAILED {self.model.id}: {exc}")
+
+
 class InspectionWindow(QWidget):
     def __init__(self, user: User) -> None:
         super().__init__()
@@ -178,6 +199,7 @@ class InspectionWindow(QWidget):
         self.rotating_parts: RotatingPartInspector | None = None
         self.started_at = time.time()
         self.train_worker: TrainWorker | None = None
+        self.export_worker: TaoExportWorker | None = None
         self.setWindowTitle(f"NeuroIris Blower Fan Inspection - {user.username} ({user.role})")
         self.resize(1884, 940)
         self._build_ui()
@@ -281,6 +303,10 @@ class InspectionWindow(QWidget):
         layout.addWidget(QLabel("FIXED LINE RATE — OPTIMISED @ 30 FPS"))
         layout.addStretch(1)
         if self.user.is_admin:
+            export = QPushButton("⬡   EXPORT TAO MODEL")
+            export.setObjectName("train")
+            export.clicked.connect(self.export_selected)
+            layout.addWidget(export)
             train = QPushButton("◆   CALIBRATE TAO MODEL")
             train.setObjectName("train")
             train.clicked.connect(self.train_selected)
@@ -771,6 +797,20 @@ class InspectionWindow(QWidget):
         self.train_worker.finished_ok.connect(lambda message: self.log.addItem(message))
         self.train_worker.failed.connect(lambda message: QMessageBox.critical(self, "Training failed", message))
         self.train_worker.start()
+
+    def export_selected(self) -> None:
+        if not self.user.is_admin:
+            QMessageBox.warning(self, "Permission denied", "TAO export is available to admin users only.")
+            return
+        model = self.selected_model()
+        if model.algorithm != "nvidia_tao":
+            QMessageBox.warning(self, "Wrong model type", f"{model.id} is not a TAO model.")
+            return
+        self.log.addItem(f"TAO EXPORT STARTED {model.id}")
+        self.export_worker = TaoExportWorker(model)
+        self.export_worker.finished_ok.connect(lambda message: self.log.addItem(message))
+        self.export_worker.failed.connect(lambda message: QMessageBox.critical(self, "Export failed", message))
+        self.export_worker.start()
 
     def stop_camera(self) -> None:
         if self.rotating_parts is not None:

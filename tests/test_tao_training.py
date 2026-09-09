@@ -10,6 +10,7 @@ from blower_inspection.tao_training import (
     copy_default_visual_changenet_spec,
     download_visual_changenet_pretrained,
     find_visual_changenet_pretrained,
+    find_training_checkpoint,
     ensure_visual_changenet_pretrained,
     run_visual_changenet_task,
     resolve_visual_changenet_pretrained,
@@ -147,6 +148,40 @@ def test_ngc_access_denial_has_actionable_message(tmp_path: Path):
 def test_visual_changenet_spec_must_exist(tmp_path: Path):
     with pytest.raises(FileNotFoundError, match="experiment spec not found"):
         run_visual_changenet_task("train", tmp_path / "missing.yaml", project_dir=tmp_path)
+
+
+def test_export_finds_latest_checkpoint_and_writes_configured_onnx(tmp_path: Path):
+    spec = tmp_path / "spec.yaml"
+    spec.write_text(
+        "task: segment\nresults_dir: /results\n"
+        "export:\n  results_dir: ${results_dir}/export\n"
+        "  checkpoint: ${results_dir}/train/changenet.pth\n"
+        "  onnx_file: ${export.results_dir}/changenet.onnx\n"
+        "  batch_size: 2\n",
+        encoding="utf-8",
+    )
+    results = tmp_path / "results"
+    checkpoint = results / "train" / "epoch=49.pth"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"weights")
+    output = tmp_path / "data" / "models" / "BF-001" / "visual_changenet.onnx"
+    captured = {}
+
+    def export(command, check):
+        runtime = tmp_path / command[-1].removeprefix("/workspace/project/")
+        captured["spec"] = runtime.read_text(encoding="utf-8")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"onnx")
+
+    with patch("blower_inspection.tao_training.subprocess.run", side_effect=export):
+        run_visual_changenet_task(
+            "export", spec, project_dir=tmp_path, results_dir=results, export_file=output
+        )
+
+    assert find_training_checkpoint(results) == checkpoint
+    assert "/workspace/project/results/train/epoch=49.pth" in captured["spec"]
+    assert "/workspace/project/data/models/BF-001/visual_changenet.onnx" in captured["spec"]
+    assert "  batch_size: 1" in captured["spec"]
 
 
 def test_visual_changenet_spec_must_be_in_project(tmp_path: Path):

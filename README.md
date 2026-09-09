@@ -93,6 +93,12 @@ overrides the temporary runtime spec to 50 epochs by default (`--epochs N`) and
 rejects values below 2. A completed `174/174` display means the one configured
 epoch really ran, but class-1 F1/IoU must be nonzero and validated before export.
 
+After training, run `tao-export BF-001 --spec
+specs/visual_changenet/bf-001_segmentation.yaml --results-dir
+data/results/BF-001/tao`, or press **EXPORT TAO MODEL** as an admin. The exporter
+finds the completed checkpoint and writes the configured ONNX; **CALIBRATE TAO
+MODEL** is the next separate operation.
+
 An already converted dataset outside the repository is supported directly:
 pass `--dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET"`.
 It is mounted read-only and is never recreated, renamed, reorganized, or split.
