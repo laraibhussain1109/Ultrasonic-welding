@@ -294,6 +294,24 @@ already present below `data/models/pretrained` and therefore does not redownload
 on every initialization. Use `tao-init --skip-weights` only when deliberately
 working offline or supplying a different explicit checkpoint.
 
+NGC creates a versioned subdirectory, so this path can legitimately exist while
+`Test-Path .\data\models\pretrained\changenet_segment_levir_cd.pth` is false:
+
+```text
+data\models\pretrained\visual_changenet_segmentation_levircd_vvisual_changenet_levircd_trainable_v1.0\changenet_segment_levir_cd.pth
+```
+
+`Test-Path` checks only the exact path supplied; it does not search descendants.
+The updated initializer now verifies and atomically copies the nested NGC file to
+the stable direct path as well. Rerun initialization and verify:
+
+```powershell
+python -m src.blower_inspection.cli tao-init BF-001
+Test-Path .\data\models\pretrained\changenet_segment_levir_cd.pth
+```
+
+The second command must then return `True`; the versioned NGC copy is retained.
+
 The checkpoint is downloaded below `data/models/pretrained` and discovered
 recursively, so its NGC-generated version subdirectory does not need to be
 guessed. `tao-train` also searches that directory, the dataset parent, and the

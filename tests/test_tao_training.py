@@ -116,7 +116,8 @@ def test_ngc_download_reuses_checkpoint_in_canonical_directory(tmp_path: Path):
     checkpoint.write_bytes(b"weights")
     with patch("blower_inspection.tao_training.subprocess.run") as run:
         result = download_visual_changenet_pretrained(tmp_path)
-    assert result == checkpoint.resolve()
+    assert result == tmp_path / "changenet_segment_levir_cd.pth"
+    assert result.read_bytes() == b"weights"
     run.assert_not_called()
 
 

@@ -62,6 +62,21 @@ def resolve_visual_changenet_pretrained(value: str | Path) -> Path:
     return found
 
 
+def _install_checkpoint_canonically(checkpoint: Path, output_dir: Path) -> Path:
+    """Ensure the checkpoint also exists at the stable, non-versioned path."""
+    destination = output_dir / PRETRAINED_FILENAME
+    if checkpoint.resolve() == destination.resolve():
+        return destination
+    output_dir.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    shutil.copy2(checkpoint, temporary)
+    if _file_sha256(temporary) != _file_sha256(checkpoint):
+        temporary.unlink(missing_ok=True)
+        raise RuntimeError("VisualChangeNet checkpoint copy verification failed")
+    temporary.replace(destination)
+    return destination
+
+
 def download_visual_changenet_pretrained(
     output_dir: str | Path = "data/models/pretrained",
 ) -> Path:
@@ -70,7 +85,7 @@ def download_visual_changenet_pretrained(
     output.mkdir(parents=True, exist_ok=True)
     existing = find_visual_changenet_pretrained([output])
     if existing is not None:
-        return existing
+        return _install_checkpoint_canonically(existing, output)
     command = [
         "ngc", "registry", "model", "download-version", PRETRAINED_NGC_MODEL,
         "--dest", str(output),
@@ -94,7 +109,7 @@ def download_visual_changenet_pretrained(
         raise FileNotFoundError(
             f"NGC download completed but {PRETRAINED_FILENAME} was not found under {output}"
         )
-    return checkpoint
+    return _install_checkpoint_canonically(checkpoint, output)
 
 
 def ensure_visual_changenet_pretrained(
@@ -106,16 +121,11 @@ def ensure_visual_changenet_pretrained(
     output = Path(output_dir).resolve()
     existing = find_visual_changenet_pretrained([output])
     if existing is not None:
-        return existing
+        return _install_checkpoint_canonically(existing, output)
     found = find_visual_changenet_pretrained(search_roots or [Path.cwd()])
     if found is None:
         return download_visual_changenet_pretrained(output)
-    destination = output / PRETRAINED_FILENAME
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_suffix(destination.suffix + ".tmp")
-    shutil.copy2(found, temporary)
-    temporary.replace(destination)
-    return destination
+    return _install_checkpoint_canonically(found, output)
 
 
 def _clean_spec_output(output: str) -> str:

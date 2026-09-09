@@ -84,6 +84,9 @@ container. Edit its dataset/training settings, then pass it to `tao-train --spec
 active model. `--skip-weights` is available only for intentional offline use.
 An existing manual download under the repository is discovered and copied into
 the canonical pretrained directory, so the successful NGC download is reused.
+NGC's nested versioned copy is retained, and `tao-init` also creates the stable
+direct path `data/models/pretrained/changenet_segment_levir_cd.pth` with hash
+verification.
 
 TAO's bundled YAML uses `num_epochs: 1` only as a smoke test. The launcher now
 overrides the temporary runtime spec to 50 epochs by default (`--epochs N`) and
