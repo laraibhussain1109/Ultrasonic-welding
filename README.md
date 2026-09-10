@@ -90,6 +90,12 @@ NGC's nested versioned copy is retained, and `tao-init` also creates the stable
 direct path `data/models/pretrained/changenet_segment_levir_cd.pth` with hash
 verification.
 
+`tao-init`, training, and export require Docker Desktop's Linux engine. On
+Windows, start Docker Desktop and wait for the engine to be ready, then confirm
+`docker info` succeeds in the same PowerShell window. `tao-init` performs this
+check before downloading weights, so a stopped daemon produces a short repair
+message instead of downloading the checkpoint and ending with a traceback.
+
 TAO's bundled YAML uses `num_epochs: 1` only as a smoke test. The launcher now
 overrides the temporary runtime spec to 50 epochs by default (`--epochs N`) and
 rejects values below 2. A completed `174/174` display means the one configured

@@ -19,6 +19,28 @@ PRETRAINED_NGC_MODEL = (
 )
 
 
+def require_docker_engine() -> None:
+    """Fail before downloads or TAO work when the Docker daemon is unavailable."""
+    command = ["docker", "info"]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "Docker is not installed or `docker` is not on PATH. Install and start "
+            "Docker Desktop, then verify it with `docker info`."
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        message = (
+            "The Docker engine is not running. Start Docker Desktop, wait until it reports "
+            "that the engine is running, select Linux containers, and verify `docker info` "
+            "before running tao-init again."
+        )
+        if detail:
+            message += f" Docker reported: {detail}"
+        raise RuntimeError(message) from exc
+
+
 def find_visual_changenet_pretrained(search_roots: list[str | Path]) -> Path | None:
     """Find the NVIDIA LEVIR-CD checkpoint without assuming its download folder."""
     matches: set[Path] = set()

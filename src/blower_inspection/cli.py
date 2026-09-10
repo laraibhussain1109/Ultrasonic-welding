@@ -18,6 +18,7 @@ from .tao_training import (
     download_visual_changenet_pretrained,
     find_visual_changenet_pretrained,
     ensure_visual_changenet_pretrained,
+    require_docker_engine,
     run_visual_changenet_task,
 )
 
@@ -162,6 +163,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "tao-init":
         model = registry.get(args.model_id) if args.model_id else registry.active()
         output = Path(args.output or f"specs/visual_changenet/{model.id.lower()}_{args.variant}.yaml")
+        try:
+            # Check first: do not download a large checkpoint when the
+            # Docker-only spec generation step cannot run.
+            require_docker_engine()
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from None
         checkpoint = None
         if args.variant == "segmentation" and not args.skip_weights:
             print("Downloading NVIDIA VisualChangeNet segmentation pretrained weights...")

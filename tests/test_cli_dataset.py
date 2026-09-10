@@ -1,9 +1,10 @@
 import pytest
 import numpy as np
+from unittest.mock import patch
 
 pytest.importorskip("cv2", exc_type=ImportError)
 
-from blower_inspection.cli import build_parser, resolve_onnx_model
+from blower_inspection.cli import build_parser, main, resolve_onnx_model
 from blower_inspection.dataset import prepare_yolo_dataset
 
 
@@ -39,6 +40,19 @@ def test_tao_init_defaults_to_segmentation():
     assert args.variant == "segmentation"
     assert args.weights_output == "data/models/pretrained"
     assert args.skip_weights is False
+
+
+def test_tao_init_checks_docker_before_downloading_weights():
+    with (
+        patch(
+            "blower_inspection.cli.require_docker_engine",
+            side_effect=RuntimeError("The Docker engine is not running."),
+        ),
+        patch("blower_inspection.cli.ensure_visual_changenet_pretrained") as download,
+        pytest.raises(SystemExit, match="Docker engine is not running"),
+    ):
+        main(["tao-init", "BF-001"])
+    download.assert_not_called()
 
 
 def test_tao_download_weights_has_project_default_destination():

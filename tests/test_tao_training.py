@@ -14,9 +14,29 @@ from blower_inspection.tao_training import (
     ensure_visual_changenet_pretrained,
     run_visual_changenet_task,
     resolve_visual_changenet_pretrained,
+    require_docker_engine,
     validate_visual_changenet_dataset,
     validate_visual_changenet_spec,
 )
+
+
+def test_docker_preflight_reports_stopped_engine():
+    from subprocess import CalledProcessError
+
+    error = CalledProcessError(
+        1,
+        ["docker", "info"],
+        stderr="open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.",
+    )
+    with patch("blower_inspection.tao_training.subprocess.run", side_effect=error):
+        with pytest.raises(RuntimeError, match="Start Docker Desktop.*Linux containers"):
+            require_docker_engine()
+
+
+def test_docker_preflight_reports_missing_cli():
+    with patch("blower_inspection.tao_training.subprocess.run", side_effect=FileNotFoundError):
+        with pytest.raises(RuntimeError, match="Docker is not installed"):
+            require_docker_engine()
 
 
 def test_visual_changenet_training_runs_official_module_in_docker(tmp_path: Path):
