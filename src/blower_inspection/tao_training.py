@@ -11,10 +11,7 @@ from pathlib import Path
 VISUAL_CHANGENET_MODULE = (
     "nvidia_tao_pytorch.cv.visual_changenet.entrypoint.visual_changenet"
 )
-VISUAL_CHANGENET_SPECS = (
-    "/usr/local/lib/python3.12/dist-packages/nvidia_tao_pytorch/cv/"
-    "visual_changenet/experiment_specs"
-)
+VISUAL_CHANGENET_SPECS = "nvidia_tao_pytorch/cv/visual_changenet/experiment_specs"
 PRETRAINED_FILENAME = "changenet_segment_levir_cd.pth"
 PRETRAINED_NGC_MODEL = (
     "nvidia/tao/visual_changenet_segmentation_levircd:"
@@ -232,13 +229,30 @@ def copy_default_visual_changenet_spec(
     }
     if variant not in filenames:
         raise ValueError(f"Unsupported VisualChangeNet variant: {variant}")
-    source = f"{VISUAL_CHANGENET_SPECS}/{filenames[variant]}"
+    filename = filenames[variant]
+    # TAO images do not all use the same Python minor version. Locate the spec
+    # rather than embedding (for example) ``python3.12`` in its container path.
+    # The fixed suffix and filename are application constants, not shell input.
+    script = (
+        "spec=$(find /usr/local/lib /opt -type f "
+        f"-path '*/{VISUAL_CHANGENET_SPECS}/{filename}' -print -quit 2>/dev/null); "
+        "if [ -z \"$spec\" ]; then "
+        f"echo 'VisualChangeNet default spec {filename} was not found in the TAO image' >&2; "
+        "exit 2; fi; cat \"$spec\""
+    )
     # Override the TAO entrypoint. Otherwise its release/license banner is sent
-    # to stdout before `cat`, producing an invalid YAML file.
-    command = ["docker", "run", "--rm", "--entrypoint", "cat", image, source]
-    completed = subprocess.run(command, check=True, capture_output=True, text=True)
+    # to stdout before the YAML, corrupting the generated spec.
+    command = ["docker", "run", "--rm", "--entrypoint", "sh", image, "-c", script]
+    try:
+        completed = subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        suffix = f": {detail}" if detail else ""
+        raise RuntimeError(
+            f"Unable to read the VisualChangeNet {variant} default spec from {image}{suffix}"
+        ) from exc
     if not completed.stdout.strip():
-        raise RuntimeError(f"TAO returned an empty VisualChangeNet spec: {source}")
+        raise RuntimeError(f"TAO returned an empty VisualChangeNet spec: {filename}")
     output = Path(destination)
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")

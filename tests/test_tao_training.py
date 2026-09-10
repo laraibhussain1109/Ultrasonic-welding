@@ -202,9 +202,28 @@ def test_copy_default_segmentation_spec_from_installed_container(tmp_path: Path)
     assert output.read_text(encoding="utf-8") == "encryption_key: key\ntask: segment\n"
     command = run.call_args.args[0]
     assert command[:3] == ["docker", "run", "--rm"]
-    assert command[3:5] == ["--entrypoint", "cat"]
-    assert command[-1] == "/usr/local/lib/python3.12/dist-packages/nvidia_tao_pytorch/cv/visual_changenet/experiment_specs/experiment_spec.yaml"
+    assert command[3:5] == ["--entrypoint", "sh"]
+    assert command[-2] == "-c"
+    assert "find /usr/local/lib /opt" in command[-1]
+    assert "*/nvidia_tao_pytorch/cv/visual_changenet/experiment_specs/experiment_spec.yaml" in command[-1]
+    assert "cat \"$spec\"" in command[-1]
     assert run.call_args.kwargs == {"check": True, "capture_output": True, "text": True}
+
+
+def test_copy_default_spec_reports_container_lookup_failure(tmp_path: Path):
+    from subprocess import CalledProcessError
+
+    error = CalledProcessError(2, ["docker"], stderr="VisualChangeNet default spec was not found")
+    with patch("blower_inspection.tao_training.subprocess.run", side_effect=error):
+        with pytest.raises(RuntimeError, match="default spec was not found"):
+            copy_default_visual_changenet_spec(tmp_path / "spec.yaml")
+
+
+def test_copy_default_spec_rejects_empty_container_output(tmp_path: Path):
+    completed = type("Completed", (), {"stdout": ""})()
+    with patch("blower_inspection.tao_training.subprocess.run", return_value=completed):
+        with pytest.raises(RuntimeError, match="empty VisualChangeNet spec: experiment_spec.yaml"):
+            copy_default_visual_changenet_spec(tmp_path / "spec.yaml")
 
 
 def test_tao_banner_is_removed_from_copied_yaml():
