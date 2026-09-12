@@ -147,7 +147,7 @@ python -m blower_inspection.cli train BF-001 --model-file C:\path\to\tao_anomaly
 The UI's **CALIBRATE TAO MODEL** button opens an ONNX chooser when the configured
 export is missing, instead of failing with “TAO model export not found”.
 
-For `nvidia_tao`, `train` means **calibrate the exported model**; neural-network training remains in NVIDIA's supported TAO container. Use 100+ physical normal parts spanning accepted process, finish, pose, and lighting variation for production qualification.
+For `nvidia_tao`, `train` means **calibrate the exported model**; neural-network training remains in NVIDIA's supported TAO container. Calibration prefers TensorRT, then CUDA, and uses ONNX Runtime's CPU provider only as a fallback when no GPU provider is available. Live inspection continues to require a GPU by default and remains inhibited on GPU loss. Use 100+ physical normal parts spanning accepted process, finish, pose, and lighting variation for production qualification.
 
 If output auto-discovery is ambiguous, configure `tao_input_name`, `tao_output_name`, and (when exported) `tao_score_output_name`. `tao_require_gpu` defaults to `true`.
 

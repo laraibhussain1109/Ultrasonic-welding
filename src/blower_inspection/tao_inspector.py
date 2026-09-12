@@ -49,20 +49,23 @@ class TaoInspector:
 
     def __init__(self, *, providers: list[str] | None = None) -> None:
         self.providers = providers
-        self._sessions: dict[Path, tuple[int, Any]] = {}
+        # Keep calibration's GPU-first/CPU-fallback session separate from the
+        # production GPU-only session.
+        self._sessions: dict[tuple[Path, bool, bool], tuple[int, Any]] = {}
 
     @staticmethod
     def calibration_path(config: PartModelConfig) -> Path:
         return config.tao_calibration_file or config.model_file.with_suffix(".calibration.json")
 
-    def _session(self, config: PartModelConfig) -> Any:
+    def _session(self, config: PartModelConfig, *, allow_cpu_fallback: bool = False) -> Any:
         path = config.model_file.resolve()
         if path.suffix.lower() != ".onnx":
             raise ValueError("NVIDIA TAO runtime requires a TAO Deploy .onnx export")
         if not path.is_file():
             raise FileNotFoundError(f"TAO model export not found: {path}")
         stamp = path.stat().st_mtime_ns
-        cached = self._sessions.get(path)
+        cache_key = (path, config.tao_require_gpu, allow_cpu_fallback)
+        cached = self._sessions.get(cache_key)
         if cached and cached[0] == stamp:
             return cached[1]
         try:
@@ -70,22 +73,27 @@ class TaoInspector:
         except ImportError as exc:
             raise RuntimeError("Install the TAO runtime with `pip install -e .[tao]`") from exc
         available = ort.get_available_providers()
-        requested = self.providers or ["TensorrtExecutionProvider", "CUDAExecutionProvider"]
-        selected = [provider for provider in requested if provider in available]
-        if config.tao_require_gpu and not selected:
+        requested_gpu = self.providers or ["TensorrtExecutionProvider", "CUDAExecutionProvider"]
+        selected = [provider for provider in requested_gpu if provider in available]
+        if config.tao_require_gpu and not selected and not allow_cpu_fallback:
             raise RuntimeError(f"TAO GPU provider unavailable (installed providers: {available}); inspection is inhibited")
+        # ONNX Runtime tries providers in order. Calibration therefore uses the
+        # trained model on TensorRT/CUDA whenever possible and falls back to CPU
+        # only if no GPU provider can execute it.
+        if (allow_cpu_fallback or not config.tao_require_gpu) and "CPUExecutionProvider" in available:
+            selected.append("CPUExecutionProvider")
         if not selected:
-            selected = ["CPUExecutionProvider"]
+            raise RuntimeError(f"No usable TAO execution provider is available (installed providers: {available})")
         session = ort.InferenceSession(str(path), providers=selected)
         active = session.get_providers()
-        if config.tao_require_gpu and not any(p in active for p in ("TensorrtExecutionProvider", "CUDAExecutionProvider")):
+        if config.tao_require_gpu and not allow_cpu_fallback and not any(p in active for p in ("TensorrtExecutionProvider", "CUDAExecutionProvider")):
             raise RuntimeError(f"TAO session did not activate a GPU provider: {active}")
         if len(session.get_inputs()) != 2:
             raise RuntimeError(
                 "VisualChangeNet ONNX must expose exactly two image inputs "
                 "(golden reference and inspected image)"
             )
-        self._sessions[path] = (stamp, session)
+        self._sessions[cache_key] = (stamp, session)
         return session
 
     @staticmethod
@@ -129,8 +137,15 @@ class TaoInspector:
             output = 1.0 / (1.0 + np.exp(-np.clip(output, -30.0, 30.0)))
         return output.astype(np.float32)
 
-    def _infer(self, config: PartModelConfig, reference: np.ndarray, image: np.ndarray) -> tuple[np.ndarray, float]:
-        session = self._session(config)
+    def _infer(
+        self,
+        config: PartModelConfig,
+        reference: np.ndarray,
+        image: np.ndarray,
+        *,
+        allow_cpu_fallback: bool = False,
+    ) -> tuple[np.ndarray, float]:
+        session = self._session(config, allow_cpu_fallback=allow_cpu_fallback)
         inputs = session.get_inputs()
         reference_name = config.tao_reference_input_name or config.tao_input_name or inputs[0].name
         test_name = config.tao_test_input_name or inputs[1].name
@@ -197,7 +212,9 @@ class TaoInspector:
         pixels: list[np.ndarray] = []
         scores: list[float] = []
         for crop in crops:
-            anomaly_map, score = self._infer(config, reference, crop)
+            anomaly_map, score = self._infer(
+                config, reference, crop, allow_cpu_fallback=True
+            )
             pixels.append(anomaly_map.ravel())
             scores.append(score)
         normal_pixels = np.concatenate(pixels)
