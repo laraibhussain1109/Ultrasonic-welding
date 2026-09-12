@@ -102,8 +102,8 @@ class TaoInspector:
     def validate_ready(self, config: PartModelConfig) -> None:
         """Validate calibrated artifacts and initialize the production runtime."""
         self._calibration(config)
-        # CPU fallback is intentionally not enabled here: readiness for live
-        # inspection means the configured production GPU provider is active.
+        # The part configuration controls whether live inspection requires a
+        # GPU or may use the normal GPU-first CPU-fallback provider policy.
         self._session(config)
 
     def runtime_device_name(self) -> str:
