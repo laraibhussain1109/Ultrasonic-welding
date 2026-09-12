@@ -16,6 +16,7 @@
       "min_defect_area_px": 120,
       "max_bad_sector_ratio": 0.18,
       "algorithm": "nvidia_tao",
+      "tao_require_gpu": false,
       "image_size": 640,
       "roi_ratios": [
         0.08,
@@ -42,6 +43,7 @@
       "min_defect_area_px": 120,
       "max_bad_sector_ratio": 0.18,
       "algorithm": "nvidia_tao",
+      "tao_require_gpu": false,
       "image_size": 640,
       "roi_ratios": [
         0.08,
@@ -68,6 +70,7 @@
       "min_defect_area_px": 140,
       "max_bad_sector_ratio": 0.18,
       "algorithm": "nvidia_tao",
+      "tao_require_gpu": false,
       "image_size": 640,
       "roi_ratios": [
         0.08,
@@ -94,6 +97,7 @@
       "min_defect_area_px": 140,
       "max_bad_sector_ratio": 0.18,
       "algorithm": "nvidia_tao",
+      "tao_require_gpu": false,
       "image_size": 640,
       "roi_ratios": [
         0.08,

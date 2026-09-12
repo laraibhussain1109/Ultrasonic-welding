@@ -16,3 +16,12 @@ def test_app_exposes_visual_changenet_export_before_calibration():
     assert "EXPORT TAO MODEL" in source
     assert "run_visual_changenet_task(" in source
     assert '"export", spec' in source
+
+
+def test_app_validates_tao_readiness_before_opening_camera():
+    source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
+    validation = source.index("self.inspector.validate_ready(model)")
+    camera_open = source.index("self.camera.open()", validation)
+
+    assert validation < camera_open
+    assert '"TAO model not ready"' in source

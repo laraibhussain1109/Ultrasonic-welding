@@ -8,7 +8,7 @@ No machine-learning detector is literally foolproof. This implementation is inte
 
 The TAO runtime adds these production gates:
 
-- TensorRT/CUDA execution is required by default; loss of the GPU provider inhibits inspection instead of silently falling back to a slow CPU path.
+- TensorRT/CUDA execution is preferred. The supplied part configurations fall back to CPU when ONNX Runtime cannot activate a GPU provider; set `tao_require_gpu` to `true` for lines that must inhibit inspection instead.
 - The model must have one fixed-size image input and a valid 2-D, finite anomaly-map output. Ambiguous bindings require explicit configuration.
 - Threshold calibration uses reviewed normal parts in the model's native score space, never per-frame min/max normalization.
 - The calibration stores the ONNX SHA-256; a changed model cannot run against stale limits.
@@ -147,9 +147,14 @@ python -m blower_inspection.cli train BF-001 --model-file C:\path\to\tao_anomaly
 The UI's **CALIBRATE TAO MODEL** button opens an ONNX chooser when the configured
 export is missing, instead of failing with “TAO model export not found”.
 
-For `nvidia_tao`, `train` means **calibrate the exported model**; neural-network training remains in NVIDIA's supported TAO container. Use 100+ physical normal parts spanning accepted process, finish, pose, and lighting variation for production qualification.
+For `nvidia_tao`, `train` means **calibrate the exported model**; neural-network training remains in NVIDIA's supported TAO container. Calibration and inspection prefer TensorRT, then CUDA, and the supplied part configurations use ONNX Runtime's CPU provider when no GPU provider can be activated. Use 100+ physical normal parts spanning accepted process, finish, pose, and lighting variation for production qualification.
 
-If output auto-discovery is ambiguous, configure `tao_input_name`, `tao_output_name`, and (when exported) `tao_score_output_name`. `tao_require_gpu` defaults to `true`.
+VisualChangeNet exports with deep-supervision outputs named `output0` through
+`output3` and `output_final` are detected automatically; calibration uses the
+fused `output_final` map. If a differently named export remains ambiguous,
+configure `tao_input_name`, `tao_output_name`, and (when exported)
+`tao_score_output_name`. Set `tao_require_gpu` to `true` to disable CPU fallback
+for a production line.
 
 ## YOLO localization and rotating-part decisions
 

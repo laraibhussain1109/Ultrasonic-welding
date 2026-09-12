@@ -81,3 +81,11 @@ def test_model_registry_persists_tao_artifact_path(tmp_path):
 
     assert str(updated.model_file) == "models/export.onnx"
     assert str(ModelRegistry(path).get("BF-001").model_file) == "models/export.onnx"
+
+
+def test_supplied_tao_models_allow_gpu_first_cpu_fallback():
+    models = ModelRegistry("config/models.json").all()
+
+    assert models
+    assert all(model.algorithm == "nvidia_tao" for model in models)
+    assert all(model.tao_require_gpu is False for model in models)
