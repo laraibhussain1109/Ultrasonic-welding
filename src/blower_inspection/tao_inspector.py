@@ -57,10 +57,7 @@ class TaoInspector:
 
     def _session(self, config: PartModelConfig) -> Any:
         path = config.model_file.resolve()
-        if path.suffix.lower() != ".onnx":
-            raise ValueError("NVIDIA TAO runtime requires a TAO Deploy .onnx export")
-        if not path.is_file():
-            raise FileNotFoundError(f"TAO model export not found: {path}")
+        self._validate_model_file(path)
         stamp = path.stat().st_mtime_ns
         cached = self._sessions.get(path)
         if cached and cached[0] == stamp:
@@ -87,6 +84,18 @@ class TaoInspector:
             )
         self._sessions[path] = (stamp, session)
         return session
+
+    @staticmethod
+    def _validate_model_file(path: Path) -> None:
+        if path.suffix.lower() != ".onnx":
+            raise ValueError("NVIDIA TAO runtime requires a TAO Deploy .onnx export")
+        if not path.is_file():
+            raise FileNotFoundError(f"TAO model export not found: {path}")
+
+    def validate_ready(self, config: PartModelConfig) -> None:
+        """Validate immutable artifacts before live camera acquisition starts."""
+        self._validate_model_file(config.model_file.resolve())
+        self._calibration(config)
 
     @staticmethod
     def _input_tensor(image: np.ndarray, shape: list[Any]) -> np.ndarray:
@@ -218,7 +227,11 @@ class TaoInspector:
     def _calibration(self, config: PartModelConfig) -> TaoCalibration:
         path = self.calibration_path(config)
         if not path.is_file():
-            raise FileNotFoundError(f"TAO calibration missing: {path}; run TRAIN SELECTED MODEL after export")
+            raise FileNotFoundError(
+                f"TAO calibration missing: {path}. Exporting the model does not create production "
+                "thresholds. Add at least 20 reviewed normal images for this part, then click "
+                "CALIBRATE TAO MODEL before starting inspection."
+            )
         data = json.loads(path.read_text(encoding="utf-8"))
         if data.pop("version", None) != CALIBRATION_VERSION:
             raise RuntimeError("Unsupported TAO calibration version; recalibrate the model")

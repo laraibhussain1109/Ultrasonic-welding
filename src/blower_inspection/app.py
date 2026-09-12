@@ -524,6 +524,12 @@ class InspectionWindow(QWidget):
         if model.yolo_model_path is None:
             QMessageBox.critical(self, "YOLO model required", "Select your trained YOLO best.pt with YOLO PART MODEL before starting live inspection.")
             return
+        if model.algorithm == "nvidia_tao":
+            try:
+                self.inspector.validate_ready(model)
+            except Exception as exc:
+                QMessageBox.critical(self, "TAO model not ready", str(exc))
+                return
         try:
             self._apply_selected_camera_settings()
             self.part_detector = YoloByteTrackDetector(model.yolo_model_path, model.yolo_confidence)

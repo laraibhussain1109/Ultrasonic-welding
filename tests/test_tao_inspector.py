@@ -30,6 +30,13 @@ def test_calibration_rejects_changed_model(tmp_path):
         TaoInspector()._calibration(cfg)
 
 
+def test_readiness_explains_calibration_step_after_export(tmp_path):
+    cfg = config(tmp_path)
+
+    with pytest.raises(FileNotFoundError, match="click CALIBRATE TAO MODEL"):
+        TaoInspector().validate_ready(cfg)
+
+
 def test_preprocess_is_fixed_shape_nchw():
     image = np.zeros((30, 40, 3), np.uint8)
     tensor = TaoInspector._input_tensor(image, [1, 3, 64, 96])
