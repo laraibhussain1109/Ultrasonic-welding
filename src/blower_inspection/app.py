@@ -46,8 +46,8 @@ from .camera import (
 from .config import ModelRegistry, PartModelConfig, ensure_model_folders
 from .daily_stats import DailyStatistics, operating_day
 from .fail_output import ESP32FailOutputBridge
+from .inspector_factory import inspector_for_model
 from .trainer import InspectionResult
-from .tao_inspector import inspector_for_model
 from .tao_training import run_visual_changenet_task
 from .yolo_tracking import RotatingPartInspector, TrackedPart, YoloByteTrackDetector
 

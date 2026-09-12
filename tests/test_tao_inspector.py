@@ -7,7 +7,8 @@ import pytest
 pytest.importorskip("cv2", exc_type=ImportError)
 
 from blower_inspection.config import PartModelConfig
-from blower_inspection.tao_inspector import TaoCalibration, TaoInspector, inspector_for_model
+from blower_inspection.inspector_factory import inspector_for_model
+from blower_inspection.tao_inspector import TaoCalibration, TaoInspector
 
 
 def config(tmp_path: Path) -> PartModelConfig:
