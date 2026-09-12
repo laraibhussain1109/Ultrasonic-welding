@@ -72,6 +72,35 @@ def test_visual_changenet_ambiguous_outputs_still_require_explicit_binding():
         TaoInspector._discover_map_output(values)
 
 
+def test_validate_ready_checks_calibration_and_production_session(tmp_path, monkeypatch):
+    cfg = config(tmp_path)
+    inspector = TaoInspector()
+    calls = []
+
+    monkeypatch.setattr(inspector, "_calibration", lambda runtime_config: calls.append("calibration"))
+    monkeypatch.setattr(
+        inspector,
+        "_session",
+        lambda runtime_config: calls.append("gpu-session"),
+    )
+
+    inspector.validate_ready(cfg)
+
+    assert calls == ["calibration", "gpu-session"]
+
+
+def test_runtime_device_name_reports_active_provider():
+    inspector = TaoInspector()
+
+    class Session:
+        @staticmethod
+        def get_providers():
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    inspector._last_session = Session()
+    assert inspector.runtime_device_name() == "CUDAExecutionProvider"
+
+
 def test_calibration_requests_gpu_first_with_cpu_fallback(tmp_path, monkeypatch):
     cfg = config(tmp_path)
     cfg.normal_image_dir.mkdir()

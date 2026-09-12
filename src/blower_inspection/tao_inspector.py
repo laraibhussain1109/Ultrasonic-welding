@@ -52,6 +52,7 @@ class TaoInspector:
         # Keep calibration's GPU-first/CPU-fallback session separate from the
         # production GPU-only session.
         self._sessions: dict[tuple[Path, bool, bool], tuple[int, Any]] = {}
+        self._last_session: Any | None = None
 
     @staticmethod
     def calibration_path(config: PartModelConfig) -> Path:
@@ -67,6 +68,7 @@ class TaoInspector:
         cache_key = (path, config.tao_require_gpu, allow_cpu_fallback)
         cached = self._sessions.get(cache_key)
         if cached and cached[0] == stamp:
+            self._last_session = cached[1]
             return cached[1]
         try:
             import onnxruntime as ort
@@ -94,7 +96,22 @@ class TaoInspector:
                 "(golden reference and inspected image)"
             )
         self._sessions[cache_key] = (stamp, session)
+        self._last_session = session
         return session
+
+    def validate_ready(self, config: PartModelConfig) -> None:
+        """Validate calibrated artifacts and initialize the production runtime."""
+        self._calibration(config)
+        # CPU fallback is intentionally not enabled here: readiness for live
+        # inspection means the configured production GPU provider is active.
+        self._session(config)
+
+    def runtime_device_name(self) -> str:
+        """Return the active ONNX Runtime provider for operator diagnostics."""
+        if self._last_session is None:
+            return "ONNX Runtime (not initialized)"
+        providers = self._last_session.get_providers()
+        return providers[0] if providers else "ONNX Runtime (no active provider)"
 
     @staticmethod
     def _input_tensor(image: np.ndarray, shape: list[Any]) -> np.ndarray:
