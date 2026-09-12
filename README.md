@@ -149,7 +149,11 @@ export is missing, instead of failing with “TAO model export not found”.
 
 For `nvidia_tao`, `train` means **calibrate the exported model**; neural-network training remains in NVIDIA's supported TAO container. Calibration prefers TensorRT, then CUDA, and uses ONNX Runtime's CPU provider only as a fallback when no GPU provider is available. Live inspection continues to require a GPU by default and remains inhibited on GPU loss. Use 100+ physical normal parts spanning accepted process, finish, pose, and lighting variation for production qualification.
 
-If output auto-discovery is ambiguous, configure `tao_input_name`, `tao_output_name`, and (when exported) `tao_score_output_name`. `tao_require_gpu` defaults to `true`.
+VisualChangeNet exports with deep-supervision outputs named `output0` through
+`output3` and `output_final` are detected automatically; calibration uses the
+fused `output_final` map. If a differently named export remains ambiguous,
+configure `tao_input_name`, `tao_output_name`, and (when exported)
+`tao_score_output_name`. `tao_require_gpu` defaults to `true`.
 
 ## YOLO localization and rotating-part decisions
 

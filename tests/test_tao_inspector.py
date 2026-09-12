@@ -50,6 +50,28 @@ def test_visual_changenet_logits_become_change_probability_map():
     assert np.all(change[1:3, 2:4] > 0.98)
 
 
+def test_visual_changenet_prefers_fused_final_map_over_decoder_outputs():
+    values = {
+        "output0": np.zeros((1, 2, 8, 8), np.float32),
+        "output1": np.zeros((1, 2, 16, 16), np.float32),
+        "output2": np.zeros((1, 2, 32, 32), np.float32),
+        "output3": np.zeros((1, 2, 64, 64), np.float32),
+        "output_final": np.zeros((1, 2, 64, 64), np.float32),
+    }
+
+    assert TaoInspector._discover_map_output(values) == "output_final"
+
+
+def test_visual_changenet_ambiguous_outputs_still_require_explicit_binding():
+    values = {
+        "decoder_a": np.zeros((1, 2, 8, 8), np.float32),
+        "decoder_b": np.zeros((1, 2, 8, 8), np.float32),
+    }
+
+    with pytest.raises(RuntimeError, match="tao_output_name"):
+        TaoInspector._discover_map_output(values)
+
+
 def test_calibration_requests_gpu_first_with_cpu_fallback(tmp_path, monkeypatch):
     cfg = config(tmp_path)
     cfg.normal_image_dir.mkdir()
