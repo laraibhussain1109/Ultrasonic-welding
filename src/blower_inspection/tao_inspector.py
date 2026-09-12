@@ -319,12 +319,3 @@ class TaoInspector:
             cv2.imwrite(str(overlay_path), display)
             report_path.write_text(json.dumps({"algorithm": "nvidia_tao_visual_changenet", "model_sha256": calibration.model_sha256, "reference_sha256": calibration.reference_sha256, "status": status, "anomaly_score": image_score, "pixel_threshold": calibration.pixel_threshold, "image_threshold": calibration.image_threshold, "defect_area_px": defect_area, "bad_sector_ratio": bad_ratio, "bad_sectors": bad_sectors}, indent=2) + "\n", encoding="utf-8")
         return InspectionResult(status, image_score, defect_area, bad_ratio, bad_sectors, overlay_path, report_path, display, boxes)
-
-
-def inspector_for_model(config: PartModelConfig) -> Any:
-    if config.algorithm == "nvidia_tao":
-        return TaoInspector()
-    if config.algorithm == "hybrid_patchcore_padim":
-        from .anomaly_models import HybridPatchcorePadimInspector
-        return HybridPatchcorePadimInspector()
-    raise ValueError(f"Unsupported inspection algorithm: {config.algorithm}")

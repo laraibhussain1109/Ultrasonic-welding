@@ -16,6 +16,7 @@ VISUAL_CHANGENET_SPECS = (
     "visual_changenet/experiment_specs"
 )
 PRETRAINED_FILENAME = "changenet_segment_levir_cd.pth"
+LATEST_TRAINED_FILENAME = "changenet_model_segment_latest.pth"
 PRETRAINED_NGC_MODEL = (
     "nvidia/tao/visual_changenet_segmentation_levircd:"
     "visual_changenet_levircd_trainable_v1.0"
@@ -208,15 +209,46 @@ def _replace_yaml_section_scalar(text: str, section: str, key: str, value: str) 
 
 
 def find_training_checkpoint(results_dir: str | Path) -> Path:
-    """Select the stable checkpoint, or the newest completed TAO checkpoint."""
+    """Select a non-empty stable checkpoint, or the newest completed checkpoint."""
     train_dir = Path(results_dir).resolve() / "train"
-    preferred = train_dir / "changenet.pth"
-    if preferred.is_file():
-        return preferred
-    candidates = [path for path in train_dir.rglob("*.pth") if path.is_file()]
+    for filename in (LATEST_TRAINED_FILENAME, "changenet.pth"):
+        preferred = train_dir / filename
+        if preferred.is_file() and preferred.stat().st_size > 0:
+            return preferred
+    candidates = [
+        path for path in train_dir.rglob("*.pth")
+        if path.is_file() and path.stat().st_size > 0
+    ]
     if not candidates:
-        raise FileNotFoundError(f"No trained VisualChangeNet .pth checkpoint found under {train_dir}")
+        raise FileNotFoundError(f"No non-empty trained VisualChangeNet .pth checkpoint found under {train_dir}")
     return max(candidates, key=lambda path: (path.stat().st_mtime_ns, str(path)))
+
+
+def materialize_latest_training_checkpoint(results_dir: str | Path) -> Path:
+    """Replace TAO's Windows-host-incompatible latest link with a real checkpoint."""
+    train_dir = Path(results_dir).resolve() / "train"
+    destination = train_dir / LATEST_TRAINED_FILENAME
+    if destination.is_file() and destination.stat().st_size > 0 and not destination.is_symlink():
+        return destination
+    candidates = [
+        path for path in train_dir.rglob("*.pth")
+        if path != destination and path.is_file() and path.stat().st_size > 0
+    ]
+    if not candidates:
+        raise FileNotFoundError(
+            f"TAO training completed but no non-empty epoch checkpoint was found under {train_dir}"
+        )
+    source = max(candidates, key=lambda path: (path.stat().st_mtime_ns, str(path)))
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    shutil.copy2(source, temporary)
+    if (
+        temporary.stat().st_size != source.stat().st_size
+        or _file_sha256(temporary) != _file_sha256(source)
+    ):
+        temporary.unlink(missing_ok=True)
+        raise RuntimeError("Latest VisualChangeNet checkpoint copy verification failed")
+    temporary.replace(destination)
+    return destination
 
 
 def copy_default_visual_changenet_spec(
@@ -297,7 +329,8 @@ def run_visual_changenet_task(
     )
     expected_export: Path | None = None
     if task == "export":
-        checkpoint = find_training_checkpoint(result_host)
+        # Also repairs results produced by older launcher versions before export.
+        checkpoint = materialize_latest_training_checkpoint(result_host)
         checkpoint_relative = checkpoint.relative_to(project)
         expected_export = Path(export_file or project / "data/models/visual_changenet.onnx").resolve()
         try:
@@ -356,6 +389,8 @@ def run_visual_changenet_task(
     ]
     try:
         subprocess.run(command, check=True)
+        if task == "train":
+            materialize_latest_training_checkpoint(result_host)
         if expected_export is not None and not expected_export.is_file():
             raise FileNotFoundError(
                 f"TAO export command completed but ONNX was not created at {expected_export}"

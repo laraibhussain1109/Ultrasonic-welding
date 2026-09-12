@@ -404,8 +404,14 @@ verify that NG masks contain nonzero class-1 pixels, NG samples occur in
 
 Training deliberately does not export automatically: export is a separately
 audited TAO operation. The exporter now discovers
-`data/results/BF-001/tao/train/changenet.pth` or, when TAO uses epoch-named files,
-the newest completed `.pth`. It writes directly to the configured
+`data/results/BF-001/tao/train/changenet_model_segment_latest.pth` or
+`changenet.pth`, and otherwise uses the newest completed epoch-named `.pth`.
+After a successful training command, the launcher replaces TAO's zero-byte or
+symbolic-link-style `changenet_model_segment_latest.pth` with a verified, real
+copy of the newest non-empty checkpoint. This is necessary on Windows-hosted
+Docker mounts, where TAO's latest-checkpoint link can appear as a 0 KB file in
+Explorer even though the epoch checkpoints contain the trained weights. Export
+writes directly to the configured
 `data/models/BF-001/visual_changenet.onnx` path and verifies that the file was
 actually created.
 

@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from blower_inspection.tao_training import (
+    LATEST_TRAINED_FILENAME,
     PRETRAINED_NGC_MODEL,
     VISUAL_CHANGENET_MODULE,
     _clean_spec_output,
@@ -11,6 +12,7 @@ from blower_inspection.tao_training import (
     download_visual_changenet_pretrained,
     find_visual_changenet_pretrained,
     find_training_checkpoint,
+    materialize_latest_training_checkpoint,
     ensure_visual_changenet_pretrained,
     run_visual_changenet_task,
     resolve_visual_changenet_pretrained,
@@ -35,6 +37,9 @@ def test_visual_changenet_training_runs_official_module_in_docker(tmp_path: Path
     def execute(command, check):
         runtime_relative = command[-1].removeprefix("/workspace/project/")
         captured["spec"] = (tmp_path / runtime_relative).read_text(encoding="utf-8")
+        checkpoint = tmp_path / "data/results/tao_visual_changenet/train/model_epoch_49.pth"
+        checkpoint.parent.mkdir(parents=True)
+        checkpoint.write_bytes(b"trained weights")
 
     with patch("blower_inspection.tao_training.subprocess.run", side_effect=execute) as run:
         run_visual_changenet_task("train", spec, project_dir=tmp_path, dataset_dir=dataset, from_scratch=True)
@@ -47,6 +52,25 @@ def test_visual_changenet_training_runs_official_module_in_docker(tmp_path: Path
     assert "num_epochs: 50" in captured["spec"]
     assert "num_epochs: 1" in spec.read_text(encoding="utf-8")
     assert run.call_args.kwargs == {"check": True}
+    latest = tmp_path / "data/results/tao_visual_changenet/train" / LATEST_TRAINED_FILENAME
+    assert latest.read_bytes() == b"trained weights"
+
+
+def test_zero_byte_latest_checkpoint_is_replaced_with_real_latest_epoch(tmp_path: Path):
+    train = tmp_path / "results" / "train"
+    train.mkdir(parents=True)
+    (train / LATEST_TRAINED_FILENAME).write_bytes(b"")
+    older = train / "model_epoch_348_step_199977.pth"
+    latest_epoch = train / "model_epoch_349_step_200550.pth"
+    older.write_bytes(b"older weights")
+    latest_epoch.write_bytes(b"latest complete weights")
+
+    output = materialize_latest_training_checkpoint(tmp_path / "results")
+
+    assert output == train / LATEST_TRAINED_FILENAME
+    assert output.read_bytes() == latest_epoch.read_bytes()
+    assert output.stat().st_size > 0
+    assert find_training_checkpoint(tmp_path / "results") == output
 
 
 def test_visual_changenet_rejects_one_epoch_before_docker(tmp_path: Path):
@@ -178,8 +202,10 @@ def test_export_finds_latest_checkpoint_and_writes_configured_onnx(tmp_path: Pat
             "export", spec, project_dir=tmp_path, results_dir=results, export_file=output
         )
 
-    assert find_training_checkpoint(results) == checkpoint
-    assert "/workspace/project/results/train/epoch=49.pth" in captured["spec"]
+    stable = results / "train" / LATEST_TRAINED_FILENAME
+    assert stable.read_bytes() == b"weights"
+    assert find_training_checkpoint(results) == stable
+    assert f"/workspace/project/results/train/{LATEST_TRAINED_FILENAME}" in captured["spec"]
     assert "/workspace/project/data/models/BF-001/visual_changenet.onnx" in captured["spec"]
     assert "  batch_size: 1" in captured["spec"]
 

@@ -10,9 +10,9 @@ import cv2
 
 from .auth import AuthStore
 from .config import ModelRegistry, ensure_model_folders
-from .tao_inspector import inspector_for_model
 from .esp32_output import ESP32FailOutput
 from .dataset import prepare_yolo_dataset
+from .inspector_factory import inspector_for_model
 from .tao_training import (
     copy_default_visual_changenet_spec,
     download_visual_changenet_pretrained,
