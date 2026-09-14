@@ -26,7 +26,7 @@ def test_calibration_rejects_changed_model(tmp_path):
     path = TaoInspector.calibration_path(cfg)
     reference = TaoInspector.reference_path(cfg)
     reference.write_bytes(b"reference")
-    path.write_text(json.dumps({"version": 2, **TaoCalibration("wrong", "wrong", 1, 1, .5, .5, 20, "now").__dict__}))
+    path.write_text(json.dumps({"version": 3, **TaoCalibration("wrong", "wrong", 1, 1, .5, .5, 20, "now").__dict__}))
     with pytest.raises(RuntimeError, match="stale"):
         TaoInspector()._calibration(cfg)
 
@@ -172,3 +172,29 @@ def test_calibration_provider_order_prefers_gpu_then_cpu(tmp_path, monkeypatch):
     TaoInspector()._session(cfg, allow_cpu_fallback=True)
 
     assert selected == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+
+def test_inspection_score_is_normalized_to_calibrated_fail_line(tmp_path, monkeypatch):
+    cfg = config(tmp_path)
+    reference = TaoInspector.reference_path(cfg)
+    import cv2
+
+    assert cv2.imwrite(str(reference), np.zeros((20, 30, 3), np.uint8))
+    calibration = TaoCalibration("model", "reference", 0.001, 0.001, 0, 0, 20, "now")
+    inspector = TaoInspector()
+    monkeypatch.setattr(inspector, "_calibration", lambda runtime_config: calibration)
+    monkeypatch.setattr(
+        inspector,
+        "_infer",
+        lambda runtime_config, golden, candidate: (
+            np.full((8, 8), 0.002, np.float32),
+            0.0001,
+        ),
+    )
+
+    result = inspector.inspect(
+        cfg, np.zeros((20, 30, 3), np.uint8), save_outputs=False, crop_to_component=False
+    )
+
+    assert result.status == "FAIL"
+    assert result.anomaly_score == pytest.approx(2.0)

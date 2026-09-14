@@ -31,3 +31,12 @@ def test_app_imports_backend_factory_from_its_own_module():
     source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
     assert "from .inspector_factory import inspector_for_model" in source
     assert "from .tao_inspector import inspector_for_model" not in source
+
+
+def test_app_offers_reduced_tolerance_presets_and_manual_float_input():
+    source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
+
+    assert "enumerate([1, 3, 5, 8])" in source
+    assert 'QPushButton("MANUAL")' in source
+    assert "self.manual_tolerance.setRange(0.00, 50.00)" in source
+    assert "self.manual_tolerance.setDecimals(2)" in source
