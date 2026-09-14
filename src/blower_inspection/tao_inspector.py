@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,7 @@ import numpy as np
 from .camera import crop_component_roi
 from .config import PartModelConfig
 from .trainer import InspectionResult, clean_mask, cylindrical_sector_statistics, cylindrical_surface_mask, inspection_overlay, list_images
+from .training_progress import TrainingProgress
 
 CALIBRATION_VERSION = 3
 
@@ -228,17 +230,20 @@ class TaoInspector:
             raise RuntimeError("TAO returned a non-finite anomaly score")
         return anomaly_map, score
 
-    def train(self, config: PartModelConfig) -> Path:
+    def train(self, config: PartModelConfig, progress_callback=None) -> Path:
         """Calibrate an already trained/exported TAO model on production normals."""
         paths = list_images(config.normal_image_dir)
         if len(paths) < 20:
             raise ValueError(f"TAO calibration requires at least 20 reviewed normal images; found {len(paths)}")
         crops: list[np.ndarray] = []
-        for path in paths:
+        started = time.monotonic()
+        for index, path in enumerate(paths, 1):
             image = cv2.imread(str(path))
             if image is None:
                 raise ValueError(f"Unreadable calibration image: {path}")
             crops.append(crop_component_roi(image, roi_ratios=config.roi_ratios))
+            if progress_callback:
+                progress_callback(TrainingProgress("Preparing calibration images", index, len(paths) * 2, time.monotonic() - started))
         reference_path = self.reference_path(config)
         if reference_path.is_file():
             reference = cv2.imread(str(reference_path))
@@ -258,13 +263,15 @@ class TaoInspector:
         pixels: list[np.ndarray] = []
         pixel_tails: list[float] = []
         scores: list[float] = []
-        for crop in crops:
+        for index, crop in enumerate(crops, 1):
             anomaly_map, score = self._infer(
                 config, reference, crop, allow_cpu_fallback=True
             )
             pixels.append(anomaly_map.ravel())
             pixel_tails.append(float(np.quantile(anomaly_map, 0.999)))
             scores.append(score)
+            if progress_callback:
+                progress_callback(TrainingProgress("Calibrating TAO model", len(paths) + index, len(paths) * 2, time.monotonic() - started))
         normal_pixels = np.concatenate(pixels)
         p999 = float(np.quantile(normal_pixels, 0.999))
         score_p999 = float(np.quantile(scores, 0.999))

@@ -92,6 +92,10 @@ TAO's bundled YAML uses `num_epochs: 1` only as a smoke test. The launcher now
 overrides the temporary runtime spec to 50 epochs by default (`--epochs N`) and
 rejects values below 2. A completed `174/174` display means the one configured
 epoch really ran, but class-1 F1/IoU must be nonzero and validated before export.
+All CLI training commands stream output immediately and print the completed/total
+epoch or image count, percentage, elapsed time, and estimated time remaining.
+The desktop application's event log shows the same updates and automatically
+keeps the newest update visible while calibration or training is running.
 
 After training, run `tao-export BF-001 --spec
 specs/visual_changenet/bf-001_segmentation.yaml --results-dir

@@ -20,6 +20,11 @@ from .tao_training import (
     ensure_visual_changenet_pretrained,
     run_visual_changenet_task,
 )
+from .training_progress import TrainingProgress
+
+
+def _print_progress(progress: TrainingProgress) -> None:
+    print(progress.format(), flush=True)
 
 
 def resolve_onnx_model(value: str | Path) -> Path:
@@ -154,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"Auto-cropping {model.normal_image_dir} in memory with {model.yolo_model_path} "
                 "before training (source images will not be modified)..."
             )
-        output = inspector.train(model)
+        output = inspector.train(model, progress_callback=_print_progress)
         action = "Calibrated" if model.algorithm == "nvidia_tao" else "Trained"
         print(f"{action} {model.id}: {output}")
         return 0
@@ -205,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             kwargs["export_file"] = args.output or model.model_file
-        run_visual_changenet_task(task, args.spec, **kwargs)
+        run_visual_changenet_task(task, args.spec, progress_callback=_print_progress, **kwargs)
         print(f"TAO VisualChangeNet {task} completed")
         if task == "export":
             print(f"ONNX export ready for calibration: {Path(args.output or model.model_file).resolve()}")

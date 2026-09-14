@@ -116,6 +116,7 @@ class LoginDialog(QDialog):
 class TrainWorker(QThread):
     finished_ok = pyqtSignal(str)
     failed = pyqtSignal(str)
+    progress = pyqtSignal(str)
 
     def __init__(self, inspector, model: PartModelConfig) -> None:
         super().__init__()
@@ -124,7 +125,9 @@ class TrainWorker(QThread):
 
     def run(self) -> None:
         try:
-            output = self.inspector.train(self.model)
+            output = self.inspector.train(
+                self.model, progress_callback=lambda update: self.progress.emit(update.format())
+            )
             action = "CALIBRATED" if self.model.algorithm == "nvidia_tao" else "TRAINED"
             self.finished_ok.emit(f"{action} {self.model.id}: {output}")
         except Exception as exc:
@@ -155,6 +158,7 @@ class InspectionWorker(QThread):
 class TaoExportWorker(QThread):
     finished_ok = pyqtSignal(str)
     failed = pyqtSignal(str)
+    progress = pyqtSignal(str)
 
     def __init__(self, model: PartModelConfig) -> None:
         super().__init__()
@@ -165,7 +169,8 @@ class TaoExportWorker(QThread):
         results = Path(f"data/results/{self.model.id}/tao")
         try:
             run_visual_changenet_task(
-                "export", spec, results_dir=results, export_file=self.model.model_file
+                "export", spec, results_dir=results, export_file=self.model.model_file,
+                progress_callback=lambda update: self.progress.emit(update.format()),
             )
             self.finished_ok.emit(f"EXPORTED {self.model.id}: {self.model.model_file}")
         except Exception as exc:
@@ -841,6 +846,7 @@ class InspectionWindow(QWidget):
         self.log.addItem(f"TAO CALIBRATION STARTED {model.id}")
         self.train_worker = TrainWorker(self.inspector, model)
         self.train_worker.finished_ok.connect(lambda message: self.log.addItem(message))
+        self.train_worker.progress.connect(self._show_training_progress)
         self.train_worker.failed.connect(lambda message: QMessageBox.critical(self, "Training failed", message))
         self.train_worker.start()
 
@@ -854,9 +860,15 @@ class InspectionWindow(QWidget):
             return
         self.log.addItem(f"TAO EXPORT STARTED {model.id}")
         self.export_worker = TaoExportWorker(model)
+        self.export_worker.progress.connect(self._show_training_progress)
         self.export_worker.finished_ok.connect(lambda message: self.log.addItem(message))
         self.export_worker.failed.connect(lambda message: QMessageBox.critical(self, "Export failed", message))
         self.export_worker.start()
+
+    def _show_training_progress(self, message: str) -> None:
+        """Keep the newest worker update visible to the operator in real time."""
+        self.log.addItem(message)
+        self.log.scrollToBottom()
 
     def stop_camera(self) -> None:
         if self.rotating_parts is not None:

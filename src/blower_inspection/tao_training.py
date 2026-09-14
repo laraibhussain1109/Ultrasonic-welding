@@ -6,7 +6,10 @@ import subprocess
 import re
 import hashlib
 import shutil
+import time
 from pathlib import Path
+
+from .training_progress import ProgressCallback, TrainingProgress
 
 VISUAL_CHANGENET_MODULE = (
     "nvidia_tao_pytorch.cv.visual_changenet.entrypoint.visual_changenet"
@@ -291,6 +294,7 @@ def run_visual_changenet_task(
     from_scratch: bool = False,
     epochs: int = 50,
     export_file: str | Path | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> None:
     """Run a VisualChangeNet train/export task with the project mounted.
 
@@ -382,13 +386,17 @@ def run_visual_changenet_task(
     container_spec = Path("/workspace/project") / runtime_spec.relative_to(project)
     command = [
         "docker", "run", "--rm", "--gpus", "all", "--shm-size=16g",
+        "-e", "PYTHONUNBUFFERED=1",
         "--ulimit", "memlock=-1", "--ulimit", "stack=67108864",
         *mounts, "-w", "/workspace/project",
         image, "python", "-m", VISUAL_CHANGENET_MODULE,
         task, "-e", container_spec.as_posix(),
     ]
     try:
-        subprocess.run(command, check=True)
+        if progress_callback is None:
+            subprocess.run(command, check=True)
+        else:
+            _run_with_live_progress(command, task, epochs, progress_callback)
         if task == "train":
             materialize_latest_training_checkpoint(result_host)
         if expected_export is not None and not expected_export.is_file():
@@ -398,3 +406,46 @@ def run_visual_changenet_task(
     finally:
         if runtime_spec is not None:
             runtime_spec.unlink(missing_ok=True)
+
+
+_EPOCH_PATTERNS = (
+    re.compile(r"(?i)epoch(?:\s*|[=:\[]+)(\d+)(?:\s*/\s*|[ /]+of\s+)(\d+)"),
+    re.compile(r"(?i)epoch(?:\s*|[=:\[]+)(\d+)"),
+)
+
+
+def _run_with_live_progress(
+    command: list[str], task: str, total_epochs: int, callback: ProgressCallback
+) -> None:
+    """Tee unbuffered TAO output to the terminal and emit epoch/ETA updates."""
+    started = time.monotonic()
+    callback(TrainingProgress(f"TAO {task}", 0, total_epochs if task == "train" else 1, 0.0))
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    assert process.stdout is not None
+    last_epoch = 0
+    for line in process.stdout:
+        print(line, end="", flush=True)
+        if task != "train":
+            continue
+        for pattern in _EPOCH_PATTERNS:
+            match = pattern.search(line)
+            if match:
+                raw_epoch = int(match.group(1))
+                # A bare Lightning ``Epoch N`` is zero-based; ``N/total`` is
+                # already a human-facing one-based counter.
+                epoch = min(raw_epoch + (1 if match.lastindex == 1 else 0), total_epochs)
+                if epoch > last_epoch:
+                    last_epoch = epoch
+                    callback(TrainingProgress("TAO epoch", epoch, total_epochs, time.monotonic() - started))
+                break
+    return_code = process.wait()
+    if return_code:
+        raise subprocess.CalledProcessError(return_code, command)
+    callback(TrainingProgress(f"TAO {task}", total_epochs if task == "train" else 1,
+                              total_epochs if task == "train" else 1, time.monotonic() - started))

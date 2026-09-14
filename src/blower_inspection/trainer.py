@@ -8,6 +8,7 @@ sectors at inspection time.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -381,17 +382,28 @@ class NormalTemplateTrainer:
     def __init__(self, image_size: tuple[int, int] = (1024, 1024)) -> None:
         self.image_size = image_size
 
-    def train(self, config: PartModelConfig) -> Path:
+    def train(self, config: PartModelConfig, progress_callback=None) -> Path:
+        from .training_progress import TrainingProgress
+
+        started = time.monotonic()
         image_paths = list_images(config.normal_image_dir)
         if len(image_paths) < 3:
             raise ValueError(
                 f"Need at least 3 normal images in {config.normal_image_dir}; found {len(image_paths)}"
             )
-        images = [read_gray(path, self.image_size, config.roi_ratios) for path in image_paths]
+        images = []
+        for index, path in enumerate(image_paths, 1):
+            images.append(read_gray(path, self.image_size, config.roi_ratios))
+            if progress_callback:
+                progress_callback(TrainingProgress("Loading training images", index, len(image_paths) * 2, time.monotonic() - started))
         reference = images[0]
         aligned = [reference]
-        for image in images[1:]:
+        if progress_callback:
+            progress_callback(TrainingProgress("Aligning training images", len(image_paths) + 1, len(image_paths) * 2, time.monotonic() - started))
+        for index, image in enumerate(images[1:], 2):
             aligned.append(align_to_reference(image, reference))
+            if progress_callback:
+                progress_callback(TrainingProgress("Aligning training images", len(image_paths) + index, len(image_paths) * 2, time.monotonic() - started))
         stack = np.stack(aligned, axis=0)
         mean = stack.mean(axis=0).astype(np.float32)
         std = np.maximum(stack.std(axis=0), 0.025).astype(np.float32)
