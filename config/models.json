@@ -26,7 +26,10 @@
       ],
       "camera_width": 1920,
       "camera_height": 1080,
-      "camera_fps": 30
+      "camera_fps": 30,
+      "capture_burst_frames": 5,
+      "minimum_sharpness": 60.0,
+      "minimum_rotation_views": 8
     },
     {
       "id": "BF-002",
@@ -53,7 +56,10 @@
       ],
       "camera_width": 1920,
       "camera_height": 1080,
-      "camera_fps": 30
+      "camera_fps": 30,
+      "capture_burst_frames": 5,
+      "minimum_sharpness": 60.0,
+      "minimum_rotation_views": 8
     },
     {
       "id": "BF-003",
@@ -80,7 +86,10 @@
       ],
       "camera_width": 1920,
       "camera_height": 1080,
-      "camera_fps": 30
+      "camera_fps": 30,
+      "capture_burst_frames": 5,
+      "minimum_sharpness": 60.0,
+      "minimum_rotation_views": 8
     },
     {
       "id": "BF-004",
@@ -107,7 +116,10 @@
       ],
       "camera_width": 1920,
       "camera_height": 1080,
-      "camera_fps": 30
+      "camera_fps": 30,
+      "capture_burst_frames": 5,
+      "minimum_sharpness": 60.0,
+      "minimum_rotation_views": 8
     }
   ]
 }

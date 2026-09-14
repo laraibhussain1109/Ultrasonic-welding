@@ -106,6 +106,7 @@ class RotatingPartInspector:
         lost_timeout_s: float = 1.0,
         counting_line_ratio: float = 0.45,
         counting_direction: str = "left_to_right",
+        minimum_rotation_views: int = 1,
     ) -> None:
         if not 0.0 < counting_line_ratio < 1.0:
             raise ValueError("counting_line_ratio must be between 0 and 1")
@@ -114,6 +115,7 @@ class RotatingPartInspector:
         self.lost_timeout_s = lost_timeout_s
         self.counting_line_ratio = counting_line_ratio
         self.counting_direction = counting_direction
+        self.minimum_rotation_views = max(1, int(minimum_rotation_views))
         self.sessions: dict[int, RotatingPartSession] = {}
         self.track_to_part: dict[int, int] = {}
 
@@ -146,7 +148,10 @@ class RotatingPartInspector:
         session.frames_inspected += 1
         session.has_failure |= not is_pass
         session.worst_score = max(session.worst_score, anomaly_score)
-        if session.crossed_counting_line:
+        if (
+            session.crossed_counting_line
+            and session.frames_inspected >= self.minimum_rotation_views
+        ):
             return self._finish(session)
         return None
 
@@ -161,11 +166,20 @@ class RotatingPartInspector:
     def needs_completion_inspection(self, track_id: int) -> bool:
         """Return whether this track crossed and needs its final cropped view."""
         session = self._session_for_track(track_id)
-        return bool(session and session.crossed_counting_line)
+        return bool(
+            session
+            and session.crossed_counting_line
+            and session.frames_inspected < self.minimum_rotation_views
+        )
 
     def flush(self) -> list[CompletedPart]:
         """Clear unfinished sessions without counting parts that never crossed."""
-        completed = [self._complete(s) for s in self.sessions.values() if s.crossed_counting_line and s.frames_inspected]
+        completed = [
+            self._complete(session)
+            for session in self.sessions.values()
+            if session.crossed_counting_line
+            and session.frames_inspected >= self.minimum_rotation_views
+        ]
         self.sessions.clear()
         self.track_to_part.clear()
         return completed

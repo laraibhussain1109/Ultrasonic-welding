@@ -64,3 +64,19 @@ def test_part_first_seen_beyond_line_is_not_counted():
 
     assert inspector.record_inspection(5, is_pass=True, anomaly_score=0.1) is None
     assert inspector.flush() == []
+
+
+def test_crossed_part_waits_for_minimum_surface_view_count():
+    inspector = RotatingPartInspector(
+        counting_line_ratio=0.8, minimum_rotation_views=3
+    )
+    inspector.observe_tracks([tracked(3, 40)], frame_width=100, now=0.0)
+    assert inspector.record_inspection(3, is_pass=True, anomaly_score=0.1) is None
+    inspector.observe_tracks([tracked(3, 85)], frame_width=100, now=0.1)
+    assert inspector.record_inspection(3, is_pass=True, anomaly_score=0.1) is None
+    assert inspector.needs_completion_inspection(3) is True
+
+    completed = inspector.record_inspection(3, is_pass=True, anomaly_score=0.1)
+
+    assert completed is not None
+    assert completed.frames_inspected == 3

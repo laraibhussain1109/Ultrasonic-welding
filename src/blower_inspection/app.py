@@ -46,6 +46,7 @@ from .camera import (
 from .config import ModelRegistry, PartModelConfig, ensure_model_folders
 from .daily_stats import DailyStatistics, operating_day
 from .fail_output import ESP32FailOutputBridge
+from .frame_selection import SharpFrameSampler
 from .inspector_factory import inspector_for_model
 from .trainer import InspectionResult
 from .tao_training import run_visual_changenet_task
@@ -192,7 +193,9 @@ class InspectionWindow(QWidget):
         self.raw_frame = None
         self.fps_frame_count = 0
         self.fps_started_at = time.perf_counter()
-        self.tolerance_percent = 5
+        self.tolerance_percent = 5.0
+        self.frame_sampler: SharpFrameSampler | None = None
+        self.pending_sharp_frames = {}
         self.daily_statistics = DailyStatistics()
         self.stats = self.daily_statistics.counts()
         self.part_detector: YoloByteTrackDetector | None = None
@@ -283,12 +286,24 @@ class InspectionWindow(QWidget):
         layout.addWidget(self._section("TOLERANCE SETTING"))
         layout.addWidget(QLabel("DEFECT SIZE THRESHOLD — LOWER = STRICTER"))
         tolerance_grid = QGridLayout()
-        for index, value in enumerate([1, 5, 8, 10, 13, 15, 18, 20]):
+        for index, value in enumerate([1, 3, 5, 8]):
             button = QPushButton(f"{value}%")
             if value == 5:
                 button.setStyleSheet("border-color:#d29b00;color:#f5c542;")
             button.clicked.connect(lambda _checked=False, v=value: self.set_tolerance(v))
-            tolerance_grid.addWidget(button, index // 4, index % 4)
+            tolerance_grid.addWidget(button, 0, index)
+        manual = QPushButton("MANUAL")
+        manual.clicked.connect(self.show_manual_tolerance)
+        tolerance_grid.addWidget(manual, 1, 0, 1, 2)
+        self.manual_tolerance = QDoubleSpinBox()
+        self.manual_tolerance.setRange(0.00, 50.00)
+        self.manual_tolerance.setDecimals(2)
+        self.manual_tolerance.setSingleStep(0.25)
+        self.manual_tolerance.setSuffix(" %")
+        self.manual_tolerance.setValue(5.0)
+        self.manual_tolerance.setVisible(False)
+        self.manual_tolerance.valueChanged.connect(self.set_tolerance)
+        tolerance_grid.addWidget(self.manual_tolerance, 1, 2, 1, 2)
         layout.addLayout(tolerance_grid)
         layout.addSpacing(25)
         layout.addWidget(self._section("SURFACE SPEED"))
@@ -395,14 +410,12 @@ class InspectionWindow(QWidget):
         # The tolerance buttons are operator-facing strictness controls.  Lower
         # percentages must reject smaller detected regions/sectors, while higher
         # percentages allow larger confirmed defects before rejecting the part.
-        strictness_scale = max(self.tolerance_percent, 1) / 5.0
+        strictness_scale = max(self.tolerance_percent, 0.01) / 5.0
         tolerance_area = max(1, int(model.min_defect_area_px * strictness_scale))
-        tolerance_threshold = max(model.anomaly_threshold, (0.65 + 0.30 * (self.tolerance_percent / 20.0)) * 10.0)
         return replace(
             model,
-            anomaly_threshold=tolerance_threshold,
             min_defect_area_px=tolerance_area,
-            max_bad_sector_ratio=max(0.01, self.tolerance_percent / 100.0),
+            max_bad_sector_ratio=max(0.0001, self.tolerance_percent / 100.0),
         )
 
     def _refresh_models(self, selected_id: str | None = None) -> None:
@@ -537,6 +550,10 @@ class InspectionWindow(QWidget):
                 model.inspection_lost_timeout_s,
                 model.counting_line_ratio,
                 model.counting_direction,
+                model.minimum_rotation_views,
+            )
+            self.frame_sampler = SharpFrameSampler(
+                model.capture_burst_frames, model.minimum_sharpness
             )
             self.camera.open()
         except Exception as exc:
@@ -555,6 +572,7 @@ class InspectionWindow(QWidget):
         self.current_display_frame = None
         self.live_roi_bounds = None
         self.raw_frame = None
+        self.pending_sharp_frames = {}
         try:
             device_name = self.inspector.runtime_device_name()
         except Exception as exc:
@@ -597,8 +615,24 @@ class InspectionWindow(QWidget):
             self.show_frame(frame)
         self.fps_frame_count += 1
         if not tracks:
+            if self.frame_sampler is not None:
+                self.frame_sampler.discard_missing(set())
             self._handle_no_part_frame(frame)
             return
+        assert self.frame_sampler is not None
+        active_ids = {part.track_id for part in tracks}
+        self.frame_sampler.discard_missing(active_ids)
+        self.pending_sharp_frames = {
+            track_id: selected
+            for track_id, selected in self.pending_sharp_frames.items()
+            if track_id in active_ids
+        }
+        for part in tracks:
+            selected = self.frame_sampler.offer(
+                part.track_id, crop_bounds(raw_frame, part.bounds)
+            )
+            if selected is not None:
+                self.pending_sharp_frames[part.track_id] = selected
         now = time.perf_counter()
         if (
             self.inference_worker is None
@@ -608,8 +642,11 @@ class InspectionWindow(QWidget):
             # Give each simultaneously tracked part one exact-crop inspection
             # before spending more frames on any already observed rotation.
             assert self.rotating_parts is not None
+            candidates = [part for part in tracks if part.track_id in self.pending_sharp_frames]
+            if not candidates:
+                return
             part = max(
-                tracks,
+                candidates,
                 key=lambda candidate: (
                     self.rotating_parts.needs_completion_inspection(candidate.track_id),
                     self.rotating_parts.needs_initial_inspection(candidate.track_id),
@@ -617,7 +654,10 @@ class InspectionWindow(QWidget):
                 ),
             )
             self.inference_worker = InspectionWorker(
-                self.inspector, self.inspection_model(), part.track_id, crop_bounds(raw_frame, part.bounds)
+                self.inspector,
+                self.inspection_model(),
+                part.track_id,
+                self.pending_sharp_frames.pop(part.track_id).frame,
             )
             self.inference_worker.finished_result.connect(self._handle_inspection_result)
             self.inference_worker.failed.connect(lambda message: self._handle_live_error(f"Inspection error: {message}"))
@@ -832,6 +872,10 @@ class InspectionWindow(QWidget):
         self.current_display_frame = None
         self.live_roi_bounds = None
         self.raw_frame = None
+        self.pending_sharp_frames = {}
+        if self.frame_sampler is not None:
+            self.frame_sampler.clear()
+        self.frame_sampler = None
         self.viewer.clear()
         self.viewer.setText("NO CAMERA FRAME")
         self.fps_top.setText("FPS:  -")
@@ -854,10 +898,16 @@ class InspectionWindow(QWidget):
         self.failed_value.value_label.setText(str(self.stats["failed"]))
         self.pass_rate_value.value_label.setText(pass_rate)
 
-    def set_tolerance(self, value: int) -> None:
-        self.tolerance_percent = value
-        self.tolerance_top.setText(f"TOLERANCE:  {value}%")
-        self.log.addItem(f"TOLERANCE SET TO {value}%")
+    def show_manual_tolerance(self) -> None:
+        self.manual_tolerance.setVisible(True)
+        self.manual_tolerance.setFocus()
+        self.manual_tolerance.selectAll()
+
+    def set_tolerance(self, value: float) -> None:
+        self.tolerance_percent = max(0.0, min(float(value), 50.0))
+        formatted = f"{self.tolerance_percent:.2f}".rstrip("0").rstrip(".")
+        self.tolerance_top.setText(f"TOLERANCE:  {formatted}%")
+        self.log.addItem(f"TOLERANCE SET TO {formatted}%")
 
     def _tick(self) -> None:
         self.time_label.setText(time.strftime("%H:%M:%S"))

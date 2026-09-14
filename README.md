@@ -158,7 +158,11 @@ for a production line.
 
 ## YOLO localization and rotating-part decisions
 
-The live path uses the configured Ultralytics detector and ByteTrack track ID to crop the current component. All views during rotation belong to one physical-part session. Any failed view is latched; later good views cannot erase it. Production totals and the ESP32 signal update when the tracked center crosses the configured count line, not when a part merely disappears.
+The live path uses the configured Ultralytics detector and ByteTrack track ID to crop the current component. For every tracked part it collects five camera frames, measures Laplacian sharpness, discards motion-blurred bursts, and sends only the sharpest photograph to inference. At least eight accepted photographs are required so that the rotating cylinder is sampled around its surface before a result can be finalized. The burst size, sharpness floor, and minimum accepted-view count can be set per model with `capture_burst_frames`, `minimum_sharpness`, and `minimum_rotation_views`.
+
+All accepted views during rotation belong to one physical-part session. Any failed sharp view is latched; later good views cannot erase it. Production totals and the ESP32 signal update only after the tracked center crosses the configured count line and the minimum view count has been reached, not when a part merely disappears. The displayed TAO anomaly score is calibrated: `1.000` is the fail threshold, rather than an easily misread raw probability such as `0.002`.
+
+After upgrading, run **CALIBRATE TAO MODEL** once for each part model. Calibration version 3 derives its safety margin from robust variation at the normal-set tail instead of the standard deviation of every structured surface pixel; older calibration files are intentionally rejected so an over-lenient threshold cannot remain active.
 
 Camera exposure, gain, focus, white balance, lighting, fixture, working distance, resolution, and FPS must be locked to the validated setup. The UI can persist per-model ROI, detector, and camera settings.
 

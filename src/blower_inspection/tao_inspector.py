@@ -21,7 +21,7 @@ from .camera import crop_component_roi
 from .config import PartModelConfig
 from .trainer import InspectionResult, clean_mask, cylindrical_sector_statistics, cylindrical_surface_mask, inspection_overlay, list_images
 
-CALIBRATION_VERSION = 2
+CALIBRATION_VERSION = 3
 
 
 def _sha256(path: Path) -> str:
@@ -256,20 +256,29 @@ class TaoInspector:
             if not cv2.imwrite(str(reference_path), reference):
                 raise RuntimeError(f"Unable to save VisualChangeNet reference: {reference_path}")
         pixels: list[np.ndarray] = []
+        pixel_tails: list[float] = []
         scores: list[float] = []
         for crop in crops:
             anomaly_map, score = self._infer(
                 config, reference, crop, allow_cpu_fallback=True
             )
             pixels.append(anomaly_map.ravel())
+            pixel_tails.append(float(np.quantile(anomaly_map, 0.999)))
             scores.append(score)
         normal_pixels = np.concatenate(pixels)
         p999 = float(np.quantile(normal_pixels, 0.999))
         score_p999 = float(np.quantile(scores, 0.999))
-        # A margin above the measured normal tail avoids thresholding camera
-        # noise while remaining on the model's native, non-normalized scale.
-        pixel_threshold = p999 + max(float(np.std(normal_pixels)) * 3.0, 1e-6)
-        image_threshold = score_p999 + max(float(np.std(scores)) * 3.0, 1e-6)
+        # Estimate noise at the *normal tail* robustly.  Using the standard
+        # deviation of every map pixel mixed normal surface structure into the
+        # margin and could make the threshold orders of magnitude too lenient
+        # (a visible scratch then reported a misleading raw score like 0.002).
+        # Spatial area filtering below deals with isolated tail pixels.
+        pixel_tail_mad = float(
+            np.median(np.abs(np.asarray(pixel_tails) - np.median(pixel_tails)))
+        )
+        score_mad = float(np.median(np.abs(np.asarray(scores) - np.median(scores))))
+        pixel_threshold = p999 + max(3.0 * 1.4826 * pixel_tail_mad, 1e-6)
+        image_threshold = score_p999 + max(3.0 * 1.4826 * score_mad, 1e-6)
         calibration = TaoCalibration(_sha256(config.model_file), _sha256(reference_path), pixel_threshold, image_threshold, p999, score_p999, len(paths), datetime.now(timezone.utc).isoformat())
         output = self.calibration_path(config)
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -301,15 +310,23 @@ class TaoInspector:
         reference = cv2.imread(str(self.reference_path(config)))
         if reference is None:
             raise RuntimeError("VisualChangeNet golden reference is unreadable; inspection is inhibited")
-        raw_map, image_score = self._infer(config, reference, image)
+        raw_map, native_image_score = self._infer(config, reference, image)
         score_map = cv2.resize(raw_map, (config.image_size, config.image_size), interpolation=cv2.INTER_CUBIC)
         surface = cylindrical_surface_mask(score_map.shape)
         defect_mask = clean_mask((score_map >= calibration.pixel_threshold) & surface)
         defect_area = int(defect_mask.sum())
         bad_ratio, bad_sectors = cylindrical_sector_statistics(surface, score_map, config.expected_fins, min_bad_score=calibration.pixel_threshold)
         fail_area = max(config.min_defect_area_px, int(score_map.size * 0.0004))
-        status = "FAIL" if image_score >= calibration.image_threshold or defect_area >= fail_area or bad_ratio >= config.max_bad_sector_ratio else "PASS"
-        display, boxes = inspection_overlay(image, score_map, defect_mask, status=status, anomaly_score=image_score, min_box_area_px=config.min_defect_area_px, score_normalizer=calibration.pixel_threshold)
+        # Present the score relative to the locked calibration limits.  Raw TAO
+        # probabilities such as 0.002 look harmless to an operator even when the
+        # calibrated normal limit is 0.001; 1.0 is now the unambiguous fail line.
+        peak_score = float(np.max(score_map[surface])) if np.any(surface) else 0.0
+        anomaly_score = max(
+            native_image_score / max(calibration.image_threshold, 1e-12),
+            peak_score / max(calibration.pixel_threshold, 1e-12),
+        )
+        status = "FAIL" if anomaly_score >= 1.0 or defect_area >= fail_area or bad_ratio >= config.max_bad_sector_ratio else "PASS"
+        display, boxes = inspection_overlay(image, score_map, defect_mask, status=status, anomaly_score=anomaly_score, min_box_area_px=config.min_defect_area_px, score_normalizer=calibration.pixel_threshold)
         overlay_path = report_path = None
         if save_outputs:
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -317,5 +334,5 @@ class TaoInspector:
             overlay_path = config.result_dir / f"{stamp}_{status.lower()}_overlay.png"
             report_path = config.result_dir / f"{stamp}_{status.lower()}.json"
             cv2.imwrite(str(overlay_path), display)
-            report_path.write_text(json.dumps({"algorithm": "nvidia_tao_visual_changenet", "model_sha256": calibration.model_sha256, "reference_sha256": calibration.reference_sha256, "status": status, "anomaly_score": image_score, "pixel_threshold": calibration.pixel_threshold, "image_threshold": calibration.image_threshold, "defect_area_px": defect_area, "bad_sector_ratio": bad_ratio, "bad_sectors": bad_sectors}, indent=2) + "\n", encoding="utf-8")
-        return InspectionResult(status, image_score, defect_area, bad_ratio, bad_sectors, overlay_path, report_path, display, boxes)
+            report_path.write_text(json.dumps({"algorithm": "nvidia_tao_visual_changenet", "model_sha256": calibration.model_sha256, "reference_sha256": calibration.reference_sha256, "status": status, "anomaly_score": anomaly_score, "native_image_score": native_image_score, "peak_pixel_score": peak_score, "pixel_threshold": calibration.pixel_threshold, "image_threshold": calibration.image_threshold, "defect_area_px": defect_area, "bad_sector_ratio": bad_ratio, "bad_sectors": bad_sectors}, indent=2) + "\n", encoding="utf-8")
+        return InspectionResult(status, anomaly_score, defect_area, bad_ratio, bad_sectors, overlay_path, report_path, display, boxes)
