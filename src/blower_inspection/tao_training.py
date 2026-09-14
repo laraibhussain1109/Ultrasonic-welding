@@ -6,6 +6,7 @@ import subprocess
 import re
 import hashlib
 import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -286,6 +287,7 @@ def materialize_latest_training_checkpoint(results_dir: str | Path) -> Path:
                 f"TAO training completed but no non-empty checkpoint was found under {train_dir}"
             )
     temporary = destination.with_suffix(destination.suffix + ".tmp")
+    temporary.unlink(missing_ok=True)
     shutil.copy2(source, temporary)
     if (
         temporary.stat().st_size != source.stat().st_size
@@ -293,6 +295,10 @@ def materialize_latest_training_checkpoint(results_dir: str | Path) -> Path:
     ):
         temporary.unlink(missing_ok=True)
         raise RuntimeError("Latest VisualChangeNet checkpoint copy verification failed")
+    # TAO creates ``latest`` as a Linux symlink. On a Windows bind mount it is
+    # commonly exposed as a zero-byte regular file, and replacing it directly
+    # is not reliable across Docker Desktop/filesystem combinations.
+    destination.unlink(missing_ok=True)
     temporary.replace(destination)
     return destination
 
@@ -467,14 +473,23 @@ def run_visual_changenet_task(
             _run_with_live_progress(
                 command, task, epochs, progress_callback, initial_completed=restored_epochs
             )
-        if task == "train":
-            materialize_latest_training_checkpoint(result_host)
         if expected_export is not None and not expected_export.is_file():
             raise FileNotFoundError(
                 f"TAO export command completed but ONNX was not created at {expected_export}"
             )
     finally:
-        if runtime_spec is not None:
+        try:
+            if task == "train":
+                # Repair TAO's Windows-host-incompatible zero-byte ``latest``
+                # after success, failure, or Ctrl+C. Completed epoch files
+                # remain valid even when the current process does not finish.
+                active_error = sys.exc_info()[0] is not None
+                try:
+                    materialize_latest_training_checkpoint(result_host)
+                except Exception:
+                    if not active_error:
+                        raise
+        finally:
             runtime_spec.unlink(missing_ok=True)
 
 

@@ -423,6 +423,12 @@ spec points that field at the same mounted resume checkpoint as well. This
 prevents an obsolete NVIDIA example such as `/results/pretrained/...` from
 raising `FileNotFoundError` before session restoration begins.
 
+The launcher repairs `changenet_model_segment_latest.pth` in a `finally` cleanup
+step after successful completion, TAO failure, or Ctrl+C. It removes TAO's
+Windows-visible zero-byte link/file and atomically installs a size- and
+SHA-256-verified copy of the highest completed epoch checkpoint. Original
+`model_epoch_...pth` files remain untouched.
+
 ### Export after a completed training run
 
 Training deliberately does not export automatically: export is a separately

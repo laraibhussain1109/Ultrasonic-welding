@@ -117,6 +117,10 @@ choose a target greater than 351 (for example, `--epoch 400`). During resume,
 the launcher also overrides any stale vendor `pretrained_model_path` with the
 selected mounted checkpoint; paths such as `/results/pretrained/...` therefore
 cannot fail before TAO restores the trainer state.
+After every training exit—including a TAO failure or Ctrl+C—the launcher replaces
+TAO's Windows-visible zero-byte `changenet_model_segment_latest.pth` with a real,
+verified copy of the highest completed `model_epoch_...pth`. The epoch files are
+never deleted or renamed.
 
 After training, run `tao-export BF-001 --spec
 specs/visual_changenet/bf-001_segmentation.yaml --results-dir
