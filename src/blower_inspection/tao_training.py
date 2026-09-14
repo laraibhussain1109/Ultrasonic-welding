@@ -512,6 +512,12 @@ def _run_with_live_progress(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        # TAO runs in a Linux container and writes UTF-8 regardless of the
+        # Windows host's active ANSI code page.  Leaving this implicit makes
+        # Popen use cp1252 on many Windows installations, where otherwise
+        # valid UTF-8 output can raise UnicodeDecodeError mid-training.
+        encoding="utf-8",
+        errors="replace",
         bufsize=1,
     )
     assert process.stdout is not None
