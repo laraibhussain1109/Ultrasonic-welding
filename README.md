@@ -97,6 +97,24 @@ epoch or image count, percentage, elapsed time, and estimated time remaining.
 The desktop application's event log shows the same updates and automatically
 keeps the newest update visible while calibration or training is running.
 
+Interrupted TAO training can resume the full trainer state (model, optimizer,
+scheduler, and epoch counter) from the highest numbered non-empty checkpoint:
+
+```powershell
+python -m src.blower_inspection.cli tao-train BF-001 `
+  --spec specs/visual_changenet/bf-001_segmentation.yaml `
+  --dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET" `
+  --results-dir data/results/BF-001/tao `
+  --epoch 400 `
+  --restore_last_session
+```
+
+`--epoch` is an alias for `--epochs` and specifies the **total target**, not the
+number of additional epochs. The restore option deliberately selects the
+highest epoch number, so a newer accidental restart such as `epoch_010` cannot
+hide an older `epoch_350` checkpoint. To continue after `model_epoch_350...`,
+choose a target greater than 351 (for example, `--epoch 400`).
+
 After training, run `tao-export BF-001 --spec
 specs/visual_changenet/bf-001_segmentation.yaml --results-dir
 data/results/BF-001/tao`, or press **EXPORT TAO MODEL** as an admin. The exporter

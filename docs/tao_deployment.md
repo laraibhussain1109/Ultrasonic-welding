@@ -400,6 +400,25 @@ detected in that validation pass. Do not export or commission that checkpoint;
 verify that NG masks contain nonzero class-1 pixels, NG samples occur in
 `train.txt` and `val.txt`, and continue training while monitoring class-1 F1/IoU.
 
+If training is interrupted, resume all Lightning/TAO trainer state rather than
+loading the checkpoint as pretrained weights:
+
+```powershell
+python -m src.blower_inspection.cli tao-train BF-001 `
+  --spec specs/visual_changenet/bf-001_segmentation.yaml `
+  --dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET" `
+  --results-dir data/results/BF-001/tao `
+  --epoch 400 `
+  --restore_last_session
+```
+
+The launcher finds the highest numbered non-empty `model_epoch_...pth`, injects
+it as `train.resume_training_checkpoint_path` in the temporary runtime spec,
+and leaves the source YAML unchanged. `--epoch`/`--epochs` is the total target;
+because filenames are zero-based, continue `model_epoch_350...` with a target
+greater than 351. Restore is intentionally mutually exclusive with
+`--pretrained-model` and `--from-scratch`.
+
 ### Export after a completed training run
 
 Training deliberately does not export automatically: export is a separately
