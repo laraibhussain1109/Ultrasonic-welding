@@ -25,6 +25,7 @@ import math
 import os
 import pickle
 import random
+import time
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -47,6 +48,7 @@ from .trainer import (
     normal_reference_score,
     normal_reference_statistics,
 )
+from .training_progress import TrainingProgress
 from .yolo_tracking import YoloByteTrackDetector
 
 HYBRID_MODEL_VERSION = 6
@@ -136,7 +138,8 @@ class HybridPatchcorePadimInspector:
         self._training_crop_cache: dict[Path, np.ndarray] = {}
         self._distillation_cache: dict[Path, tuple[Any, Any]] = {}
 
-    def train(self, config: PartModelConfig) -> Path:
+    def train(self, config: PartModelConfig, progress_callback=None) -> Path:
+        started = time.monotonic()
         self._apply_model_settings(config)
         image_paths = list_images(config.normal_image_dir)
         if len(image_paths) < 20:
@@ -155,16 +158,18 @@ class HybridPatchcorePadimInspector:
         # Autocrop every full-FOV source once, immediately before training. The
         # originals remain untouched and the same crops feed both deep features
         # and normal-reference calibration.
-        self._training_crop_cache = {
-            path: self._read_training_crop_uncached(path) for path in used_image_paths
-        }
-        embeddings, grid_shape = self._extract_dataset_embeddings(used_image_paths)
+        self._training_crop_cache = {}
+        for index, path in enumerate(used_image_paths, 1):
+            self._training_crop_cache[path] = self._read_training_crop_uncached(path)
+            if progress_callback:
+                progress_callback(TrainingProgress("Auto-cropping images", index, len(used_image_paths), time.monotonic() - started))
+        embeddings, grid_shape = self._extract_dataset_embeddings(used_image_paths, progress_callback, started)
         reference_images = [self._training_crop_cache[path] for path in used_image_paths]
         normal_reference, normal_scale = normal_reference_statistics(
             reference_images, (self.settings.image_size, self.settings.image_size)
         )
         student_state, distillation_mean, distillation_scale = self._train_distillation(
-            used_image_paths, torch
+            used_image_paths, torch, progress_callback, started
         )
         embeddings_np = embeddings.cpu().numpy().astype(np.float32)
         rng = np.random.default_rng(self.settings.random_seed)
@@ -429,13 +434,14 @@ class HybridPatchcorePadimInspector:
         self._backbone_cache = (backbone, hook, torch)
         return self._backbone_cache
 
-    def _train_distillation(self, image_paths: list[Path], torch: Any) -> tuple[dict[str, Any], np.ndarray, np.ndarray]:
+    def _train_distillation(self, image_paths: list[Path], torch: Any, progress_callback=None, started: float | None = None) -> tuple[dict[str, Any], np.ndarray, np.ndarray]:
         """Train an STFPM student on normal YOLO crops and calibrate its residual."""
         models = require_module("torchvision.models")
         device = self._device(torch)
         teacher, student = build_student_teacher(torch, models, device)
         optimizer = torch.optim.Adam(student.parameters(), lr=self.settings.distillation_learning_rate)
-        for _epoch in range(self.settings.distillation_epochs):
+        started = started or time.monotonic()
+        for epoch in range(1, self.settings.distillation_epochs + 1):
             student.train()
             for start in range(0, len(image_paths), self.settings.batch_size):
                 paths = image_paths[start : start + self.settings.batch_size]
@@ -449,6 +455,8 @@ class HybridPatchcorePadimInspector:
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 optimizer.step()
+            if progress_callback:
+                progress_callback(TrainingProgress("Distillation epoch", epoch, self.settings.distillation_epochs, time.monotonic() - started))
         student.eval()
         maps = []
         for start in range(0, len(image_paths), self.settings.batch_size):
@@ -502,16 +510,19 @@ class HybridPatchcorePadimInspector:
         self._checkpoint_cache[model_file] = (stamp, checkpoint)
         return checkpoint
 
-    def _extract_dataset_embeddings(self, image_paths: list[Path]) -> tuple[Any, tuple[int, int]]:
+    def _extract_dataset_embeddings(self, image_paths: list[Path], progress_callback=None, started: float | None = None) -> tuple[Any, tuple[int, int]]:
         torch = require_module("torch")
         backbone, hook, _torch = self._build_backbone()
         chunks: list[Any] = []
         grid_shape = (0, 0)
+        started = started or time.monotonic()
         for start in range(0, len(image_paths), self.settings.batch_size):
             batch_paths = image_paths[start:start + self.settings.batch_size]
             batch = torch.cat([self._preprocess_path(path) for path in batch_paths], dim=0)
             batch_features, grid_shape = self._extract_embeddings_with_backbone(batch, backbone, hook, torch)
             chunks.append(batch_features.flatten(2).permute(0, 2, 1).reshape(-1, batch_features.shape[1]).cpu())
+            if progress_callback:
+                progress_callback(TrainingProgress("Extracting features", min(start + len(batch_paths), len(image_paths)), len(image_paths), time.monotonic() - started))
         return torch.cat(chunks, dim=0), grid_shape
 
     def _extract_embeddings_from_tensor(self, tensor: Any) -> tuple[Any, tuple[int, int]]:

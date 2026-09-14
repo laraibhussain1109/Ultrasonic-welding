@@ -92,6 +92,35 @@ TAO's bundled YAML uses `num_epochs: 1` only as a smoke test. The launcher now
 overrides the temporary runtime spec to 50 epochs by default (`--epochs N`) and
 rejects values below 2. A completed `174/174` display means the one configured
 epoch really ran, but class-1 F1/IoU must be nonzero and validated before export.
+All CLI training commands stream output immediately and print the completed/total
+epoch or image count, percentage, elapsed time, and estimated time remaining.
+The desktop application's event log shows the same updates and automatically
+keeps the newest update visible while calibration or training is running.
+
+Interrupted TAO training can resume the full trainer state (model, optimizer,
+scheduler, and epoch counter) from the highest numbered non-empty checkpoint:
+
+```powershell
+python -m src.blower_inspection.cli tao-train BF-001 `
+  --spec specs/visual_changenet/bf-001_segmentation.yaml `
+  --dataset "C:\Users\Gigabyte\Downloads\Prepare-data\TAO_VCN_DATASET" `
+  --results-dir data/results/BF-001/tao `
+  --epoch 400 `
+  --restore_last_session
+```
+
+`--epoch` is an alias for `--epochs` and specifies the **total target**, not the
+number of additional epochs. The restore option deliberately selects the
+highest epoch number, so a newer accidental restart such as `epoch_010` cannot
+hide an older `epoch_350` checkpoint. To continue after `model_epoch_350...`,
+choose a target greater than 351 (for example, `--epoch 400`). During resume,
+the launcher also overrides any stale vendor `pretrained_model_path` with the
+selected mounted checkpoint; paths such as `/results/pretrained/...` therefore
+cannot fail before TAO restores the trainer state.
+After every training exit—including a TAO failure or Ctrl+C—the launcher replaces
+TAO's Windows-visible zero-byte `changenet_model_segment_latest.pth` with a real,
+verified copy of the highest completed `model_epoch_...pth`. The epoch files are
+never deleted or renamed.
 
 After training, run `tao-export BF-001 --spec
 specs/visual_changenet/bf-001_segmentation.yaml --results-dir

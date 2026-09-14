@@ -20,6 +20,11 @@ from .tao_training import (
     ensure_visual_changenet_pretrained,
     run_visual_changenet_task,
 )
+from .training_progress import TrainingProgress
+
+
+def _print_progress(progress: TrainingProgress) -> None:
+    print(progress.format(), flush=True)
 
 
 def resolve_onnx_model(value: str | Path) -> Path:
@@ -69,7 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
     tao_train.add_argument("--image", default="nvcr.io/nvidia/tao/tao-toolkit:7.1.0-pyt")
     tao_train.add_argument("--dataset", required=True, help="Existing TAO CNDataset root containing A/B/label/list")
     tao_train.add_argument("--results-dir", help="Host results directory inside this project")
-    tao_train.add_argument("--epochs", type=int, default=50, help="Training epochs (default: 50; minimum: 2)")
+    tao_train.add_argument("--epochs", "--epoch", type=int, default=50, help="Total target training epochs (default: 50; minimum: 2)")
+    tao_train.add_argument(
+        "--restore-last-session", "--restore_last_session", action="store_true",
+        help="Resume model, optimizer, scheduler, and epoch state from the highest numbered checkpoint",
+    )
     weights = tao_train.add_mutually_exclusive_group()
     weights.add_argument("--pretrained-model", help="Host VisualChangeNet .pth checkpoint")
     weights.add_argument("--from-scratch", action="store_true", help="Explicitly train without pretrained weights")
@@ -154,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"Auto-cropping {model.normal_image_dir} in memory with {model.yolo_model_path} "
                 "before training (source images will not be modified)..."
             )
-        output = inspector.train(model)
+        output = inspector.train(model, progress_callback=_print_progress)
         action = "Calibrated" if model.algorithm == "nvidia_tao" else "Trained"
         print(f"{action} {model.id}: {output}")
         return 0
@@ -202,10 +211,11 @@ def main(argv: list[str] | None = None) -> int:
                 pretrained_model=args.pretrained_model,
                 from_scratch=args.from_scratch,
                 epochs=args.epochs,
+                restore_last_session=args.restore_last_session,
             )
         else:
             kwargs["export_file"] = args.output or model.model_file
-        run_visual_changenet_task(task, args.spec, **kwargs)
+        run_visual_changenet_task(task, args.spec, progress_callback=_print_progress, **kwargs)
         print(f"TAO VisualChangeNet {task} completed")
         if task == "export":
             print(f"ONNX export ready for calibration: {Path(args.output or model.model_file).resolve()}")

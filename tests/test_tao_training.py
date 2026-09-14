@@ -9,9 +9,11 @@ from blower_inspection.tao_training import (
     VISUAL_CHANGENET_MODULE,
     _clean_spec_output,
     copy_default_visual_changenet_spec,
+    checkpoint_completed_epochs,
     download_visual_changenet_pretrained,
     find_visual_changenet_pretrained,
     find_training_checkpoint,
+    find_latest_epoch_checkpoint,
     materialize_latest_training_checkpoint,
     ensure_visual_changenet_pretrained,
     run_visual_changenet_task,
@@ -71,6 +73,112 @@ def test_zero_byte_latest_checkpoint_is_replaced_with_real_latest_epoch(tmp_path
     assert output.read_bytes() == latest_epoch.read_bytes()
     assert output.stat().st_size > 0
     assert find_training_checkpoint(tmp_path / "results") == output
+
+
+def test_highest_epoch_wins_even_when_a_restarted_low_epoch_is_newer(tmp_path: Path):
+    train = tmp_path / "results" / "train"
+    train.mkdir(parents=True)
+    high = train / "model_epoch_350_step_201123.pth"
+    low = train / "model_epoch_010_step_06303.pth"
+    high.write_bytes(b"epoch 350")
+    low.write_bytes(b"newer restarted run")
+
+    assert find_latest_epoch_checkpoint(tmp_path / "results") == high
+    assert materialize_latest_training_checkpoint(tmp_path / "results").read_bytes() == b"epoch 350"
+
+
+def test_restore_last_session_injects_highest_epoch_checkpoint(tmp_path: Path):
+    spec = tmp_path / "specs" / "train.yaml"
+    spec.parent.mkdir()
+    spec.write_text(
+        "task: segment\ntrain:\n  pretrained_model_path: null\n  num_epochs: 1\n"
+        "results_dir: /results\ndataset:\n  segment:\n    root_dir: /data/example\n",
+        encoding="utf-8",
+    )
+    dataset = _dataset(tmp_path)
+    results = tmp_path / "results"
+    checkpoint = results / "train" / "model_epoch_350_step_201123.pth"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"session")
+    captured = {}
+
+    def execute(command, check):
+        runtime = tmp_path / command[-1].removeprefix("/workspace/project/")
+        captured["spec"] = runtime.read_text(encoding="utf-8")
+
+    with patch("blower_inspection.tao_training.subprocess.run", side_effect=execute):
+        run_visual_changenet_task(
+            "train", spec, project_dir=tmp_path, dataset_dir=dataset,
+            results_dir=results, epochs=400, restore_last_session=True,
+        )
+
+    assert "num_epochs: 400" in captured["spec"]
+    assert "resume_training_checkpoint_path:" in captured["spec"]
+    assert "/results/train/model_epoch_350_step_201123.pth" in captured["spec"]
+    assert (
+        "pretrained_model_path: \"/workspace/project/results/train/"
+        "model_epoch_350_step_201123.pth\""
+    ) in captured["spec"]
+    assert checkpoint_completed_epochs(checkpoint) == 351
+
+
+def test_restore_requires_target_beyond_completed_checkpoint(tmp_path: Path):
+    spec = tmp_path / "train.yaml"
+    spec.write_text(
+        "task: segment\ntrain:\n  pretrained_model_path: /missing/vendor/example.pth\n"
+        "  num_epochs: 1\nresults_dir: /results\ndataset:\n  segment:\n"
+        "    root_dir: /data/example\n",
+        encoding="utf-8",
+    )
+    dataset = _dataset(tmp_path)
+    checkpoint = tmp_path / "results" / "train" / "model_epoch_350_step_201123.pth"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"session")
+
+    with pytest.raises(ValueError, match="already completed 351 epochs"):
+        run_visual_changenet_task(
+            "train", spec, project_dir=tmp_path, dataset_dir=dataset,
+            results_dir=tmp_path / "results", epochs=351, restore_last_session=True,
+        )
+
+
+def test_materialize_still_supports_unnumbered_tao_checkpoint(tmp_path: Path):
+    train = tmp_path / "results" / "train"
+    train.mkdir(parents=True)
+    (train / "changenet.pth").write_bytes(b"unnumbered checkpoint")
+
+    assert materialize_latest_training_checkpoint(tmp_path / "results").read_bytes() == b"unnumbered checkpoint"
+
+
+def test_failed_training_repairs_zero_byte_latest_from_completed_epoch(tmp_path: Path):
+    from subprocess import CalledProcessError
+
+    spec = tmp_path / "train.yaml"
+    spec.write_text(
+        "task: segment\ntrain:\n  pretrained_model_path: null\n  num_epochs: 1\n"
+        "results_dir: /results\ndataset:\n  segment:\n    root_dir: /data/example\n",
+        encoding="utf-8",
+    )
+    dataset = _dataset(tmp_path)
+    train = tmp_path / "results" / "train"
+    train.mkdir(parents=True)
+    epoch = train / "model_epoch_350_step_201123.pth"
+    epoch.write_bytes(b"complete epoch checkpoint")
+    latest = train / LATEST_TRAINED_FILENAME
+    latest.write_bytes(b"")
+
+    with patch(
+        "blower_inspection.tao_training.subprocess.run",
+        side_effect=CalledProcessError(1, ["docker"]),
+    ):
+        with pytest.raises(CalledProcessError):
+            run_visual_changenet_task(
+                "train", spec, project_dir=tmp_path, dataset_dir=dataset,
+                results_dir=tmp_path / "results", from_scratch=True,
+            )
+
+    assert latest.read_bytes() == epoch.read_bytes()
+    assert latest.stat().st_size > 0
 
 
 def test_visual_changenet_rejects_one_epoch_before_docker(tmp_path: Path):

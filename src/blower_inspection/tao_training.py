@@ -6,7 +6,11 @@ import subprocess
 import re
 import hashlib
 import shutil
+import sys
+import time
 from pathlib import Path
+
+from .training_progress import ProgressCallback, TrainingProgress
 
 VISUAL_CHANGENET_MODULE = (
     "nvidia_tao_pytorch.cv.visual_changenet.entrypoint.visual_changenet"
@@ -208,6 +212,45 @@ def _replace_yaml_section_scalar(text: str, section: str, key: str, value: str) 
     return text[:section_match.end()] + updated + text[end:]
 
 
+def _set_yaml_section_scalar(text: str, section: str, key: str, value: str) -> str:
+    """Replace a direct section child, or add it when older specs omit it."""
+    section_match = re.search(rf"(?m)^{re.escape(section)}:\s*$", text)
+    if section_match is None:
+        raise ValueError(f"VisualChangeNet spec is missing `{section}:`")
+    next_section = re.search(r"(?m)^\S[^\n]*:\s*(?:.*)?$", text[section_match.end():])
+    end = section_match.end() + (next_section.start() if next_section else len(text[section_match.end():]))
+    block = text[section_match.end():end]
+    if re.search(rf"(?m)^[ \t]+{re.escape(key)}\s*:", block):
+        updated = _replace_yaml_scalar(block, key, value)
+    else:
+        updated = block.rstrip() + f"\n  {key}: {value}\n"
+    return text[:section_match.end()] + updated + text[end:]
+
+
+_EPOCH_CHECKPOINT = re.compile(r"(?i)(?:model_)?epoch[_=-]?(\d+)(?:[_=-]step[_=-]?(\d+))?")
+
+
+def find_latest_epoch_checkpoint(results_dir: str | Path) -> Path:
+    """Find the highest numbered completed epoch, regardless of file timestamp."""
+    train_dir = Path(results_dir).resolve() / "train"
+    numbered = []
+    for path in train_dir.rglob("*.pth") if train_dir.is_dir() else ():
+        match = _EPOCH_CHECKPOINT.search(path.stem)
+        if match and path.is_file() and path.stat().st_size > 0:
+            numbered.append((int(match.group(1)), int(match.group(2) or -1), str(path), path))
+    if not numbered:
+        raise FileNotFoundError(f"No non-empty epoch checkpoint found under {train_dir}")
+    return max(numbered)[-1]
+
+
+def checkpoint_completed_epochs(checkpoint: str | Path) -> int:
+    """Return the completed epoch count encoded by TAO's zero-based filename."""
+    match = _EPOCH_CHECKPOINT.search(Path(checkpoint).stem)
+    if match is None:
+        raise ValueError(f"TAO checkpoint filename contains no epoch number: {checkpoint}")
+    return int(match.group(1)) + 1
+
+
 def find_training_checkpoint(results_dir: str | Path) -> Path:
     """Select a non-empty stable checkpoint, or the newest completed checkpoint."""
     train_dir = Path(results_dir).resolve() / "train"
@@ -228,18 +271,23 @@ def materialize_latest_training_checkpoint(results_dir: str | Path) -> Path:
     """Replace TAO's Windows-host-incompatible latest link with a real checkpoint."""
     train_dir = Path(results_dir).resolve() / "train"
     destination = train_dir / LATEST_TRAINED_FILENAME
-    if destination.is_file() and destination.stat().st_size > 0 and not destination.is_symlink():
-        return destination
-    candidates = [
-        path for path in train_dir.rglob("*.pth")
-        if path != destination and path.is_file() and path.stat().st_size > 0
-    ]
-    if not candidates:
-        raise FileNotFoundError(
-            f"TAO training completed but no non-empty epoch checkpoint was found under {train_dir}"
-        )
-    source = max(candidates, key=lambda path: (path.stat().st_mtime_ns, str(path)))
+    try:
+        source = find_latest_epoch_checkpoint(results_dir)
+    except FileNotFoundError:
+        candidates = [
+            path for path in train_dir.rglob("*.pth")
+            if path != destination and path.is_file() and path.stat().st_size > 0
+        ]
+        if candidates:
+            source = max(candidates, key=lambda path: (path.stat().st_mtime_ns, str(path)))
+        elif destination.is_file() and destination.stat().st_size > 0 and not destination.is_symlink():
+            return destination
+        else:
+            raise FileNotFoundError(
+                f"TAO training completed but no non-empty checkpoint was found under {train_dir}"
+            )
     temporary = destination.with_suffix(destination.suffix + ".tmp")
+    temporary.unlink(missing_ok=True)
     shutil.copy2(source, temporary)
     if (
         temporary.stat().st_size != source.stat().st_size
@@ -247,6 +295,10 @@ def materialize_latest_training_checkpoint(results_dir: str | Path) -> Path:
     ):
         temporary.unlink(missing_ok=True)
         raise RuntimeError("Latest VisualChangeNet checkpoint copy verification failed")
+    # TAO creates ``latest`` as a Linux symlink. On a Windows bind mount it is
+    # commonly exposed as a zero-byte regular file, and replacing it directly
+    # is not reliable across Docker Desktop/filesystem combinations.
+    destination.unlink(missing_ok=True)
     temporary.replace(destination)
     return destination
 
@@ -289,8 +341,10 @@ def run_visual_changenet_task(
     results_dir: str | Path | None = None,
     pretrained_model: str | Path | None = None,
     from_scratch: bool = False,
+    restore_last_session: bool = False,
     epochs: int = 50,
     export_file: str | Path | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> None:
     """Run a VisualChangeNet train/export task with the project mounted.
 
@@ -328,6 +382,7 @@ def run_visual_changenet_task(
         top_level=True,
     )
     expected_export: Path | None = None
+    restored_epochs = 0
     if task == "export":
         # Also repairs results produced by older launcher versions before export.
         checkpoint = materialize_latest_training_checkpoint(result_host)
@@ -351,9 +406,9 @@ def run_visual_changenet_task(
         if dataset_dir is None:
             raise ValueError("TAO training requires --dataset pointing to the existing TAO_VCN_DATASET")
         dataset = validate_visual_changenet_dataset(dataset_dir)
-        if pretrained_model is not None and from_scratch:
-            raise ValueError("Use either --pretrained-model or --from-scratch, not both")
-        if pretrained_model is None and not from_scratch:
+        if restore_last_session and (pretrained_model is not None or from_scratch):
+            raise ValueError("--restore-last-session cannot be combined with --pretrained-model or --from-scratch")
+        if pretrained_model is None and not from_scratch and not restore_last_session:
             pretrained_model = find_visual_changenet_pretrained(
                 [project, project / "data/models/pretrained", dataset.parent, Path.home() / "Downloads"]
             )
@@ -365,7 +420,30 @@ def run_visual_changenet_task(
                 )
         runtime_text = _replace_yaml_scalar(runtime_text, "root_dir", "/data/TAO_VCN_DATASET")
         runtime_text = _replace_yaml_scalar(runtime_text, "num_epochs", str(epochs))
-        if pretrained_model is not None:
+        if restore_last_session:
+            checkpoint = find_latest_epoch_checkpoint(result_host)
+            restored_epochs = checkpoint_completed_epochs(checkpoint)
+            if epochs <= restored_epochs:
+                raise ValueError(
+                    f"Checkpoint {checkpoint.name} already completed {restored_epochs} epochs; "
+                    f"--epochs must be greater than {restored_epochs} to continue training"
+                )
+            checkpoint_relative = checkpoint.relative_to(project)
+            runtime_text = _set_yaml_section_scalar(
+                runtime_text, "train", "resume_training_checkpoint_path",
+                f'"{(Path("/workspace/project") / checkpoint_relative).as_posix()}"',
+            )
+            # VisualChangeNet initializes the LightningModule from this field
+            # before Trainer.fit receives the resume checkpoint. A stale vendor
+            # example path therefore fails first even though resume is valid.
+            # Point both stages at the same mounted, self-contained checkpoint.
+            runtime_text = _replace_yaml_scalar(
+                runtime_text, "pretrained_model_path",
+                f'"{(Path("/workspace/project") / checkpoint_relative).as_posix()}"',
+            )
+            if progress_callback:
+                print(f"Restoring complete TAO session from {checkpoint}", flush=True)
+        elif pretrained_model is not None:
             pretrained = resolve_visual_changenet_pretrained(pretrained_model)
             mounts.extend(["-v", f"{pretrained}:/pretrained/model.pth:ro"])
             runtime_text = _replace_yaml_scalar(runtime_text, "pretrained_model_path", "/pretrained/model.pth")
@@ -382,19 +460,79 @@ def run_visual_changenet_task(
     container_spec = Path("/workspace/project") / runtime_spec.relative_to(project)
     command = [
         "docker", "run", "--rm", "--gpus", "all", "--shm-size=16g",
+        "-e", "PYTHONUNBUFFERED=1",
         "--ulimit", "memlock=-1", "--ulimit", "stack=67108864",
         *mounts, "-w", "/workspace/project",
         image, "python", "-m", VISUAL_CHANGENET_MODULE,
         task, "-e", container_spec.as_posix(),
     ]
     try:
-        subprocess.run(command, check=True)
-        if task == "train":
-            materialize_latest_training_checkpoint(result_host)
+        if progress_callback is None:
+            subprocess.run(command, check=True)
+        else:
+            _run_with_live_progress(
+                command, task, epochs, progress_callback, initial_completed=restored_epochs
+            )
         if expected_export is not None and not expected_export.is_file():
             raise FileNotFoundError(
                 f"TAO export command completed but ONNX was not created at {expected_export}"
             )
     finally:
-        if runtime_spec is not None:
+        try:
+            if task == "train":
+                # Repair TAO's Windows-host-incompatible zero-byte ``latest``
+                # after success, failure, or Ctrl+C. Completed epoch files
+                # remain valid even when the current process does not finish.
+                active_error = sys.exc_info()[0] is not None
+                try:
+                    materialize_latest_training_checkpoint(result_host)
+                except Exception:
+                    if not active_error:
+                        raise
+        finally:
             runtime_spec.unlink(missing_ok=True)
+
+
+_EPOCH_PATTERNS = (
+    re.compile(r"\bEpoch\s+(\d+)(?:\s*/\s*|[ /]+of\s+)(\d+)"),
+    re.compile(r"\bEpoch\s+(\d+)\s*(?=[:\[])"),
+)
+
+
+def _run_with_live_progress(
+    command: list[str], task: str, total_epochs: int, callback: ProgressCallback,
+    *, initial_completed: int = 0,
+) -> None:
+    """Tee unbuffered TAO output to the terminal and emit epoch/ETA updates."""
+    started = time.monotonic()
+    total = total_epochs if task == "train" else 1
+    callback(TrainingProgress(f"TAO {task}", initial_completed, total, 0.0))
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    assert process.stdout is not None
+    last_epoch = initial_completed
+    for line in process.stdout:
+        print(line, end="", flush=True)
+        if task != "train":
+            continue
+        for pattern in _EPOCH_PATTERNS:
+            match = pattern.search(line)
+            if match:
+                raw_epoch = int(match.group(1))
+                # Lightning epoch indices are zero-based in both ``Epoch N``
+                # and ``Epoch N/M`` output.
+                epoch = min(raw_epoch + 1, total_epochs)
+                if epoch > last_epoch:
+                    last_epoch = epoch
+                    callback(TrainingProgress("TAO epoch", epoch, total_epochs, time.monotonic() - started))
+                break
+    return_code = process.wait()
+    if return_code:
+        raise subprocess.CalledProcessError(return_code, command)
+    callback(TrainingProgress(f"TAO {task}", total_epochs if task == "train" else 1,
+                              total_epochs if task == "train" else 1, time.monotonic() - started))
