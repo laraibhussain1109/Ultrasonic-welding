@@ -16,8 +16,10 @@ class TrainingProgress:
 
     @property
     def eta_seconds(self) -> float | None:
-        if self.completed <= 0 or self.total <= self.completed:
-            return 0.0 if self.total <= self.completed else None
+        if self.completed <= 0 or (self.elapsed_seconds <= 0 and self.total > self.completed):
+            return None
+        if self.total <= self.completed:
+            return 0.0
         return self.elapsed_seconds * (self.total - self.completed) / self.completed
 
     def format(self) -> str:

@@ -417,7 +417,11 @@ it as `train.resume_training_checkpoint_path` in the temporary runtime spec,
 and leaves the source YAML unchanged. `--epoch`/`--epochs` is the total target;
 because filenames are zero-based, continue `model_epoch_350...` with a target
 greater than 351. Restore is intentionally mutually exclusive with
-`--pretrained-model` and `--from-scratch`.
+`--pretrained-model` and `--from-scratch`. VisualChangeNet loads
+`pretrained_model_path` before Lightning restores the session, so the runtime
+spec points that field at the same mounted resume checkpoint as well. This
+prevents an obsolete NVIDIA example such as `/results/pretrained/...` from
+raising `FileNotFoundError` before session restoration begins.
 
 ### Export after a completed training run
 

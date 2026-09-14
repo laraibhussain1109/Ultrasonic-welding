@@ -242,6 +242,14 @@ def find_latest_epoch_checkpoint(results_dir: str | Path) -> Path:
     return max(numbered)[-1]
 
 
+def checkpoint_completed_epochs(checkpoint: str | Path) -> int:
+    """Return the completed epoch count encoded by TAO's zero-based filename."""
+    match = _EPOCH_CHECKPOINT.search(Path(checkpoint).stem)
+    if match is None:
+        raise ValueError(f"TAO checkpoint filename contains no epoch number: {checkpoint}")
+    return int(match.group(1)) + 1
+
+
 def find_training_checkpoint(results_dir: str | Path) -> Path:
     """Select a non-empty stable checkpoint, or the newest completed checkpoint."""
     train_dir = Path(results_dir).resolve() / "train"
@@ -368,6 +376,7 @@ def run_visual_changenet_task(
         top_level=True,
     )
     expected_export: Path | None = None
+    restored_epochs = 0
     if task == "export":
         # Also repairs results produced by older launcher versions before export.
         checkpoint = materialize_latest_training_checkpoint(result_host)
@@ -407,9 +416,23 @@ def run_visual_changenet_task(
         runtime_text = _replace_yaml_scalar(runtime_text, "num_epochs", str(epochs))
         if restore_last_session:
             checkpoint = find_latest_epoch_checkpoint(result_host)
+            restored_epochs = checkpoint_completed_epochs(checkpoint)
+            if epochs <= restored_epochs:
+                raise ValueError(
+                    f"Checkpoint {checkpoint.name} already completed {restored_epochs} epochs; "
+                    f"--epochs must be greater than {restored_epochs} to continue training"
+                )
             checkpoint_relative = checkpoint.relative_to(project)
             runtime_text = _set_yaml_section_scalar(
                 runtime_text, "train", "resume_training_checkpoint_path",
+                f'"{(Path("/workspace/project") / checkpoint_relative).as_posix()}"',
+            )
+            # VisualChangeNet initializes the LightningModule from this field
+            # before Trainer.fit receives the resume checkpoint. A stale vendor
+            # example path therefore fails first even though resume is valid.
+            # Point both stages at the same mounted, self-contained checkpoint.
+            runtime_text = _replace_yaml_scalar(
+                runtime_text, "pretrained_model_path",
                 f'"{(Path("/workspace/project") / checkpoint_relative).as_posix()}"',
             )
             if progress_callback:
@@ -441,7 +464,9 @@ def run_visual_changenet_task(
         if progress_callback is None:
             subprocess.run(command, check=True)
         else:
-            _run_with_live_progress(command, task, epochs, progress_callback)
+            _run_with_live_progress(
+                command, task, epochs, progress_callback, initial_completed=restored_epochs
+            )
         if task == "train":
             materialize_latest_training_checkpoint(result_host)
         if expected_export is not None and not expected_export.is_file():
@@ -454,17 +479,19 @@ def run_visual_changenet_task(
 
 
 _EPOCH_PATTERNS = (
-    re.compile(r"(?i)epoch(?:\s*|[=:\[]+)(\d+)(?:\s*/\s*|[ /]+of\s+)(\d+)"),
-    re.compile(r"(?i)epoch(?:\s*|[=:\[]+)(\d+)"),
+    re.compile(r"\bEpoch\s+(\d+)(?:\s*/\s*|[ /]+of\s+)(\d+)"),
+    re.compile(r"\bEpoch\s+(\d+)\s*(?=[:\[])"),
 )
 
 
 def _run_with_live_progress(
-    command: list[str], task: str, total_epochs: int, callback: ProgressCallback
+    command: list[str], task: str, total_epochs: int, callback: ProgressCallback,
+    *, initial_completed: int = 0,
 ) -> None:
     """Tee unbuffered TAO output to the terminal and emit epoch/ETA updates."""
     started = time.monotonic()
-    callback(TrainingProgress(f"TAO {task}", 0, total_epochs if task == "train" else 1, 0.0))
+    total = total_epochs if task == "train" else 1
+    callback(TrainingProgress(f"TAO {task}", initial_completed, total, 0.0))
     process = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
@@ -473,7 +500,7 @@ def _run_with_live_progress(
         bufsize=1,
     )
     assert process.stdout is not None
-    last_epoch = 0
+    last_epoch = initial_completed
     for line in process.stdout:
         print(line, end="", flush=True)
         if task != "train":
@@ -482,9 +509,9 @@ def _run_with_live_progress(
             match = pattern.search(line)
             if match:
                 raw_epoch = int(match.group(1))
-                # A bare Lightning ``Epoch N`` is zero-based; ``N/total`` is
-                # already a human-facing one-based counter.
-                epoch = min(raw_epoch + (1 if match.lastindex == 1 else 0), total_epochs)
+                # Lightning epoch indices are zero-based in both ``Epoch N``
+                # and ``Epoch N/M`` output.
+                epoch = min(raw_epoch + 1, total_epochs)
                 if epoch > last_epoch:
                     last_epoch = epoch
                     callback(TrainingProgress("TAO epoch", epoch, total_epochs, time.monotonic() - started))

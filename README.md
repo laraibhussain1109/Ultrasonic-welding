@@ -113,7 +113,10 @@ python -m src.blower_inspection.cli tao-train BF-001 `
 number of additional epochs. The restore option deliberately selects the
 highest epoch number, so a newer accidental restart such as `epoch_010` cannot
 hide an older `epoch_350` checkpoint. To continue after `model_epoch_350...`,
-choose a target greater than 351 (for example, `--epoch 400`).
+choose a target greater than 351 (for example, `--epoch 400`). During resume,
+the launcher also overrides any stale vendor `pretrained_model_path` with the
+selected mounted checkpoint; paths such as `/results/pretrained/...` therefore
+cannot fail before TAO restores the trainer state.
 
 After training, run `tao-export BF-001 --spec
 specs/visual_changenet/bf-001_segmentation.yaml --results-dir
