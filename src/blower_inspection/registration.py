@@ -15,6 +15,7 @@ class RegistrationResult:
     translation_y: float
     rotation_deg: float
     reference_index: int | None = None
+    failure_reason: str | None = None
 
 
 def register_to_reference(image: np.ndarray, reference: np.ndarray, *, min_correlation: float = 0.55,
@@ -38,9 +39,15 @@ def register_to_reference(image: np.ndarray, reference: np.ndarray, *, min_corre
     rotation = float(np.degrees(np.arctan2(warp[1, 0], warp[0, 0])))
     tx, ty = float(warp[0, 2]), float(warp[1, 2])
     h, w = reference.shape[:2]
-    valid = (np.isfinite(correlation) and correlation >= min_correlation and
-             abs(tx) <= w * max_translation_ratio and abs(ty) <= h * max_translation_ratio and
-             abs(rotation) <= max_rotation_deg)
+    failures = []
+    if not np.isfinite(correlation) or correlation < min_correlation:
+        failures.append("LOW_CORRELATION")
+    if abs(tx) > w * max_translation_ratio or abs(ty) > h * max_translation_ratio:
+        failures.append("TRANSLATION_LIMIT")
+    if abs(rotation) > max_rotation_deg:
+        failures.append("ROTATION_LIMIT")
+    valid = not failures
     aligned = cv2.warpAffine(image, warp, (w, h), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
                              borderMode=cv2.BORDER_REFLECT) if valid else image.copy()
-    return RegistrationResult(aligned, bool(valid), float(correlation), tx, ty, rotation, reference_index)
+    return RegistrationResult(aligned, bool(valid), float(correlation), tx, ty, rotation,
+                              reference_index, "+".join(failures) or None)

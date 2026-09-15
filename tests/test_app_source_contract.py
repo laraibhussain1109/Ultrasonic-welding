@@ -27,6 +27,15 @@ def test_app_validates_tao_readiness_before_opening_camera():
     assert '"TAO model not ready"' in source
 
 
+def test_app_does_not_replace_the_inspector_after_readiness_validation():
+    source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
+    start = source.index("def start_inspection")
+    validation = source.index("self.inspector.validate_ready(model)", start)
+    camera_open = source.index("self.camera.open()", validation)
+
+    assert "self._apply_selected_camera_settings()" not in source[validation:camera_open]
+
+
 def test_app_imports_backend_factory_from_its_own_module():
     source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
     assert "from .inspector_factory import inspector_for_model" in source

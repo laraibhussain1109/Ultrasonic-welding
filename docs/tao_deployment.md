@@ -592,3 +592,14 @@ Normal startup requests `CUDAExecutionProvider` followed by
 With `tao_require_gpu: true`, production readiness checks the providers active on
 the created session and inhibits inspection unless CUDA is actually active.
 With it set to false, CPU remains an allowed fallback.
+
+### Registration-invalid live views
+
+`VIEW INVALID / REGISTRATION_INVALID` is a view-quality result, not a TAO model
+failure and not a PASS. The sampler continues requesting another sharp rotational
+view. The logged registration score is compared with the selected model's
+`registration_min_correlation`; translations and rotation must also remain inside
+their configured safety bounds. BF-002 uses a qualified gradient-ECC floor of
+0.30 because its curved phase views commonly score below generic planar-image ECC
+defaults. Do not reduce the limit further without reviewing saved engineering
+registration evidence.

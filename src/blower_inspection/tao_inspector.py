@@ -488,10 +488,14 @@ class TaoInspector:
         registration_ms = (time.perf_counter() - registration_started) * 1000
         if not valid:
             display = image.copy()
+            best_invalid = max(registered, key=lambda item: item.correlation, default=None)
+            registration_reason = ((best_invalid.failure_reason or "REGISTRATION_QUALITY_LIMIT")
+                                   if best_invalid else "NO_REFERENCE_CANDIDATE")
             return InspectionResult("VIEW INVALID", 0.0, 0, 0.0, [], display_image=display,
                 tao_score=0.0, geometry_score=0.0, periodicity_score=0.0, glare_score=0.0,
                 registration_score=max((item.correlation for item in registered), default=0.0), hybrid_score=0.0,
-                reason_codes=("REGISTRATION_INVALID",), view_valid=False, latencies_ms={"registration": registration_ms, "total": (time.perf_counter()-total_started)*1000})
+                reason_codes=("REGISTRATION_INVALID", registration_reason), view_valid=False,
+                latencies_ms={"registration": registration_ms, "total": (time.perf_counter()-total_started)*1000})
         registration = max(valid, key=lambda item: item.correlation)
         reference = bank.images[int(registration.reference_index)]
         tao_started = time.perf_counter()

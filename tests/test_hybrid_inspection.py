@@ -60,7 +60,9 @@ def test_limited_registration_accepts_small_motion(angle, shift):
 
 def test_registration_rejects_excessive_motion():
     moved = np.roll(fins(), 70, axis=1)
-    assert not register_to_reference(moved, fins(), max_translation_ratio=.05).success
+    result = register_to_reference(moved, fins(), max_translation_ratio=.05)
+    assert not result.success
+    assert result.failure_reason is not None
 
 
 def test_geometry_calibration_and_periodicity_disruption():

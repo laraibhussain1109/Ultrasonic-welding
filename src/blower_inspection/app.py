@@ -542,6 +542,14 @@ class InspectionWindow(QWidget):
         if model.yolo_model_path is None:
             QMessageBox.critical(self, "YOLO model required", "Select your trained YOLO best.pt with YOLO PART MODEL before starting live inspection.")
             return
+        # Applying camera settings also rebuilds the model-specific inspector.
+        # Do this before readiness validation so the validated TAO session is
+        # the same instance used for logging and inference.
+        try:
+            self._apply_selected_camera_settings()
+        except Exception as exc:
+            QMessageBox.critical(self, "Camera settings error", str(exc))
+            return
         if model.algorithm == "nvidia_tao":
             try:
                 self.inspector.validate_ready(model)
@@ -549,7 +557,6 @@ class InspectionWindow(QWidget):
                 QMessageBox.critical(self, "TAO model not ready", str(exc))
                 return
         try:
-            self._apply_selected_camera_settings()
             self.part_detector = YoloByteTrackDetector(model.yolo_model_path, model.yolo_confidence)
             self.rotating_parts = RotatingPartInspector(
                 model.inspection_lost_timeout_s,
