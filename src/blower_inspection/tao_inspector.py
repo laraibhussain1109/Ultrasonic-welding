@@ -374,13 +374,17 @@ class TaoInspector:
             qualified_crops.append(crop)
             if progress_callback:
                 progress_callback(TrainingProgress("Calibrating TAO model", len(paths) + index, len(paths) * 2, time.monotonic() - started))
-        minimum_qualified = max(20, int(np.ceil(len(paths) * 0.80)))
+        minimum_qualified = max(20, int(np.ceil(
+            len(paths) * config.registration_calibration_min_valid_ratio
+        )))
         if len(qualified_crops) < minimum_qualified:
             examples = ", ".join(excluded_registration_sources[:3])
             raise ValueError(
                 "Hybrid calibration registration qualification failed: "
                 f"only {len(qualified_crops)}/{len(paths)} normal images registered "
-                f"(required {minimum_qualified}). Check crop/ROI, phase coverage, focus, "
+                f"(required {minimum_qualified}, configured ratio "
+                f"{config.registration_calibration_min_valid_ratio:.0%}). "
+                "Check crop/ROI, phase coverage, focus, "
                 f"and registration bounds. Example exclusions: {examples}"
             )
         normal_pixels = np.concatenate(pixels)

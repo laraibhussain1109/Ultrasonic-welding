@@ -565,7 +565,8 @@ This workflow does **not** retrain VisualChangeNet and does not depend on the
 number of epochs used to produce the ONNX export. A normal image that cannot be
 registered to any different phase reference is excluded from threshold fitting
 and recorded in `hybrid_calibration.json`; calibration continues when at least
-20 images and 80% of the reviewed set qualify. If that quality floor is missed,
+20 images and the configured fraction of the reviewed set qualify. The default
+`registration_calibration_min_valid_ratio` is 0.70. If that quality floor is missed,
 the error reports the qualified count and example exclusions so the ROI, focus,
 phase coverage, and registration bounds can be corrected without retraining TAO.
 

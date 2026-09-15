@@ -48,7 +48,8 @@
       "tao_strong_threshold": 1.0,
       "tao_candidate_threshold": 0.7,
       "weak_candidate_required_views": 2,
-      "longitudinal_sections": 6
+      "longitudinal_sections": 6,
+      "registration_calibration_min_valid_ratio": 0.7
     },
     {
       "id": "BF-002",
@@ -97,7 +98,8 @@
       "tao_strong_threshold": 1.0,
       "tao_candidate_threshold": 0.7,
       "weak_candidate_required_views": 2,
-      "longitudinal_sections": 7
+      "longitudinal_sections": 7,
+      "registration_calibration_min_valid_ratio": 0.7
     },
     {
       "id": "BF-003",
@@ -146,7 +148,8 @@
       "tao_strong_threshold": 1.0,
       "tao_candidate_threshold": 0.7,
       "weak_candidate_required_views": 2,
-      "longitudinal_sections": 8
+      "longitudinal_sections": 8,
+      "registration_calibration_min_valid_ratio": 0.7
     },
     {
       "id": "BF-004",
@@ -195,7 +198,8 @@
       "tao_strong_threshold": 1.0,
       "tao_candidate_threshold": 0.7,
       "weak_candidate_required_views": 2,
-      "longitudinal_sections": 9
+      "longitudinal_sections": 9,
+      "registration_calibration_min_valid_ratio": 0.7
     }
   ]
 }

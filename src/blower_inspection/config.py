@@ -58,6 +58,7 @@ class PartModelConfig:
     registration_min_correlation: float = 0.55
     registration_max_translation_ratio: float = 0.06
     registration_max_rotation_deg: float = 3.0
+    registration_calibration_min_valid_ratio: float = 0.70
     geometry_enabled: bool = True
     geometry_fail_threshold: float = 1.0
     geometry_candidate_threshold: float = 0.55
@@ -181,6 +182,9 @@ class ModelRegistry:
             registration_min_correlation=float(entry.get("registration_min_correlation", 0.55)),
             registration_max_translation_ratio=float(entry.get("registration_max_translation_ratio", 0.06)),
             registration_max_rotation_deg=float(entry.get("registration_max_rotation_deg", 3.0)),
+            registration_calibration_min_valid_ratio=min(1.0, max(0.0, float(
+                entry.get("registration_calibration_min_valid_ratio", 0.70)
+            ))),
             geometry_enabled=bool(entry.get("geometry_enabled", True)),
             geometry_fail_threshold=float(entry.get("geometry_fail_threshold", 1.0)),
             geometry_candidate_threshold=float(entry.get("geometry_candidate_threshold", 0.55)),

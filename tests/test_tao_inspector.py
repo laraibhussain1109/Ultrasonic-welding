@@ -157,6 +157,13 @@ def test_calibration_excludes_an_unregistrable_normal_instead_of_aborting(tmp_pa
     assert data["excluded_registration_count"] == 1
 
 
+def test_calibration_valid_ratio_is_configurable(tmp_path):
+    from dataclasses import replace
+
+    cfg = replace(config(tmp_path), registration_calibration_min_valid_ratio=0.70)
+    assert cfg.registration_calibration_min_valid_ratio == pytest.approx(0.70)
+
+
 def test_cpu_calibration_session_cannot_be_reused_as_gpu_session(tmp_path, monkeypatch):
     cfg = config(tmp_path)
     inspector = TaoInspector()
