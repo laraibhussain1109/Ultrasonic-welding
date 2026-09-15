@@ -223,3 +223,22 @@ Flash `firmware/esp32_fail_output/esp32_fail_output.ino` and configure the seria
 pip install -e '.[dev]'
 pytest -q
 ```
+
+## Hybrid rotating-blower inspection
+
+Production inspection retains NVIDIA TAO VisualChangeNet but no longer treats a
+single change-map pixel as a physical defect. `CALIBRATE` builds a diverse,
+structural reference bank from reviewed normal images, qualifies conservative
+Euclidean registration, and learns robust fin geometry. Live views use only the
+best valid match among three descriptor candidates and run TAO once. Horizontal
+fin orientation, pitch, continuity and gradient periodicity are evaluated in a
+central cylinder band; persistent vertical support ribs are excluded.
+
+Fusion immediately rejects catastrophic/corroborated geometry, while a TAO-only
+change is provisional. Broad, smooth glare with intact geometry is reported as
+`LIKELY_GLARE` and does not latch rejection. Invalid registration is an unusable
+view; a part with insufficient qualified views fails closed. Operator imagery
+keeps the camera pixels and draws red outlines only for confirmed defects.
+Configuration is per model through the `hybrid_*`, `registration_*`,
+`geometry_*`, `glare_*`, inspection-band, TAO evidence, reference-bank,
+`longitudinal_sections`, and persistence fields in `config/models.json`.

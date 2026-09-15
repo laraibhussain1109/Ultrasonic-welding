@@ -549,3 +549,22 @@ calibration, unavailable GPU execution provider, ambiguous output binding,
 dynamic spatial input, invalid shape, or NaN/Inf. These are equipment faults,
 not PASS results. The application report stores the algorithm, thresholds, and
 model digest for traceability.
+
+## Hybrid calibration and artifact qualification
+
+After TAO export, use the existing **CALIBRATE/TRAIN SELECTED MODEL** action. It
+now performs one workflow: load reviewed normal images, create a farthest-first
+structural `reference_bank`, calibrate TAO using leave-one-out reference matching,
+qualify registration, learn median/MAD geometry ranges, and write
+`hybrid_calibration.json`. The TAO calibration records the model SHA-256,
+reference-bank manifest SHA-256, reference count, and calibration image count.
+Production startup rejects a changed model, manifest, reference count, missing
+hybrid calibration, or mismatched hybrid binding.
+
+Tune the inspection band, bank size/candidate count, registration correlation and
+motion bounds, geometry candidate/fail thresholds, glare threshold, TAO
+candidate/strong thresholds, persistence views, and longitudinal sections per
+model in `config/models.json`. Reference selection uses gradients rather than RGB
+brightness, caches images/descriptors in memory, registers only the closest few,
+and invokes TAO once on the selected RGB pair. Do not apply structural-path
+normalization to TAO inputs.

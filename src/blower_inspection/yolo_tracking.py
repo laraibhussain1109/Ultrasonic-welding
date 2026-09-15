@@ -82,6 +82,14 @@ class RotatingPartSession:
     has_failure: bool = False
     worst_score: float = 0.0
     crossed_counting_line: bool = False
+    valid_views: int = 0
+    invalid_registration_views: int = 0
+    geometry_strong_views: int = 0
+    tao_only_candidate_views: int = 0
+    persistent_candidate_count: int = 0
+    worst_geometry_score: float = 0.0
+    worst_tao_score: float = 0.0
+    reason_codes: set[str] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -90,6 +98,8 @@ class CompletedPart:
     status: str
     frames_inspected: int
     worst_score: float
+    valid_views: int = 0
+    reason_codes: tuple[str, ...] = ()
 
 
 class RotatingPartInspector:
@@ -107,6 +117,7 @@ class RotatingPartInspector:
         counting_line_ratio: float = 0.45,
         counting_direction: str = "left_to_right",
         minimum_rotation_views: int = 1,
+        weak_candidate_required_views: int = 2,
     ) -> None:
         if not 0.0 < counting_line_ratio < 1.0:
             raise ValueError("counting_line_ratio must be between 0 and 1")
@@ -116,6 +127,7 @@ class RotatingPartInspector:
         self.counting_line_ratio = counting_line_ratio
         self.counting_direction = counting_direction
         self.minimum_rotation_views = max(1, int(minimum_rotation_views))
+        self.weak_candidate_required_views = max(1, int(weak_candidate_required_views))
         self.sessions: dict[int, RotatingPartSession] = {}
         self.track_to_part: dict[int, int] = {}
 
@@ -140,14 +152,34 @@ class RotatingPartInspector:
                 session.crossed_counting_line = True
 
     def record_inspection(
-        self, track_id: int, *, is_pass: bool, anomaly_score: float
+        self, track_id: int, *, is_pass: bool, anomaly_score: float,
+        view_valid: bool = True, immediate_failure: bool | None = None,
+        provisional_candidate: bool = False, geometry_score: float = 0.0,
+        tao_score: float | None = None, reason_codes: tuple[str, ...] | list[str] = (),
     ) -> CompletedPart | None:
         session = self._session_for_track(track_id)
         if session is None:
             return None
         session.frames_inspected += 1
-        session.has_failure |= not is_pass
+        if not view_valid:
+            session.invalid_registration_views += 1
+        else:
+            session.valid_views += 1
+        if geometry_score >= 1.0:
+            session.geometry_strong_views += 1
+        if provisional_candidate:
+            session.tao_only_candidate_views += 1
+            session.persistent_candidate_count += 1
+        else:
+            session.persistent_candidate_count = 0
+        # Old callers preserve fail-latching. Hybrid callers explicitly label
+        # severe versus provisional evidence.
+        severe = (not is_pass) if immediate_failure is None else immediate_failure
+        session.has_failure |= severe or session.persistent_candidate_count >= self.weak_candidate_required_views
         session.worst_score = max(session.worst_score, anomaly_score)
+        session.worst_geometry_score = max(session.worst_geometry_score, geometry_score)
+        session.worst_tao_score = max(session.worst_tao_score, tao_score if tao_score is not None else anomaly_score)
+        session.reason_codes.update(reason_codes)
         if (
             session.crossed_counting_line
             and session.frames_inspected >= self.minimum_rotation_views
@@ -228,4 +260,10 @@ class RotatingPartInspector:
 
     @staticmethod
     def _complete(session: RotatingPartSession) -> CompletedPart:
-        return CompletedPart(session.part_id, "FAIL" if session.has_failure else "PASS", session.frames_inspected, session.worst_score)
+        # Crossing with too few registered views is a fail-closed quality fault.
+        insufficient = session.valid_views < session.frames_inspected and session.valid_views == 0
+        reasons = set(session.reason_codes)
+        if insufficient:
+            reasons.add("INSUFFICIENT_VIEW_QUALITY")
+        return CompletedPart(session.part_id, "FAIL" if session.has_failure or insufficient else "PASS",
+                             session.frames_inspected, session.worst_score, session.valid_views, tuple(sorted(reasons)))

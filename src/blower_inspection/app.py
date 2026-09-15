@@ -556,6 +556,7 @@ class InspectionWindow(QWidget):
                 model.counting_line_ratio,
                 model.counting_direction,
                 model.minimum_rotation_views,
+                model.weak_candidate_required_views,
             )
             self.frame_sampler = SharpFrameSampler(
                 model.capture_burst_frames, model.minimum_sharpness
@@ -676,10 +677,14 @@ class InspectionWindow(QWidget):
             self._handle_no_part_result(result, latency_ms)
             return
         completed_part = None
-        latched_failure = not result.is_pass
+        latched_failure = result.status == "FAIL"
         if self.rotating_parts is not None:
             completed_part = self.rotating_parts.record_inspection(
-                track_id, is_pass=result.is_pass, anomaly_score=result.anomaly_score
+                track_id, is_pass=result.is_pass, anomaly_score=result.anomaly_score,
+                view_valid=result.view_valid, immediate_failure=result.status == "FAIL",
+                provisional_candidate=result.status == "CANDIDATE",
+                geometry_score=result.geometry_score or 0.0,
+                tao_score=result.tao_score, reason_codes=result.reason_codes,
             )
             latched_failure = self.rotating_parts.latched_failure(track_id) or latched_failure
         self.score_slider.setValue(int(result.anomaly_score * 1000))
@@ -691,14 +696,12 @@ class InspectionWindow(QWidget):
         if result.display_image is not None:
             self.latest_annotated_frame = result.display_image
             self.show_frame(result.display_image)
-        bad_sector_text = ",".join(str(sector) for sector in result.bad_sectors[:8]) if result.bad_sectors else "-"
-        if len(result.bad_sectors) > 8:
-            bad_sector_text += ",..."
+        reason_text = ", ".join(result.reason_codes) or "NORMAL"
         self.last_result.setText(
-            f"TRACK:  {track_id} (rotation in progress)\nSCORE:  {result.anomaly_score:.3f}\n"
-            f"COVERAGE:  {result.defect_area_px}px\nBOXES:  {len(result.defect_boxes)}\n"
-            f"BAD SECTORS:  {bad_sector_text}\nSECTOR RATIO:  {result.bad_sector_ratio:.2%}\n"
-            f"LATENCY:  {latency_ms:.1f} ms"
+            f"TRACK: {track_id}   FINAL: {result.anomaly_score:.2f}\n"
+            f"TAO: {result.tao_score or 0:.2f}   GEOMETRY: {result.geometry_score or 0:.2f}\n"
+            f"GLARE: {result.glare_score or 0:.2f}   REGISTRATION: {result.registration_score or 0:.2f}\n"
+            f"REASON: {reason_text}\nLATENCY: {latency_ms:.1f} ms"
         )
         self.latency_top.setText(f"LATENCY:  {latency_ms:.0f} ms")
         self.log.addItem(f"VIEW {result.status} | track={track_id} | score={result.anomaly_score:.3f}")

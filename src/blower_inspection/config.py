@@ -47,6 +47,29 @@ class PartModelConfig:
     tao_require_gpu: bool = True
     tao_reference_image: Path | None = None
     tao_change_class_index: int = 1
+    # Hybrid inspection defaults are deliberately conservative and remain
+    # optional so older models.json files continue to load.
+    hybrid_enabled: bool = True
+    inspection_band_top_ratio: float = 0.18
+    inspection_band_bottom_ratio: float = 0.82
+    tao_reference_bank_size: int = 16
+    tao_reference_candidates: int = 3
+    registration_enabled: bool = True
+    registration_min_correlation: float = 0.55
+    registration_max_translation_ratio: float = 0.06
+    registration_max_rotation_deg: float = 3.0
+    geometry_enabled: bool = True
+    geometry_fail_threshold: float = 1.0
+    geometry_candidate_threshold: float = 0.55
+    glare_rejection_enabled: bool = True
+    glare_threshold: float = 0.55
+    periodicity_enabled: bool = True
+    tao_strong_threshold: float = 1.0
+    tao_candidate_threshold: float = 0.70
+    weak_candidate_required_views: int = 2
+    longitudinal_sections: int = 6
+    hybrid_calibration_file: Path | None = None
+    engineering_debug: bool = False
 
 
 class ModelRegistry:
@@ -149,6 +172,27 @@ class ModelRegistry:
             tao_require_gpu=bool(entry.get("tao_require_gpu", True)),
             tao_reference_image=Path(entry["tao_reference_image"]) if entry.get("tao_reference_image") else None,
             tao_change_class_index=max(0, int(entry.get("tao_change_class_index", 1))),
+            hybrid_enabled=bool(entry.get("hybrid_enabled", True)),
+            inspection_band_top_ratio=float(entry.get("inspection_band_top_ratio", 0.18)),
+            inspection_band_bottom_ratio=float(entry.get("inspection_band_bottom_ratio", 0.82)),
+            tao_reference_bank_size=max(2, int(entry.get("tao_reference_bank_size", 16))),
+            tao_reference_candidates=max(1, int(entry.get("tao_reference_candidates", 3))),
+            registration_enabled=bool(entry.get("registration_enabled", True)),
+            registration_min_correlation=float(entry.get("registration_min_correlation", 0.55)),
+            registration_max_translation_ratio=float(entry.get("registration_max_translation_ratio", 0.06)),
+            registration_max_rotation_deg=float(entry.get("registration_max_rotation_deg", 3.0)),
+            geometry_enabled=bool(entry.get("geometry_enabled", True)),
+            geometry_fail_threshold=float(entry.get("geometry_fail_threshold", 1.0)),
+            geometry_candidate_threshold=float(entry.get("geometry_candidate_threshold", 0.55)),
+            glare_rejection_enabled=bool(entry.get("glare_rejection_enabled", True)),
+            glare_threshold=float(entry.get("glare_threshold", 0.55)),
+            periodicity_enabled=bool(entry.get("periodicity_enabled", True)),
+            tao_strong_threshold=float(entry.get("tao_strong_threshold", 1.0)),
+            tao_candidate_threshold=float(entry.get("tao_candidate_threshold", 0.70)),
+            weak_candidate_required_views=max(1, int(entry.get("weak_candidate_required_views", 2))),
+            longitudinal_sections=max(1, int(entry.get("longitudinal_sections", 6))),
+            hybrid_calibration_file=Path(entry["hybrid_calibration_file"]) if entry.get("hybrid_calibration_file") else None,
+            engineering_debug=bool(entry.get("engineering_debug", False)),
         )
 
 

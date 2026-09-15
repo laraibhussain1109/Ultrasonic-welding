@@ -22,3 +22,30 @@ Each part configuration owns a normal-image directory, TAO ONNX export, calibrat
 ## Qualification
 
 See `docs/tao_deployment.md`. Commissioning requires a locked, part-disjoint validation set, defect-size coverage, false-accept/false-reject confidence limits, latency limits, golden-part challenges, and controlled change management. Software controls support this process but cannot replace it.
+
+## Hybrid evidence architecture
+
+The axis of the inspected cylinder is horizontal. Circumferential fins appear as
+approximately horizontal/curved edges; interval vertical structures are support
+discs, not fin numbers. The former `cylindrical_sector_statistics` width slicing
+was therefore a longitudinal anomaly summary, not a physical mapping of
+`expected_fins`. Hybrid geometry uses vertical-gradient periodicity for the
+circumferential pattern and explicitly named `longitudinal_sections` for the
+axis direction.
+
+Each sharp tracked crop is structurally matched (normalized gradient thumbnail
+and edge projections) to a diverse reference bank. The closest three candidates
+are conservatively registered by phase correlation plus bounded ECC Euclidean
+motion. A failed bound or low correlation yields `VIEW INVALID`, never PASS.
+The one best qualified pair enters VisualChangeNet exactly once with its existing
+RGB/ImageNet preprocessing. A separate grayscale path measures orientation,
+pitch, continuity, isolated gaps, periodicity, support ribs, and smooth glare in
+the configured central inspection band.
+
+Fusion is deterministic: reject immediately for geometry at its fail threshold,
+or corroborated TAO and geometry candidate evidence. TAO-only evidence becomes a
+provisional candidate requiring consecutive views. Strong smooth glare suppresses
+only TAO-only candidates when geometry and periodicity are normal; it never
+suppresses strong geometry. Registration failures consume no valid view and an
+all-invalid completed inspection fails closed. Reports include component scores,
+reason codes, chosen reference, registration quality, and stage latency.
