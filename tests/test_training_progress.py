@@ -38,6 +38,29 @@ def test_tao_output_is_streamed_and_zero_based_epochs_are_reported(monkeypatch, 
     assert [(item.completed, item.total) for item in updates] == [(0, 2), (1, 2), (2, 2), (2, 2)]
 
 
+def test_tao_output_is_always_decoded_as_utf8(monkeypatch):
+    captured = {}
+
+    class Process:
+        stdout = iter([])
+
+        @staticmethod
+        def wait():
+            return 0
+
+    def popen(*args, **kwargs):
+        captured.update(kwargs)
+        return Process()
+
+    monkeypatch.setattr("blower_inspection.tao_training.subprocess.Popen", popen)
+
+    _run_with_live_progress(["docker"], "train", 2, lambda update: None)
+
+    assert captured["text"] is True
+    assert captured["encoding"] == "utf-8"
+    assert captured["errors"] == "replace"
+
+
 def test_tao_resume_progress_starts_at_checkpoint_epoch(monkeypatch):
     class Process:
         stdout = iter(["Epoch 351: loss=.4\n"])
