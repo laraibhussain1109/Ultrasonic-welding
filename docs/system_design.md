@@ -42,6 +42,12 @@ RGB/ImageNet preprocessing. A separate grayscale path measures orientation,
 pitch, continuity, isolated gaps, periodicity, support ribs, and smooth glare in
 the configured central inspection band.
 
+Calibration uses the configured YOLO detector's exact component crop when its
+checkpoint is available, matching live ByteTrack crop geometry. Registration is
+solved on a bounded 512-pixel structural working image and its conservative
+Euclidean transform is scaled back to the full RGB crop. TAO still receives its
+normal registered RGB input through the existing resize/normalization path.
+
 Fusion is deterministic: reject immediately for geometry at its fail threshold,
 or corroborated TAO and geometry candidate evidence. TAO-only evidence becomes a
 provisional candidate requiring consecutive views. Strong smooth glare suppresses

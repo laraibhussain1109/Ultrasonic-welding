@@ -164,6 +164,37 @@ def test_calibration_valid_ratio_is_configurable(tmp_path):
     assert cfg.registration_calibration_min_valid_ratio == pytest.approx(0.70)
 
 
+def test_calibration_uses_configured_yolo_exact_crop(tmp_path, monkeypatch):
+    from dataclasses import replace
+    import cv2
+
+    cfg = config(tmp_path)
+    detector_path = tmp_path / "best.pt"
+    detector_path.write_bytes(b"detector")
+    cfg = replace(cfg, yolo_model_path=detector_path)
+    cfg.normal_image_dir.mkdir()
+    image = np.zeros((24, 40, 3), np.uint8)
+    for index in range(20):
+        assert cv2.imwrite(str(cfg.normal_image_dir / f"normal-{index}.png"), image)
+    exact_crop_calls = []
+
+    class Detector:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def exact_crop(self, value):
+            exact_crop_calls.append(value.shape)
+            return value[:, 5:35].copy()
+
+    monkeypatch.setattr("blower_inspection.yolo_tracking.YoloByteTrackDetector", Detector)
+    inspector = TaoInspector()
+    monkeypatch.setattr(inspector, "_infer", lambda *args, **kwargs: (np.zeros((4, 4), np.float32), 0.0))
+
+    inspector.train(cfg)
+
+    assert exact_crop_calls == [(24, 40, 3)] * 20
+
+
 def test_cpu_calibration_session_cannot_be_reused_as_gpu_session(tmp_path, monkeypatch):
     cfg = config(tmp_path)
     inspector = TaoInspector()

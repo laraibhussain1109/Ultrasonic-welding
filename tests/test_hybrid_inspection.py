@@ -65,6 +65,17 @@ def test_registration_rejects_excessive_motion():
     assert result.failure_reason is not None
 
 
+def test_registration_scales_bounded_working_transform_to_full_crop():
+    reference = cv2.resize(fins(), (1600, 800))
+    matrix = np.float32([[1, 0, 8], [0, 1, -5]])
+    moved = cv2.warpAffine(reference, matrix, (1600, 800))
+
+    result = register_to_reference(moved, reference, min_correlation=.3)
+
+    assert result.success
+    assert abs(result.translation_x) > 4
+
+
 def test_geometry_calibration_and_periodicity_disruption():
     normal = [np.roll(fins(), dy, axis=0) for dy in (-1, 0, 1)]
     inspector = FinGeometryInspector(FinGeometryInspector.calibrate(normal))

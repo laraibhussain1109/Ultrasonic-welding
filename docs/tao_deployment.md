@@ -603,3 +603,10 @@ their configured safety bounds. BF-002 uses a qualified gradient-ECC floor of
 0.30 because its curved phase views commonly score below generic planar-image ECC
 defaults. Do not reduce the limit further without reviewing saved engineering
 registration evidence.
+
+If normal images were calibrated with a fixed full-frame ROI while production
+uses exact YOLO crops, their coordinate systems differ even with an unchanged
+camera, lamp, and table. Recalibration now prefers the configured YOLO detector
+for normal images so the reference bank and live views share the same crop
+contract. Registration runs on a bounded structural working image for live
+latency; only its limited Euclidean transform is applied to full-resolution RGB.

@@ -318,12 +318,23 @@ class TaoInspector:
         if len(paths) < 20:
             raise ValueError(f"TAO calibration requires at least 20 reviewed normal images; found {len(paths)}")
         crops: list[np.ndarray] = []
+        detector = None
+        if config.yolo_model_path is not None and config.yolo_model_path.is_file():
+            from .yolo_tracking import YoloByteTrackDetector
+
+            detector = YoloByteTrackDetector(config.yolo_model_path, config.yolo_confidence)
         started = time.monotonic()
         for index, path in enumerate(paths, 1):
             image = cv2.imread(str(path))
             if image is None:
                 raise ValueError(f"Unreadable calibration image: {path}")
-            crops.append(crop_component_roi(image, roi_ratios=config.roi_ratios))
+            # Calibration and live inference must use the same physical crop.
+            # Prefer the configured YOLO detector; fixed ROI remains supported
+            # for legacy/image-only commissioning configurations.
+            crop = detector.exact_crop(image) if detector is not None else crop_component_roi(
+                image, roi_ratios=config.roi_ratios
+            )
+            crops.append(crop)
             if progress_callback:
                 progress_callback(TrainingProgress("Preparing calibration images", index, len(paths) * 2, time.monotonic() - started))
         bank = ReferenceBank.build(crops, paths, self.reference_bank_path(config), config.tao_reference_bank_size)
