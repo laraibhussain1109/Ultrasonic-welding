@@ -561,6 +561,14 @@ reference-bank manifest SHA-256, reference count, and calibration image count.
 Production startup rejects a changed model, manifest, reference count, missing
 hybrid calibration, or mismatched hybrid binding.
 
+This workflow does **not** retrain VisualChangeNet and does not depend on the
+number of epochs used to produce the ONNX export. A normal image that cannot be
+registered to any different phase reference is excluded from threshold fitting
+and recorded in `hybrid_calibration.json`; calibration continues when at least
+20 images and 80% of the reviewed set qualify. If that quality floor is missed,
+the error reports the qualified count and example exclusions so the ROI, focus,
+phase coverage, and registration bounds can be corrected without retraining TAO.
+
 Tune the inspection band, bank size/candidate count, registration correlation and
 motion bounds, geometry candidate/fail thresholds, glare threshold, TAO
 candidate/strong thresholds, persistence views, and longitudinal sections per

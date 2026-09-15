@@ -51,6 +51,7 @@ class TaoCalibration:
     reference_bank_sha256: str = ""
     reference_count: int = 1
     calibration_image_count: int = 0
+    excluded_registration_count: int = 0
 
 
 class TaoInspector:
@@ -297,10 +298,15 @@ class TaoInspector:
         pixel_tails: list[float] = []
         scores: list[float] = []
         registration_correlations: list[float] = []
+        qualified_crops: list[np.ndarray] = []
+        excluded_registration_sources: list[str] = []
         for index, (crop, source) in enumerate(zip(crops, paths), 1):
             # Leave-one-out prevents a selected calibration reference comparing
             # with its own source image and producing unrealistically low limits.
-            matches = bank.candidates(crop, config.tao_reference_candidates, exclude_source=source)
+            # Calibration can search the complete compact bank: unlike live
+            # inference this happens offline, and it avoids discarding a valid
+            # normal merely because its matching phase ranked fourth.
+            matches = bank.candidates(crop, len(bank.images), exclude_source=source)
             registered = [register_to_reference(crop, match.image,
                 min_correlation=config.registration_min_correlation,
                 max_translation_ratio=config.registration_max_translation_ratio,
@@ -315,7 +321,13 @@ class TaoInspector:
                 if float(np.std(crop)) < 1e-6 and matches:
                     valid = [RegistrationResult(crop, True, 1.0, 0.0, 0.0, 0.0, matches[0].index)]
                 else:
-                    raise ValueError(f"Calibration image cannot register to a different reference: {source}")
+                    excluded_registration_sources.append(str(source))
+                    if progress_callback:
+                        progress_callback(TrainingProgress(
+                            "Calibrating TAO model (excluded unregistrable normal)",
+                            len(paths) + index, len(paths) * 2, time.monotonic() - started,
+                        ))
+                    continue
             best = max(valid, key=lambda item: item.correlation)
             reference = bank.images[int(best.reference_index)]
             registration_correlations.append(best.correlation)
@@ -325,8 +337,18 @@ class TaoInspector:
             pixels.append(anomaly_map.ravel())
             pixel_tails.append(float(np.quantile(anomaly_map, 0.999)))
             scores.append(score)
+            qualified_crops.append(crop)
             if progress_callback:
                 progress_callback(TrainingProgress("Calibrating TAO model", len(paths) + index, len(paths) * 2, time.monotonic() - started))
+        minimum_qualified = max(20, int(np.ceil(len(paths) * 0.80)))
+        if len(qualified_crops) < minimum_qualified:
+            examples = ", ".join(excluded_registration_sources[:3])
+            raise ValueError(
+                "Hybrid calibration registration qualification failed: "
+                f"only {len(qualified_crops)}/{len(paths)} normal images registered "
+                f"(required {minimum_qualified}). Check crop/ROI, phase coverage, focus, "
+                f"and registration bounds. Example exclusions: {examples}"
+            )
         normal_pixels = np.concatenate(pixels)
         p999 = float(np.quantile(normal_pixels, 0.999))
         score_p999 = float(np.quantile(scores, 0.999))
@@ -341,16 +363,21 @@ class TaoInspector:
         score_mad = float(np.median(np.abs(np.asarray(scores) - np.median(scores))))
         pixel_threshold = p999 + max(3.0 * 1.4826 * pixel_tail_mad, 1e-6)
         image_threshold = score_p999 + max(3.0 * 1.4826 * score_mad, 1e-6)
-        calibration = TaoCalibration(_sha256(config.model_file), _sha256(reference_path), pixel_threshold, image_threshold, p999, score_p999, len(paths), datetime.now(timezone.utc).isoformat(), bank.manifest_sha256, len(bank.images), len(paths))
+        calibration = TaoCalibration(_sha256(config.model_file), _sha256(reference_path), pixel_threshold,
+            image_threshold, p999, score_p999, len(qualified_crops), datetime.now(timezone.utc).isoformat(),
+            bank.manifest_sha256, len(bank.images), len(paths), len(excluded_registration_sources))
         output = self.calibration_path(config)
         output.parent.mkdir(parents=True, exist_ok=True)
         temp = output.with_suffix(output.suffix + ".tmp")
         temp.write_text(json.dumps({"version": CALIBRATION_VERSION, **calibration.__dict__}, indent=2) + "\n", encoding="utf-8")
         temp.replace(output)
-        geometry = FinGeometryInspector.calibrate(crops, band_top=config.inspection_band_top_ratio,
+        geometry = FinGeometryInspector.calibrate(qualified_crops, band_top=config.inspection_band_top_ratio,
                                                    band_bottom=config.inspection_band_bottom_ratio)
         hybrid = {"version": 1, "model_sha256": calibration.model_sha256,
                   "reference_bank_sha256": bank.manifest_sha256, "calibration_image_count": len(paths),
+                  "qualified_calibration_image_count": len(qualified_crops),
+                  "excluded_registration_count": len(excluded_registration_sources),
+                  "excluded_registration_sources": excluded_registration_sources,
                   "registration_correlation": {"median": float(np.median(registration_correlations)),
                     "mad": float(np.median(np.abs(np.asarray(registration_correlations) - np.median(registration_correlations))))},
                   "geometry": geometry}

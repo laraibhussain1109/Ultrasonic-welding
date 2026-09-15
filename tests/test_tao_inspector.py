@@ -8,6 +8,7 @@ pytest.importorskip("cv2", exc_type=ImportError)
 
 from blower_inspection.config import PartModelConfig
 from blower_inspection.inspector_factory import inspector_for_model
+from blower_inspection.registration import RegistrationResult
 from blower_inspection.tao_inspector import TaoCalibration, TaoInspector
 
 
@@ -123,6 +124,37 @@ def test_calibration_requests_gpu_first_with_cpu_fallback(tmp_path, monkeypatch)
 
     assert fallback_requests == [True] * 20
     assert cfg.tao_require_gpu is True
+
+
+def test_calibration_excludes_an_unregistrable_normal_instead_of_aborting(tmp_path, monkeypatch):
+    cfg = config(tmp_path)
+    cfg.normal_image_dir.mkdir()
+    import cv2
+
+    for index in range(21):
+        image = np.zeros((32, 48, 3), np.uint8)
+        cv2.line(image, (0, 8 + index % 8), (47, 8 + index % 8), (180, 180, 180), 2)
+        assert cv2.imwrite(str(cfg.normal_image_dir / f"normal-{index:02d}.png"), image)
+
+    first_candidate = None
+
+    def registration(candidate, reference, **kwargs):
+        nonlocal first_candidate
+        if first_candidate is None:
+            first_candidate = candidate
+        # Reject every bank candidate for the first calibration image only.
+        if candidate is first_candidate:
+            return RegistrationResult(candidate, False, 0.1, 0, 0, 0, kwargs["reference_index"])
+        return RegistrationResult(candidate, True, 0.9, 0, 0, 0, kwargs["reference_index"])
+
+    monkeypatch.setattr("blower_inspection.tao_inspector.register_to_reference", registration)
+    inspector = TaoInspector()
+    monkeypatch.setattr(inspector, "_infer", lambda *args, **kwargs: (np.zeros((4, 4), np.float32), 0.0))
+    output = inspector.train(cfg)
+    data = json.loads(output.read_text())
+    assert data["sample_count"] == 20
+    assert data["calibration_image_count"] == 21
+    assert data["excluded_registration_count"] == 1
 
 
 def test_cpu_calibration_session_cannot_be_reused_as_gpu_session(tmp_path, monkeypatch):
