@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import ctypes
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -122,13 +123,14 @@ class TaoInspector:
             raise RuntimeError("Install the TAO runtime with `pip install -e .[tao]`") from exc
         available = ort.get_available_providers()
         requested_gpu = self.providers or ["TensorrtExecutionProvider", "CUDAExecutionProvider"]
-        selected = [provider for provider in requested_gpu if provider in available]
+        selected = [provider for provider in requested_gpu if provider in available and self._provider_library_loadable(ort, provider)]
         if config.tao_require_gpu and not selected and not allow_cpu_fallback:
             raise RuntimeError(f"TAO GPU provider unavailable (installed providers: {available}); inspection is inhibited")
         # ONNX Runtime tries providers in order. Calibration therefore uses the
         # trained model on TensorRT/CUDA whenever possible and falls back to CPU
         # only if no GPU provider can execute it.
-        if (allow_cpu_fallback or not config.tao_require_gpu) and "CPUExecutionProvider" in available:
+        if ((allow_cpu_fallback or not config.tao_require_gpu)
+                and "CPUExecutionProvider" in available and "CPUExecutionProvider" not in selected):
             selected.append("CPUExecutionProvider")
         if not selected:
             raise RuntimeError(f"No usable TAO execution provider is available (installed providers: {available})")
@@ -144,6 +146,38 @@ class TaoInspector:
         self._sessions[cache_key] = (stamp, session)
         self._last_session = session
         return session
+
+    @staticmethod
+    def _provider_library_loadable(ort: Any, provider: str) -> bool:
+        """Reject advertised GPU EPs whose native CUDA/TensorRT DLLs cannot load.
+
+        ONNX Runtime can advertise a provider even when a transitive dependency
+        such as cuBLAS or cuDNN is absent. Passing that provider to session
+        creation produces alarming native errors before ORT silently falls back.
+        Loading its provider library first gives us an honest availability check.
+        Test doubles and unusual packaged runtimes without a discoverable module
+        path retain ONNX Runtime's own availability result.
+        """
+        filenames = {
+            "TensorrtExecutionProvider": "onnxruntime_providers_tensorrt.dll",
+            "CUDAExecutionProvider": "onnxruntime_providers_cuda.dll",
+        }
+        if provider not in filenames or not hasattr(ort, "__file__"):
+            return True
+        capi = Path(ort.__file__).resolve().parent / "capi"
+        filename = filenames[provider]
+        library = capi / filename
+        if not library.is_file():
+            # Linux provider libraries use the lib*.so naming convention.
+            library = capi / ("lib" + filename.removesuffix(".dll") + ".so")
+        if not library.is_file():
+            return False
+        try:
+            loader = ctypes.WinDLL if hasattr(ctypes, "WinDLL") else ctypes.CDLL
+            loader(str(library))
+        except OSError:
+            return False
+        return True
 
     def validate_ready(self, config: PartModelConfig) -> None:
         """Validate calibrated artifacts and initialize the production runtime."""
@@ -366,11 +400,6 @@ class TaoInspector:
         calibration = TaoCalibration(_sha256(config.model_file), _sha256(reference_path), pixel_threshold,
             image_threshold, p999, score_p999, len(qualified_crops), datetime.now(timezone.utc).isoformat(),
             bank.manifest_sha256, len(bank.images), len(paths), len(excluded_registration_sources))
-        output = self.calibration_path(config)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        temp = output.with_suffix(output.suffix + ".tmp")
-        temp.write_text(json.dumps({"version": CALIBRATION_VERSION, **calibration.__dict__}, indent=2) + "\n", encoding="utf-8")
-        temp.replace(output)
         geometry = FinGeometryInspector.calibrate(qualified_crops, band_top=config.inspection_band_top_ratio,
                                                    band_bottom=config.inspection_band_bottom_ratio)
         hybrid = {"version": 1, "model_sha256": calibration.model_sha256,
@@ -382,14 +411,28 @@ class TaoInspector:
                     "mad": float(np.median(np.abs(np.asarray(registration_correlations) - np.median(registration_correlations))))},
                   "geometry": geometry}
         hybrid_path = self.hybrid_calibration_path(config)
-        hybrid_path.write_text(json.dumps(hybrid, indent=2) + "\n", encoding="utf-8")
+        output = self.calibration_path(config)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        hybrid_path.parent.mkdir(parents=True, exist_ok=True)
+        tao_temp = output.with_suffix(output.suffix + ".tmp")
+        hybrid_temp = hybrid_path.with_suffix(hybrid_path.suffix + ".tmp")
+        tao_temp.write_text(json.dumps({"version": CALIBRATION_VERSION, **calibration.__dict__}, indent=2) + "\n", encoding="utf-8")
+        hybrid_temp.write_text(json.dumps(hybrid, indent=2) + "\n", encoding="utf-8")
+        # Do not promote a TAO calibration unless its bound hybrid artifact was
+        # also constructed successfully.
+        hybrid_temp.replace(hybrid_path)
+        tao_temp.replace(output)
         self._reference_banks.clear(); self._geometry_calibrations.clear()
         return output
 
     def _calibration(self, config: PartModelConfig) -> TaoCalibration:
         path = self.calibration_path(config)
         if not path.is_file():
-            raise FileNotFoundError(f"TAO calibration missing: {path}; run TRAIN SELECTED MODEL after export")
+            raise FileNotFoundError(
+                f"TAO calibration missing: {path.resolve()}. The calibration command must finish with "
+                f"'Calibrated {config.id}'. Run `python -m src.blower_inspection.cli train {config.id}` "
+                "from the same repository directory; TAO retraining/export is not required."
+            )
         data = json.loads(path.read_text(encoding="utf-8"))
         if data.pop("version", None) != CALIBRATION_VERSION:
             raise RuntimeError("Unsupported or stale TAO calibration version; recalibrate the model")

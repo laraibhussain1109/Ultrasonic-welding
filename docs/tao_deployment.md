@@ -576,3 +576,13 @@ model in `config/models.json`. Reference selection uses gradients rather than RG
 brightness, caches images/descriptors in memory, registers only the closest few,
 and invokes TAO once on the selected RGB pair. Do not apply structural-path
 normalization to TAO inputs.
+
+### Windows GPU provider warnings
+
+`onnxruntime-gpu` may advertise TensorRT or CUDA even when Windows cannot load a
+required native dependency such as `cublas64_13.dll` or `cudnn64_9.dll`. The
+runtime now probes each provider library before session creation. Models with
+`tao_require_gpu: false` use CPU without repeatedly invoking a broken advertised
+provider; models with `tao_require_gpu: true` remain correctly inhibited. To use
+GPU inference, install the CUDA/cuDNN/TensorRT versions required by the installed
+ONNX Runtime build and ensure their `bin` directories are on `PATH`.

@@ -86,7 +86,7 @@ class ModelRegistry:
 
     def get(self, model_id: str) -> PartModelConfig:
         for model in self.all():
-            if model.id == model_id:
+            if model.id.casefold() == model_id.casefold():
                 return model
         known = ", ".join(model.id for model in self.all())
         raise KeyError(f"Unknown model '{model_id}'. Known models: {known}")

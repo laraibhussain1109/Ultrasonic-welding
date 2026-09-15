@@ -42,6 +42,12 @@ def test_model_registry_defaults_camera_and_allows_missing_roi(tmp_path):
     assert model.tao_change_class_index == 1
 
 
+def test_model_ids_are_case_insensitive_for_cli_convenience(tmp_path):
+    registry = ModelRegistry(_registry_file(tmp_path))
+
+    assert registry.get("bf-001").id == "BF-001"
+
+
 def test_model_registry_persists_roi_and_camera_settings(tmp_path):
     path = _registry_file(tmp_path)
     registry = ModelRegistry(path)

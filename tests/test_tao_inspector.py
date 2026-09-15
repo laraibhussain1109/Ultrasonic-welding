@@ -206,6 +206,42 @@ def test_calibration_provider_order_prefers_gpu_then_cpu(tmp_path, monkeypatch):
     assert selected == ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
 
+def test_broken_advertised_cuda_library_is_skipped_for_cpu_fallback(tmp_path, monkeypatch):
+    cfg = config(tmp_path)
+    package = tmp_path / "ort" / "__init__.py"
+    capi = package.parent / "capi"
+    capi.mkdir(parents=True)
+    package.write_text("")
+    (capi / "onnxruntime_providers_cuda.dll").write_bytes(b"not-a-dll")
+    selected = []
+
+    class Input:
+        name = "input"
+
+    class Session:
+        def __init__(self, path, providers):
+            selected.extend(providers)
+
+        def get_providers(self):
+            return selected
+
+        def get_inputs(self):
+            return [Input(), Input()]
+
+    class FakeOrt:
+        __file__ = str(package)
+        InferenceSession = Session
+
+        @staticmethod
+        def get_available_providers():
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", FakeOrt)
+    TaoInspector()._session(cfg, allow_cpu_fallback=True)
+
+    assert selected == ["CPUExecutionProvider"]
+
+
 def test_inspection_score_is_normalized_to_calibrated_fail_line(tmp_path, monkeypatch):
     cfg = config(tmp_path)
     reference = TaoInspector.reference_path(cfg)
