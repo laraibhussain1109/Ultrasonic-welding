@@ -101,6 +101,16 @@ def test_hybrid_fusion_glare_and_structural_rules():
     assert fuse_evidence(t, g, glare_score=0, registration_valid=False).status == "VIEW INVALID"
 
 
+def test_fusion_rejects_mismatched_evidence_coordinates():
+    t, g = evidence(tao=1.1, geometry=.8)
+    g = GeometryEvidence(g.score, g.orientation_score, g.pitch_score, g.continuity_score,
+                         g.broken_fin_score, g.periodicity_score, g.support_rib_confidence,
+                         np.zeros((8, 12), bool))
+
+    with pytest.raises(ValueError, match="same fusion coordinate system"):
+        fuse_evidence(t, g, glare_score=0, registration_valid=True)
+
+
 def test_temporal_candidate_requires_persistence_and_catastrophe_is_immediate():
     tracker = RotatingPartInspector(counting_line_ratio=.8, weak_candidate_required_views=2)
     tracker.observe_tracks([TrackedPart(1, (10, 0, 20, 20), .9)], 100)

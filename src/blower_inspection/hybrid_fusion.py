@@ -35,6 +35,11 @@ def fuse_evidence(tao: TaoEvidence, geometry: GeometryEvidence, *, glare_score: 
                   tao_candidate_threshold: float = .7, glare_threshold: float = .55) -> HybridDecision:
     if not registration_valid:
         return HybridDecision("VIEW INVALID", 0.0, ("REGISTRATION_INVALID",))
+    if tao.defect_mask.shape != geometry.defect_mask.shape:
+        raise ValueError(
+            "TAO and geometry evidence masks must use the same fusion coordinate system: "
+            f"{tao.defect_mask.shape} != {geometry.defect_mask.shape}"
+        )
     g, t = geometry.score / max(geometry_fail_threshold, 1e-6), tao.anomaly_score / max(tao_strong_threshold, 1e-6)
     reasons: list[str] = []
     if geometry.broken_fin_score >= geometry_fail_threshold:

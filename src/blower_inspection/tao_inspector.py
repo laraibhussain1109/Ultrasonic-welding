@@ -12,7 +12,7 @@ import json
 import importlib
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -532,6 +532,18 @@ class TaoInspector:
         geometry_started = time.perf_counter()
         geometry = FinGeometryInspector(self._geometry_calibration(config, calibration),
             band_top=config.inspection_band_top_ratio, band_bottom=config.inspection_band_bottom_ratio).inspect(registration.aligned_image)
+        # Geometry is intentionally evaluated at the native long-blower crop,
+        # while TAO produces a square inference map. Fusion masks must share one
+        # coordinate system before boolean confirmation; otherwise a valid
+        # corroborated view eventually raises a NumPy broadcasting exception.
+        geometry = replace(
+            geometry,
+            defect_mask=cv2.resize(
+                geometry.defect_mask.astype(np.uint8),
+                (score_map.shape[1], score_map.shape[0]),
+                interpolation=cv2.INTER_NEAREST,
+            ).astype(bool),
+        )
         glare = glare_evidence(registration.aligned_image, score_map.shape,
             top=config.inspection_band_top_ratio, bottom=config.inspection_band_bottom_ratio)
         geometry_ms = (time.perf_counter() - geometry_started) * 1000

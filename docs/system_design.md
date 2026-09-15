@@ -55,3 +55,8 @@ only TAO-only candidates when geometry and periodicity are normal; it never
 suppresses strong geometry. Registration failures consume no valid view and an
 all-invalid completed inspection fails closed. Reports include component scores,
 reason codes, chosen reference, registration quality, and stage latency.
+
+TAO masks originate on the square inference grid while geometry masks originate
+on the native long-blower crop. Before fusion, geometry evidence is mapped with
+nearest-neighbour interpolation onto the TAO grid; boolean mask fusion never
+operates on arrays from different coordinate systems.
