@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import ctypes
+import importlib
+import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -29,6 +30,7 @@ from .registration import RegistrationResult, register_to_reference
 from .training_progress import TrainingProgress
 
 CALIBRATION_VERSION = 4
+LOGGER = logging.getLogger(__name__)
 
 
 def _sha256(path: Path) -> str:
@@ -64,6 +66,7 @@ class TaoInspector:
         # production GPU-only session.
         self._sessions: dict[tuple[Path, bool, bool], tuple[int, Any]] = {}
         self._last_session: Any | None = None
+        self._runtime_summary = "TAO runtime not initialized"
         self._reference_banks: dict[Path, tuple[int, ReferenceBank]] = {}
         self._geometry_calibrations: dict[Path, tuple[int, dict]] = {}
 
@@ -117,27 +120,43 @@ class TaoInspector:
         if cached and cached[0] == stamp:
             self._last_session = cached[1]
             return cached[1]
+        # Import PyTorch first so its bundled CUDA/cuDNN DLLs are visible before
+        # ONNX Runtime initializes CUDAExecutionProvider (required on the
+        # qualified Windows Python 3.13 deployment).
         try:
-            import onnxruntime as ort
-        except ImportError as exc:
+            torch = importlib.import_module("torch")
+            ort = importlib.import_module("onnxruntime")
+        except ModuleNotFoundError as exc:
             raise RuntimeError("Install the TAO runtime with `pip install -e .[tao]`") from exc
+        try:
+            ort.preload_dlls()
+        except Exception:
+            # Older ORT builds do not expose preload_dlls. Session creation and
+            # active-provider validation below remain authoritative.
+            pass
         available = ort.get_available_providers()
-        requested_gpu = self.providers or ["TensorrtExecutionProvider", "CUDAExecutionProvider"]
-        selected = [provider for provider in requested_gpu if provider in available and self._provider_library_loadable(ort, provider)]
-        if config.tao_require_gpu and not selected and not allow_cpu_fallback:
-            raise RuntimeError(f"TAO GPU provider unavailable (installed providers: {available}); inspection is inhibited")
-        # ONNX Runtime tries providers in order. Calibration therefore uses the
-        # trained model on TensorRT/CUDA whenever possible and falls back to CPU
-        # only if no GPU provider can execute it.
-        if ((allow_cpu_fallback or not config.tao_require_gpu)
-                and "CPUExecutionProvider" in available and "CPUExecutionProvider" not in selected):
-            selected.append("CPUExecutionProvider")
+        requested = self.providers or ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        selected = [provider for provider in requested if provider in available]
+        if config.tao_require_gpu and not allow_cpu_fallback and "CUDAExecutionProvider" not in selected:
+            raise RuntimeError(
+                f"TAO CUDA provider unavailable (installed providers: {available}); inspection is inhibited"
+            )
         if not selected:
             raise RuntimeError(f"No usable TAO execution provider is available (installed providers: {available})")
-        session = ort.InferenceSession(str(path), providers=selected)
+        try:
+            session = ort.InferenceSession(str(path), providers=selected)
+        except Exception as exc:
+            if ((config.tao_require_gpu and not allow_cpu_fallback)
+                    or "CPUExecutionProvider" not in available):
+                raise RuntimeError(f"TAO CUDA session initialization failed for {config.id}: {exc}") from exc
+            LOGGER.warning("TAO CUDA initialization failed for %s; retrying with CPUExecutionProvider", config.id)
+            session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
         active = session.get_providers()
-        if config.tao_require_gpu and not allow_cpu_fallback and not any(p in active for p in ("TensorrtExecutionProvider", "CUDAExecutionProvider")):
-            raise RuntimeError(f"TAO session did not activate a GPU provider: {active}")
+        if config.tao_require_gpu and not allow_cpu_fallback and "CUDAExecutionProvider" not in active:
+            raise RuntimeError(
+                f"TAO requires GPU but CUDAExecutionProvider is not active for {config.id}; "
+                f"active providers: {active}. Inspection is inhibited."
+            )
         if len(session.get_inputs()) != 2:
             raise RuntimeError(
                 "VisualChangeNet ONNX must expose exactly two image inputs "
@@ -145,39 +164,20 @@ class TaoInspector:
             )
         self._sessions[cache_key] = (stamp, session)
         self._last_session = session
+        LOGGER.info(
+            "TAO ONNX Runtime: %s | PyTorch CUDA: %s | Active provider: %s | Model: %s | GPU inference: %s",
+            getattr(ort, "__version__", "unknown"),
+            getattr(getattr(torch, "version", None), "cuda", None) or "unavailable",
+            active[0] if active else "none", config.id,
+            "ACTIVE" if "CUDAExecutionProvider" in active else "INACTIVE (CPU fallback)",
+        )
+        self._runtime_summary = (
+            f"TAO ONNX Runtime: {getattr(ort, '__version__', 'unknown')} | "
+            f"PyTorch CUDA: {getattr(getattr(torch, 'version', None), 'cuda', None) or 'unavailable'} | "
+            f"Active provider: {active[0] if active else 'none'} | Model: {config.id} | "
+            f"GPU inference: {'ACTIVE' if 'CUDAExecutionProvider' in active else 'INACTIVE (CPU fallback)'}"
+        )
         return session
-
-    @staticmethod
-    def _provider_library_loadable(ort: Any, provider: str) -> bool:
-        """Reject advertised GPU EPs whose native CUDA/TensorRT DLLs cannot load.
-
-        ONNX Runtime can advertise a provider even when a transitive dependency
-        such as cuBLAS or cuDNN is absent. Passing that provider to session
-        creation produces alarming native errors before ORT silently falls back.
-        Loading its provider library first gives us an honest availability check.
-        Test doubles and unusual packaged runtimes without a discoverable module
-        path retain ONNX Runtime's own availability result.
-        """
-        filenames = {
-            "TensorrtExecutionProvider": "onnxruntime_providers_tensorrt.dll",
-            "CUDAExecutionProvider": "onnxruntime_providers_cuda.dll",
-        }
-        if provider not in filenames or not hasattr(ort, "__file__"):
-            return True
-        capi = Path(ort.__file__).resolve().parent / "capi"
-        filename = filenames[provider]
-        library = capi / filename
-        if not library.is_file():
-            # Linux provider libraries use the lib*.so naming convention.
-            library = capi / ("lib" + filename.removesuffix(".dll") + ".so")
-        if not library.is_file():
-            return False
-        try:
-            loader = ctypes.WinDLL if hasattr(ctypes, "WinDLL") else ctypes.CDLL
-            loader(str(library))
-        except OSError:
-            return False
-        return True
 
     def validate_ready(self, config: PartModelConfig) -> None:
         """Validate calibrated artifacts and initialize the production runtime."""
@@ -192,6 +192,10 @@ class TaoInspector:
             return "ONNX Runtime (not initialized)"
         providers = self._last_session.get_providers()
         return providers[0] if providers else "ONNX Runtime (no active provider)"
+
+    def runtime_summary(self) -> str:
+        """Return the concise provider diagnostic intended for application logs."""
+        return self._runtime_summary
 
     @staticmethod
     def _input_tensor(image: np.ndarray, shape: list[Any]) -> np.ndarray:

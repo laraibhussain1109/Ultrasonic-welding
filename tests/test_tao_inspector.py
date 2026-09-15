@@ -213,13 +213,10 @@ def test_calibration_provider_order_prefers_gpu_then_cpu(tmp_path, monkeypatch):
     assert selected == ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
 
-def test_broken_advertised_cuda_library_is_skipped_for_cpu_fallback(tmp_path, monkeypatch):
-    cfg = config(tmp_path)
-    package = tmp_path / "ort" / "__init__.py"
-    capi = package.parent / "capi"
-    capi.mkdir(parents=True)
-    package.write_text("")
-    (capi / "onnxruntime_providers_cuda.dll").write_bytes(b"not-a-dll")
+def test_cpu_fallback_is_used_when_permitted_and_cuda_is_unavailable(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    cfg = replace(config(tmp_path), tao_require_gpu=False)
     selected = []
 
     class Input:
@@ -236,17 +233,83 @@ def test_broken_advertised_cuda_library_is_skipped_for_cpu_fallback(tmp_path, mo
             return [Input(), Input()]
 
     class FakeOrt:
-        __file__ = str(package)
         InferenceSession = Session
 
         @staticmethod
         def get_available_providers():
-            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            return ["CPUExecutionProvider"]
 
     monkeypatch.setitem(__import__("sys").modules, "onnxruntime", FakeOrt)
     TaoInspector()._session(cfg, allow_cpu_fallback=True)
 
     assert selected == ["CPUExecutionProvider"]
+
+
+def test_required_gpu_validates_active_session_provider(tmp_path, monkeypatch):
+    cfg = config(tmp_path)
+
+    class Input:
+        name = "input"
+
+    class Session:
+        def __init__(self, path, providers):
+            assert providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+        @staticmethod
+        def get_providers():
+            return ["CPUExecutionProvider"]
+
+        @staticmethod
+        def get_inputs():
+            return [Input(), Input()]
+
+    class FakeOrt:
+        InferenceSession = Session
+
+        @staticmethod
+        def get_available_providers():
+            return ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", FakeOrt)
+    with pytest.raises(RuntimeError, match="CUDAExecutionProvider is not active"):
+        TaoInspector()._session(cfg)
+
+
+def test_torch_loads_before_onnxruntime_and_preloads_dlls(tmp_path, monkeypatch):
+    import types
+    from dataclasses import replace
+
+    cfg = replace(config(tmp_path), tao_require_gpu=False)
+    events = []
+    torch_module = types.SimpleNamespace(version=types.SimpleNamespace(cuda="13.2"))
+
+    class Input:
+        name = "input"
+
+    class Session:
+        @staticmethod
+        def get_providers():
+            return ["CPUExecutionProvider"]
+
+        @staticmethod
+        def get_inputs():
+            return [Input(), Input()]
+
+    ort_module = types.SimpleNamespace(
+        __version__="1.30.0",
+        get_available_providers=lambda: ["CPUExecutionProvider"],
+        preload_dlls=lambda: events.append("preload"),
+        InferenceSession=lambda *args, **kwargs: Session(),
+    )
+
+    def load(name):
+        events.append(name)
+        return torch_module if name == "torch" else ort_module
+
+    monkeypatch.setattr("blower_inspection.tao_inspector.importlib.import_module", load)
+    TaoInspector()._session(cfg)
+
+    assert events == ["torch", "onnxruntime", "preload"]
 
 
 def test_inspection_score_is_normalized_to_calibrated_fail_line(tmp_path, monkeypatch):

@@ -242,3 +242,8 @@ keeps the camera pixels and draws red outlines only for confirmed defects.
 Configuration is per model through the `hybrid_*`, `registration_*`,
 `geometry_*`, `glare_*`, inspection-band, TAO evidence, reference-bank,
 `longitudinal_sections`, and persistence fields in `config/models.json`.
+
+The qualified Windows GPU path loads the PyTorch CUDA runtime before ONNX
+Runtime, calls `onnxruntime.preload_dlls()`, and executes TAO through
+`CUDAExecutionProvider` with `CPUExecutionProvider` as the configured fallback.
+TensorRT is an optional future optimization and is not requested by default.

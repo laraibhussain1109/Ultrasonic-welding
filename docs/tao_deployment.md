@@ -580,10 +580,15 @@ normalization to TAO inputs.
 
 ### Windows GPU provider warnings
 
-`onnxruntime-gpu` may advertise TensorRT or CUDA even when Windows cannot load a
-required native dependency such as `cublas64_13.dll` or `cudnn64_9.dll`. The
-runtime now probes each provider library before session creation. Models with
-`tao_require_gpu: false` use CPU without repeatedly invoking a broken advertised
-provider; models with `tao_require_gpu: true` remain correctly inhibited. To use
-GPU inference, install the CUDA/cuDNN/TensorRT versions required by the installed
-ONNX Runtime build and ensure their `bin` directories are on `PATH`.
+The verified Windows deployment uses Python 3.13, PyTorch 2.12.0+cu132 and
+ONNX Runtime GPU 1.30.0. Runtime initialization deliberately loads PyTorch and
+calls `onnxruntime.preload_dlls()` before creating the inference session, making
+PyTorch's bundled CUDA/cuDNN runtime available to ONNX Runtime. The deployed path
+is PyTorch CUDA runtime -> ONNX Runtime -> CUDAExecutionProvider -> TAO
+VisualChangeNet ONNX.
+
+Normal startup requests `CUDAExecutionProvider` followed by
+`CPUExecutionProvider`; TensorRT is optional and is not requested by default.
+With `tao_require_gpu: true`, production readiness checks the providers active on
+the created session and inhibits inspection unless CUDA is actually active.
+With it set to false, CPU remains an allowed fallback.

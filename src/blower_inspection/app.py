@@ -581,8 +581,10 @@ class InspectionWindow(QWidget):
         self.pending_sharp_frames = {}
         try:
             device_name = self.inspector.runtime_device_name()
+            runtime_summary = getattr(self.inspector, "runtime_summary", lambda: device_name)()
         except Exception as exc:
             device_name = f"unavailable ({exc})"
+            runtime_summary = f"TAO runtime diagnostics unavailable: {exc}"
         if self.fail_output.config.enabled:
             # ESP32FailOutputBridge is deliberately asynchronous and exposes
             # send_result/reset rather than the synchronous connect/set_fail
@@ -596,6 +598,7 @@ class InspectionWindow(QWidget):
             f"LIVE INSPECTION STARTED {self.selected_model().id} | "
             f"CAMERA {self.camera.width}x{self.camera.height}@{self.camera.fps} | DEVICE {device_name} | {esp32_status}"
         )
+        self.log.addItem(runtime_summary)
         self.live_timer.start(1)
 
     def _process_live_frame(self) -> None:
