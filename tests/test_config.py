@@ -41,6 +41,8 @@ def test_model_registry_defaults_camera_and_allows_missing_roi(tmp_path):
     assert model.counting_direction == "left_to_right"
     assert model.tao_change_class_index == 1
     assert model.registration_calibration_min_valid_ratio == 0.70
+    assert model.tao_candidate_min_area_ratio == 0.001
+    assert model.tao_candidate_max_area_ratio == 0.12
 
 
 def test_model_ids_are_case_insensitive_for_cli_convenience(tmp_path):

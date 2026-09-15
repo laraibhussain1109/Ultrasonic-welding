@@ -60,3 +60,9 @@ TAO masks originate on the square inference grid while geometry masks originate
 on the native long-blower crop. Before fusion, geometry evidence is mapped with
 nearest-neighbour interpolation onto the TAO grid; boolean mask fusion never
 operates on arrays from different coordinate systems.
+
+TAO-only persistence also requires a localized mask. Sub-threshold tiny changes
+are treated as acceptable minor visual changes, while very broad TAO masks with
+normal geometry are treated as unlocalized phase/appearance changes rather than
+physical defects. The per-model minimum and maximum candidate-area ratios bound
+this gate; geometry corroboration always retains authority regardless of area.

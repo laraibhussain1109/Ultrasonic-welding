@@ -32,7 +32,9 @@ class HybridDecision:
 def fuse_evidence(tao: TaoEvidence, geometry: GeometryEvidence, *, glare_score: float,
                   registration_valid: bool, geometry_fail_threshold: float = 1.0,
                   geometry_candidate_threshold: float = .55, tao_strong_threshold: float = 1.0,
-                  tao_candidate_threshold: float = .7, glare_threshold: float = .55) -> HybridDecision:
+                  tao_candidate_threshold: float = .7, glare_threshold: float = .55,
+                  tao_candidate_min_area_ratio: float = .001,
+                  tao_candidate_max_area_ratio: float = .12) -> HybridDecision:
     if not registration_valid:
         return HybridDecision("VIEW INVALID", 0.0, ("REGISTRATION_INVALID",))
     if tao.defect_mask.shape != geometry.defect_mask.shape:
@@ -51,6 +53,8 @@ def fuse_evidence(tao: TaoEvidence, geometry: GeometryEvidence, *, glare_score: 
     catastrophic = g >= 1.0
     corroborated = geometry.score >= geometry_candidate_threshold and tao.anomaly_score >= tao_candidate_threshold
     likely_glare = glare_score >= glare_threshold and geometry.score < geometry_candidate_threshold and geometry.periodicity_score < geometry_candidate_threshold
+    tao_area_ratio = tao.defect_area / max(tao.defect_mask.size, 1)
+    localized_tao_change = tao_candidate_min_area_ratio <= tao_area_ratio <= tao_candidate_max_area_ratio
     if catastrophic:
         reasons.append("GEOMETRY_DEFORMATION")
         return HybridDecision("FAIL", max(1.0, g, .7 * g + .5 * t), tuple(dict.fromkeys(reasons)), True, confirmed_mask=geometry.defect_mask)
@@ -60,7 +64,10 @@ def fuse_evidence(tao: TaoEvidence, geometry: GeometryEvidence, *, glare_score: 
                               confirmed_mask=tao.defect_mask | geometry.defect_mask)
     if tao.anomaly_score >= tao_candidate_threshold:
         if likely_glare:
-            return HybridDecision("PASS", min(.99, .45 * t), ("LIKELY_GLARE",))
+            return HybridDecision("PASS", min(.69, .25 * min(t, 1.0) + .2 * g), ("LIKELY_GLARE",))
+        if geometry.score < geometry_candidate_threshold and not localized_tao_change:
+            reason = "MINOR_VISUAL_CHANGE" if tao_area_ratio < tao_candidate_min_area_ratio else "UNLOCALIZED_TAO_CHANGE"
+            return HybridDecision("PASS", min(.69, .25 * min(t, 1.0) + .2 * g), (reason,))
         return HybridDecision("CANDIDATE", min(.99, .7 * t + .2 * g), ("PERSISTENT_VISUAL_CHANGE",), provisional_candidate=True,
                               confirmed_mask=tao.defect_mask)
     return HybridDecision("PASS", min(.99, max(.45 * t, .65 * g)), tuple(), confirmed_mask=np.zeros_like(tao.defect_mask))

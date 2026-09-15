@@ -111,6 +111,24 @@ def test_fusion_rejects_mismatched_evidence_coordinates():
         fuse_evidence(t, g, glare_score=0, registration_valid=True)
 
 
+def test_tao_only_evidence_must_be_localized_before_becoming_persistent():
+    mask = np.zeros((100, 100), bool)
+    geometry = GeometryEvidence(.1, 0, 0, 0, 0, .1, 1, mask)
+
+    broad = np.ones_like(mask)
+    broad_tao = TaoEvidence(broad.astype(np.float32), broad.astype(np.float32), 20, 20,
+                            broad, int(broad.sum()))
+    assert fuse_evidence(broad_tao, geometry, glare_score=0, registration_valid=True).status == "PASS"
+
+    localized = mask.copy()
+    localized[30:40, 40:50] = True
+    localized_tao = TaoEvidence(localized.astype(np.float32), localized.astype(np.float32),
+                                2, 2, localized, int(localized.sum()))
+    decision = fuse_evidence(localized_tao, geometry, glare_score=0, registration_valid=True)
+    assert decision.status == "CANDIDATE"
+    assert decision.provisional_candidate
+
+
 def test_temporal_candidate_requires_persistence_and_catastrophe_is_immediate():
     tracker = RotatingPartInspector(counting_line_ratio=.8, weak_candidate_required_views=2)
     tracker.observe_tracks([TrackedPart(1, (10, 0, 20, 20), .9)], 100)

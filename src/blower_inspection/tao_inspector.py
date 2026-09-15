@@ -551,7 +551,9 @@ class TaoInspector:
             geometry_fail_threshold=config.geometry_fail_threshold,
             geometry_candidate_threshold=config.geometry_candidate_threshold,
             tao_strong_threshold=config.tao_strong_threshold, tao_candidate_threshold=config.tao_candidate_threshold,
-            glare_threshold=config.glare_threshold)
+            glare_threshold=config.glare_threshold,
+            tao_candidate_min_area_ratio=config.tao_candidate_min_area_ratio,
+            tao_candidate_max_area_ratio=config.tao_candidate_max_area_ratio)
         status = decision.status
         confirmed = decision.confirmed_mask if status == "FAIL" and decision.confirmed_mask is not None else np.zeros_like(defect_mask)
         # The operator sees original imagery plus red confirmed outlines only.

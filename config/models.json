@@ -49,7 +49,9 @@
       "tao_candidate_threshold": 0.7,
       "weak_candidate_required_views": 2,
       "longitudinal_sections": 6,
-      "registration_calibration_min_valid_ratio": 0.7
+      "registration_calibration_min_valid_ratio": 0.7,
+      "tao_candidate_min_area_ratio": 0.001,
+      "tao_candidate_max_area_ratio": 0.12
     },
     {
       "id": "BF-002",
@@ -99,7 +101,9 @@
       "tao_candidate_threshold": 0.7,
       "weak_candidate_required_views": 2,
       "longitudinal_sections": 7,
-      "registration_calibration_min_valid_ratio": 0.7
+      "registration_calibration_min_valid_ratio": 0.7,
+      "tao_candidate_min_area_ratio": 0.001,
+      "tao_candidate_max_area_ratio": 0.12
     },
     {
       "id": "BF-003",
@@ -149,7 +153,9 @@
       "tao_candidate_threshold": 0.7,
       "weak_candidate_required_views": 2,
       "longitudinal_sections": 8,
-      "registration_calibration_min_valid_ratio": 0.7
+      "registration_calibration_min_valid_ratio": 0.7,
+      "tao_candidate_min_area_ratio": 0.001,
+      "tao_candidate_max_area_ratio": 0.12
     },
     {
       "id": "BF-004",
@@ -199,7 +205,9 @@
       "tao_candidate_threshold": 0.7,
       "weak_candidate_required_views": 2,
       "longitudinal_sections": 9,
-      "registration_calibration_min_valid_ratio": 0.7
+      "registration_calibration_min_valid_ratio": 0.7,
+      "tao_candidate_min_area_ratio": 0.001,
+      "tao_candidate_max_area_ratio": 0.12
     }
   ]
 }

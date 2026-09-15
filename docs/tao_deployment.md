@@ -578,6 +578,12 @@ brightness, caches images/descriptors in memory, registers only the closest few,
 and invokes TAO once on the selected RGB pair. Do not apply structural-path
 normalization to TAO inputs.
 
+`tao_candidate_min_area_ratio` and `tao_candidate_max_area_ratio` qualify TAO-only
+persistence. A normal-geometry view with a smaller mask is an acceptable minor
+visual change; a larger, broadly distributed mask is an unlocalized phase or
+appearance mismatch. Neither is allowed to accumulate as a persistent localized
+defect, but corroborating geometry can still reject independently.
+
 ### Windows GPU provider warnings
 
 The verified Windows deployment uses Python 3.13, PyTorch 2.12.0+cu132 and

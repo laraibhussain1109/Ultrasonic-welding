@@ -67,6 +67,8 @@ class PartModelConfig:
     periodicity_enabled: bool = True
     tao_strong_threshold: float = 1.0
     tao_candidate_threshold: float = 0.70
+    tao_candidate_min_area_ratio: float = 0.001
+    tao_candidate_max_area_ratio: float = 0.12
     weak_candidate_required_views: int = 2
     longitudinal_sections: int = 6
     hybrid_calibration_file: Path | None = None
@@ -193,6 +195,8 @@ class ModelRegistry:
             periodicity_enabled=bool(entry.get("periodicity_enabled", True)),
             tao_strong_threshold=float(entry.get("tao_strong_threshold", 1.0)),
             tao_candidate_threshold=float(entry.get("tao_candidate_threshold", 0.70)),
+            tao_candidate_min_area_ratio=float(entry.get("tao_candidate_min_area_ratio", 0.001)),
+            tao_candidate_max_area_ratio=float(entry.get("tao_candidate_max_area_ratio", 0.12)),
             weak_candidate_required_views=max(1, int(entry.get("weak_candidate_required_views", 2))),
             longitudinal_sections=max(1, int(entry.get("longitudinal_sections", 6))),
             hybrid_calibration_file=Path(entry["hybrid_calibration_file"]) if entry.get("hybrid_calibration_file") else None,
