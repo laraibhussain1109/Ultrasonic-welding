@@ -65,6 +65,15 @@ def test_broken_fin_detector_marks_small_horizontal_discontinuity():
     assert np.count_nonzero(detected[50:63, 145:175]) > 0
 
 
+def test_broken_fin_detector_marks_clearly_visible_wide_discontinuity():
+    image = fin_image()
+    cv2.rectangle(image, (145, 52), (195, 60), (35, 35, 35), -1)
+
+    detected = broken_fin_mask(image, (120, 600))
+
+    assert np.count_nonzero(detected[48:65, 140:200]) > 0
+
+
 def test_broken_fin_detector_does_not_mark_continuous_fins():
     detected = broken_fin_mask(fin_image(), (120, 600))
 

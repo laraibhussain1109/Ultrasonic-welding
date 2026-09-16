@@ -213,7 +213,11 @@ def broken_fin_mask(image: np.ndarray, output_shape: tuple[int, int]) -> np.ndar
     horizontal_edges = (grad_y >= y_threshold) & interior
 
     # A closing reconstructs only short missing sections between edge fragments.
-    max_gap = max(7, int(round(width * 0.035))) | 1
+    # A snapped/missing section on a production wheel is often substantially
+    # wider than a hairline discontinuity. The former 3.5% ceiling ignored
+    # clearly visible breaks. Permit a localized break up to 12% of the wheel
+    # length; repeated supports and broad texture are still rejected below.
+    max_gap = max(7, int(round(width * 0.12))) | 1
     reconstructed = cv2.morphologyEx(
         horizontal_edges.astype(np.uint8),
         cv2.MORPH_CLOSE,

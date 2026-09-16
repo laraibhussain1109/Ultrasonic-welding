@@ -95,8 +95,10 @@ def test_is_part_present_rejects_smooth_empty_roi():
 
 def test_is_part_present_accepts_fin_texture_roi():
     roi = np.full((160, 640, 3), 80, dtype=np.uint8)
-    for x in range(20, 620, 24):
-        cv2.line(roi, (x, 20), (x + 10, 140), (170, 170, 170), 2)
+    for y in range(20, 145, 12):
+        cv2.line(roi, (15, y), (625, y), (170, 170, 170), 2)
+    for x in range(40, 620, 95):
+        cv2.line(roi, (x, 15), (x, 145), (45, 45, 55), 3)
     cv2.rectangle(roi, (0, 0), (639, 159), (35, 35, 45), 4)
 
     assert camera.is_part_present(roi) is True
@@ -106,5 +108,19 @@ def test_is_part_present_rejects_non_part_colours_even_with_edges():
     roi = np.full((160, 640, 3), (25, 90, 170), dtype=np.uint8)  # brown/orange BGR background
     for x in range(20, 620, 24):
         cv2.line(roi, (x, 20), (x + 10, 140), (35, 120, 210), 2)
+
+    assert camera.is_part_present(roi) is False
+
+
+def test_is_part_present_rejects_dark_fixed_nest_rails_and_clamps():
+    roi = np.full((160, 640, 3), 175, dtype=np.uint8)
+    # Empty tooling still has dark long rails, end clamps, bolt holes and cable
+    # edges.  This used to satisfy the colour/contrast/edge-only presence test.
+    cv2.rectangle(roi, (15, 35), (625, 48), (35, 35, 40), -1)
+    cv2.rectangle(roi, (15, 112), (625, 127), (40, 40, 45), -1)
+    cv2.rectangle(roi, (20, 20), (70, 145), (45, 45, 50), 5)
+    cv2.rectangle(roi, (570, 20), (625, 145), (45, 45, 50), 5)
+    for x in range(100, 560, 90):
+        cv2.circle(roi, (x, 120), 5, (30, 30, 35), -1)
 
     assert camera.is_part_present(roi) is False

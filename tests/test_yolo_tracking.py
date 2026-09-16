@@ -157,6 +157,24 @@ def test_fixed_station_fails_closed_after_too_many_invalid_views():
     assert "INSUFFICIENT_VIEW_QUALITY" in completed.reason_codes
 
 
+def test_fixed_station_part_removal_finishes_incomplete_session_fail_closed():
+    inspector = RotatingPartInspector(
+        lost_timeout_s=.5, minimum_rotation_views=8, completion_mode="minimum_views"
+    )
+    inspector.observe_tracks([tracked(4, 50)], frame_width=100, now=1.0)
+    inspector.record_inspection(4, is_pass=True, anomaly_score=.2)
+    inspector.record_inspection(4, is_pass=True, anomaly_score=.1)
+
+    assert inspector.observe_tracks([], frame_width=100, now=1.4) == []
+    completed = inspector.observe_tracks([], frame_width=100, now=1.6)
+
+    assert len(completed) == 1
+    assert completed[0].status == "FAIL"
+    assert completed[0].frames_inspected == 2
+    assert "INSUFFICIENT_VIEW_QUALITY" in completed[0].reason_codes
+    assert not inspector.sessions
+
+
 def test_horizontal_counting_line_uses_vertical_part_motion():
     inspector = RotatingPartInspector(
         counting_line_ratio=.5, counting_axis="y", counting_direction="top_to_bottom"

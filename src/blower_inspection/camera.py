@@ -234,7 +234,30 @@ def is_part_present(image: np.ndarray) -> bool:
     edges = cv2.Canny(gray, 35, 110)
     edge_density = float(cv2.countNonZero(edges)) / float(edges.size)
     part_edge_density = float(np.count_nonzero(edges.astype(bool) & part_colour_mask)) / float(edges.size)
-    return colour_ratio >= 0.18 and contrast >= 8.0 and edge_density >= 0.004 and part_edge_density >= 0.002
+
+    # Colour and generic edge density are not sufficient in a fixed nest: the
+    # dark rails, clamps and cables remain inside an oversized YOLO box after
+    # the blower is removed.  A blower wheel also has a distinctive stack of
+    # repeated horizontal fin edges distributed through the ROI.  Require that
+    # structure so stationary tooling cannot keep a completed track alive.
+    height, width = gray.shape
+    margin_x = max(1, int(round(width * .05)))
+    grad_y = np.abs(cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3))
+    central = grad_y[:, margin_x:width - margin_x] if width - 2 * margin_x >= 4 else grad_y
+    strong_threshold = max(20.0, float(np.percentile(central, 78.0)))
+    row_coverage = np.mean(central >= strong_threshold, axis=1)
+    rich_rows = row_coverage >= .08
+    transitions = np.diff(np.pad(rich_rows.astype(np.int8), (1, 1)))
+    starts = np.flatnonzero(transitions == 1)
+    ends = np.flatnonzero(transitions == -1)
+    group_centres = (starts + ends - 1) / 2.0
+    repeated_fins = (
+        group_centres.size >= 6
+        and group_centres[-1] - group_centres[0] >= height * .20
+        and float(np.median(np.diff(group_centres))) <= height * .15
+    )
+    return (colour_ratio >= 0.18 and contrast >= 8.0 and edge_density >= 0.004
+            and part_edge_density >= 0.002 and bool(repeated_fins))
 
 def crop_component_roi(
     image: np.ndarray,
