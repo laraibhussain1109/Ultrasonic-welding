@@ -34,6 +34,18 @@ class InspectionResult:
     report_path: Path | None = None
     display_image: np.ndarray | None = None
     defect_boxes: list[tuple[int, int, int, int]] = field(default_factory=list)
+    tao_score: float | None = None
+    geometry_score: float | None = None
+    periodicity_score: float | None = None
+    glare_score: float | None = None
+    registration_score: float | None = None
+    hybrid_score: float | None = None
+    reason_codes: tuple[str, ...] = field(default_factory=tuple)
+    reference_index: int | None = None
+    view_valid: bool = True
+    view_quality_score: float | None = None
+    latencies_ms: dict[str, float] = field(default_factory=dict)
+    geometry_components: dict[str, float] = field(default_factory=dict)
 
     @property
     def is_pass(self) -> bool:
@@ -358,7 +370,11 @@ def cylindrical_sector_statistics(
     *,
     min_bad_score: float,
 ) -> tuple[float, list[int]]:
-    """Evaluate a horizontal cylinder as vertical fin strips, not polar wedges."""
+    """Legacy longitudinal-region metric (``expected_fins`` kept for API compatibility).
+
+    These vertical strips are *not* circumferential fins. Hybrid inspection uses
+    ``longitudinal_sections`` and vertical edge periodicity instead.
+    """
     _height, width = mask.shape
     sector_scores: list[float] = []
     for sector in range(expected_fins):

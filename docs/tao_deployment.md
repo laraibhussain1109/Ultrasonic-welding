@@ -549,3 +549,106 @@ calibration, unavailable GPU execution provider, ambiguous output binding,
 dynamic spatial input, invalid shape, or NaN/Inf. These are equipment faults,
 not PASS results. The application report stores the algorithm, thresholds, and
 model digest for traceability.
+
+## Hybrid calibration and artifact qualification
+
+After TAO export, use the existing **CALIBRATE/TRAIN SELECTED MODEL** action. It
+now performs one workflow: load reviewed normal images, create a farthest-first
+structural `reference_bank`, calibrate TAO using leave-one-out reference matching,
+qualify registration, learn median/MAD geometry ranges, and write
+`hybrid_calibration.json`. The TAO calibration records the model SHA-256,
+reference-bank manifest SHA-256, reference count, and calibration image count.
+Production startup rejects a changed model, manifest, reference count, missing
+hybrid calibration, or mismatched hybrid binding.
+
+This workflow does **not** retrain VisualChangeNet and does not depend on the
+number of epochs used to produce the ONNX export. A normal image that cannot be
+registered to any different phase reference is excluded from threshold fitting
+and recorded in `hybrid_calibration.json`; calibration continues when at least
+20 images and the configured fraction of the reviewed set qualify. The default
+`registration_calibration_min_valid_ratio` is 0.70. If that quality floor is missed,
+the error reports the qualified count and example exclusions so the ROI, focus,
+phase coverage, and registration bounds can be corrected without retraining TAO.
+
+Tune the inspection band, bank size/candidate count, registration correlation and
+motion bounds, geometry candidate/fail thresholds, glare threshold, TAO
+candidate/strong thresholds, persistence views, and longitudinal sections per
+model in `config/models.json`. Reference selection uses gradients rather than RGB
+brightness, caches images/descriptors in memory, registers only the closest few,
+and invokes TAO once on the selected RGB pair. Do not apply structural-path
+normalization to TAO inputs.
+
+`tao_candidate_min_area_ratio` and `tao_candidate_max_area_ratio` qualify TAO-only
+persistence. A normal-geometry view with a smaller mask is an acceptable minor
+visual change; a larger, broadly distributed mask is an unlocalized phase or
+appearance mismatch. Neither is allowed to accumulate as a persistent localized
+defect, but corroborating geometry can still reject independently.
+
+`inspection_completion_mode` controls when a physical-part verdict is published.
+Use `counting_line` for a translating conveyor. Use `minimum_views` for a blower
+that rotates in a fixed nest; the final PASS/FAIL is published after
+`minimum_rotation_views`, and the same tracked part is not counted again until it
+leaves the camera. The supplied BF configurations use `minimum_views`.
+
+Hybrid calibration version 2 stores the normal sharpness distribution and median
+YOLO crop aspect ratio. Live crops below the robust sharpness floor return
+`VIEW INVALID / MOTION_BLUR`; crops outside `crop_aspect_ratio_tolerance` return
+`VIEW INVALID / UNSTABLE_COMPONENT_CROP`. These views never run geometry or latch
+a defect. Updating from hybrid calibration version 1 requires recalibration.
+
+The supplied models use `yolo_confidence: 0.70`; detections must be strictly
+greater than this threshold before cropping. `counting_axis: "y"` draws the line
+parallel to the x-axis and pairs with `counting_direction: "top_to_bottom"` (or
+`bottom_to_top`). Set `counting_axis: "x"` only for a vertical line and pair it
+with `left_to_right` or `right_to_left`.
+
+`minimum_rotation_descriptor_distance` qualifies distinct surface views. With
+the motor stopped, only the first sharp view is inspected and the station waits
+for structural phase change. Hybrid calibration version 3 also records robust
+geometry reject deltas with physical floors, preventing extremely small MAD from
+amplifying harmless pitch/orientation quantization into `GEOMETRY_DEFORMATION`.
+
+Hybrid calibration version 4 adds corroborated semantic geometry scoring. A high
+pitch score alone no longer emits `MISSING_FIN` or reaches candidate severity;
+pitch and periodicity must agree with independent continuity evidence.
+Orientation likewise requires a neighboring inconsistency before `TILTED_FIN` is emitted. Recalibrate
+after upgrading so the current geometry artifact contract is explicit.
+
+For a fixed nest, keep `lock_roi_after_confirmation` enabled. On **Start
+Inspection**, verify that the yellow proposed ROI contains the complete blower
+and no neighboring part. Select **Yes** to freeze it, **No** to acquire another
+YOLO proposal, or **Cancel** to remain stopped. The approved ROI is held for the
+entire run; YOLO is not executed per frame and cannot cause crop zoom changes.
+
+### Windows GPU provider warnings
+
+The verified Windows deployment uses Python 3.13, PyTorch 2.12.0+cu132 and
+ONNX Runtime GPU 1.30.0. Runtime initialization deliberately loads PyTorch and
+calls `onnxruntime.preload_dlls()` before creating the inference session, making
+PyTorch's bundled CUDA/cuDNN runtime available to ONNX Runtime. The deployed path
+is PyTorch CUDA runtime -> ONNX Runtime -> CUDAExecutionProvider -> TAO
+VisualChangeNet ONNX.
+
+Normal startup requests `CUDAExecutionProvider` followed by
+`CPUExecutionProvider`; TensorRT is optional and is not requested by default.
+With `tao_require_gpu: true`, production readiness checks the providers active on
+the created session and inhibits inspection unless CUDA is actually active.
+With it set to false, CPU remains an allowed fallback.
+
+### Registration-invalid live views
+
+`VIEW INVALID / REGISTRATION_INVALID` is a view-quality result, not a TAO model
+failure and not a PASS. The sampler continues requesting another sharp rotational
+view. The logged registration score is compared with the selected model's
+`registration_min_correlation`; translations and rotation must also remain inside
+their configured safety bounds. BF-002 uses a qualified gradient-ECC floor of
+0.30 because its curved phase views commonly score below generic planar-image ECC
+defaults. Do not reduce the limit further without reviewing saved engineering
+registration evidence.
+
+If normal images were calibrated with a fixed full-frame ROI while production
+uses exact YOLO crops, their coordinate systems differ even with an unchanged
+camera, lamp, and table. Recalibration now prefers the configured YOLO detector
+for normal images so the reference bank and live views share the same crop
+contract. Registration runs on a bounded structural working image for live
+latency; only its limited Euclidean transform is applied to full-resolution RGB.

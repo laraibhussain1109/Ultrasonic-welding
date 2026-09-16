@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import importlib
+import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,9 +23,15 @@ import numpy as np
 from .camera import crop_component_roi
 from .config import PartModelConfig
 from .trainer import InspectionResult, clean_mask, cylindrical_sector_statistics, cylindrical_surface_mask, inspection_overlay, list_images
+from .geometry_inspector import FinGeometryInspector, glare_evidence, inspection_band_mask
+from .hybrid_fusion import TaoEvidence, fuse_evidence
+from .reference_bank import ReferenceBank
+from .registration import RegistrationResult, register_to_reference
 from .training_progress import TrainingProgress
+from .frame_selection import SharpFrameSampler
 
-CALIBRATION_VERSION = 3
+CALIBRATION_VERSION = 4
+LOGGER = logging.getLogger(__name__)
 
 
 def _sha256(path: Path) -> str:
@@ -44,6 +52,10 @@ class TaoCalibration:
     normal_score_p999: float
     sample_count: int
     created_at: str
+    reference_bank_sha256: str = ""
+    reference_count: int = 1
+    calibration_image_count: int = 0
+    excluded_registration_count: int = 0
 
 
 class TaoInspector:
@@ -55,10 +67,47 @@ class TaoInspector:
         # production GPU-only session.
         self._sessions: dict[tuple[Path, bool, bool], tuple[int, Any]] = {}
         self._last_session: Any | None = None
+        self._runtime_summary = "TAO runtime not initialized"
+        self._reference_banks: dict[Path, tuple[int, ReferenceBank]] = {}
+        self._geometry_calibrations: dict[Path, tuple[int, dict]] = {}
 
     @staticmethod
     def calibration_path(config: PartModelConfig) -> Path:
         return config.tao_calibration_file or config.model_file.with_suffix(".calibration.json")
+
+    @staticmethod
+    def reference_bank_path(config: PartModelConfig) -> Path:
+        return config.model_file.parent / "reference_bank"
+
+    @staticmethod
+    def hybrid_calibration_path(config: PartModelConfig) -> Path:
+        return config.hybrid_calibration_file or config.model_file.parent / "hybrid_calibration.json"
+
+    def _reference_bank(self, config: PartModelConfig) -> ReferenceBank:
+        path = self.reference_bank_path(config).resolve()
+        stamp = (path / "manifest.json").stat().st_mtime_ns
+        cached = self._reference_banks.get(path)
+        if cached and cached[0] == stamp:
+            return cached[1]
+        bank = ReferenceBank.load(path)
+        self._reference_banks[path] = (stamp, bank)
+        return bank
+
+    def _geometry_calibration(self, config: PartModelConfig, calibration: TaoCalibration) -> dict:
+        path = self.hybrid_calibration_path(config).resolve()
+        if not path.is_file():
+            raise RuntimeError("Hybrid calibration missing; recalibrate the model")
+        stamp = path.stat().st_mtime_ns
+        cached = self._geometry_calibrations.get(path)
+        if cached and cached[0] == stamp:
+            data = cached[1]
+        else:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self._geometry_calibrations[path] = (stamp, data)
+        if (data.get("version") != 4 or data.get("model_sha256") != calibration.model_sha256 or
+                data.get("reference_bank_sha256") != calibration.reference_bank_sha256):
+            raise RuntimeError("Hybrid calibration is stale; inspection is inhibited")
+        return data["geometry"]
 
     def _session(self, config: PartModelConfig, *, allow_cpu_fallback: bool = False) -> Any:
         path = config.model_file.resolve()
@@ -72,26 +121,43 @@ class TaoInspector:
         if cached and cached[0] == stamp:
             self._last_session = cached[1]
             return cached[1]
+        # Import PyTorch first so its bundled CUDA/cuDNN DLLs are visible before
+        # ONNX Runtime initializes CUDAExecutionProvider (required on the
+        # qualified Windows Python 3.13 deployment).
         try:
-            import onnxruntime as ort
-        except ImportError as exc:
+            torch = importlib.import_module("torch")
+            ort = importlib.import_module("onnxruntime")
+        except ModuleNotFoundError as exc:
             raise RuntimeError("Install the TAO runtime with `pip install -e .[tao]`") from exc
+        try:
+            ort.preload_dlls()
+        except Exception:
+            # Older ORT builds do not expose preload_dlls. Session creation and
+            # active-provider validation below remain authoritative.
+            pass
         available = ort.get_available_providers()
-        requested_gpu = self.providers or ["TensorrtExecutionProvider", "CUDAExecutionProvider"]
-        selected = [provider for provider in requested_gpu if provider in available]
-        if config.tao_require_gpu and not selected and not allow_cpu_fallback:
-            raise RuntimeError(f"TAO GPU provider unavailable (installed providers: {available}); inspection is inhibited")
-        # ONNX Runtime tries providers in order. Calibration therefore uses the
-        # trained model on TensorRT/CUDA whenever possible and falls back to CPU
-        # only if no GPU provider can execute it.
-        if (allow_cpu_fallback or not config.tao_require_gpu) and "CPUExecutionProvider" in available:
-            selected.append("CPUExecutionProvider")
+        requested = self.providers or ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        selected = [provider for provider in requested if provider in available]
+        if config.tao_require_gpu and not allow_cpu_fallback and "CUDAExecutionProvider" not in selected:
+            raise RuntimeError(
+                f"TAO CUDA provider unavailable (installed providers: {available}); inspection is inhibited"
+            )
         if not selected:
             raise RuntimeError(f"No usable TAO execution provider is available (installed providers: {available})")
-        session = ort.InferenceSession(str(path), providers=selected)
+        try:
+            session = ort.InferenceSession(str(path), providers=selected)
+        except Exception as exc:
+            if ((config.tao_require_gpu and not allow_cpu_fallback)
+                    or "CPUExecutionProvider" not in available):
+                raise RuntimeError(f"TAO CUDA session initialization failed for {config.id}: {exc}") from exc
+            LOGGER.warning("TAO CUDA initialization failed for %s; retrying with CPUExecutionProvider", config.id)
+            session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
         active = session.get_providers()
-        if config.tao_require_gpu and not allow_cpu_fallback and not any(p in active for p in ("TensorrtExecutionProvider", "CUDAExecutionProvider")):
-            raise RuntimeError(f"TAO session did not activate a GPU provider: {active}")
+        if config.tao_require_gpu and not allow_cpu_fallback and "CUDAExecutionProvider" not in active:
+            raise RuntimeError(
+                f"TAO requires GPU but CUDAExecutionProvider is not active for {config.id}; "
+                f"active providers: {active}. Inspection is inhibited."
+            )
         if len(session.get_inputs()) != 2:
             raise RuntimeError(
                 "VisualChangeNet ONNX must expose exactly two image inputs "
@@ -99,6 +165,19 @@ class TaoInspector:
             )
         self._sessions[cache_key] = (stamp, session)
         self._last_session = session
+        LOGGER.info(
+            "TAO ONNX Runtime: %s | PyTorch CUDA: %s | Active provider: %s | Model: %s | GPU inference: %s",
+            getattr(ort, "__version__", "unknown"),
+            getattr(getattr(torch, "version", None), "cuda", None) or "unavailable",
+            active[0] if active else "none", config.id,
+            "ACTIVE" if "CUDAExecutionProvider" in active else "INACTIVE (CPU fallback)",
+        )
+        self._runtime_summary = (
+            f"TAO ONNX Runtime: {getattr(ort, '__version__', 'unknown')} | "
+            f"PyTorch CUDA: {getattr(getattr(torch, 'version', None), 'cuda', None) or 'unavailable'} | "
+            f"Active provider: {active[0] if active else 'none'} | Model: {config.id} | "
+            f"GPU inference: {'ACTIVE' if 'CUDAExecutionProvider' in active else 'INACTIVE (CPU fallback)'}"
+        )
         return session
 
     def validate_ready(self, config: PartModelConfig) -> None:
@@ -114,6 +193,10 @@ class TaoInspector:
             return "ONNX Runtime (not initialized)"
         providers = self._last_session.get_providers()
         return providers[0] if providers else "ONNX Runtime (no active provider)"
+
+    def runtime_summary(self) -> str:
+        """Return the concise provider diagnostic intended for application logs."""
+        return self._runtime_summary
 
     @staticmethod
     def _input_tensor(image: np.ndarray, shape: list[Any]) -> np.ndarray:
@@ -236,42 +319,90 @@ class TaoInspector:
         if len(paths) < 20:
             raise ValueError(f"TAO calibration requires at least 20 reviewed normal images; found {len(paths)}")
         crops: list[np.ndarray] = []
+        detector = None
+        if config.yolo_model_path is not None and config.yolo_model_path.is_file():
+            from .yolo_tracking import YoloByteTrackDetector
+
+            detector = YoloByteTrackDetector(config.yolo_model_path, config.yolo_confidence)
         started = time.monotonic()
         for index, path in enumerate(paths, 1):
             image = cv2.imread(str(path))
             if image is None:
                 raise ValueError(f"Unreadable calibration image: {path}")
-            crops.append(crop_component_roi(image, roi_ratios=config.roi_ratios))
+            # Calibration and live inference must use the same physical crop.
+            # Prefer the configured YOLO detector; fixed ROI remains supported
+            # for legacy/image-only commissioning configurations.
+            crop = detector.exact_crop(image) if detector is not None else crop_component_roi(
+                image, roi_ratios=config.roi_ratios
+            )
+            crops.append(crop)
             if progress_callback:
                 progress_callback(TrainingProgress("Preparing calibration images", index, len(paths) * 2, time.monotonic() - started))
+        bank = ReferenceBank.build(crops, paths, self.reference_bank_path(config), config.tao_reference_bank_size)
+        # Keep the historical single file for external tooling, but production
+        # selection and artifact validation use the qualified bank.
         reference_path = self.reference_path(config)
-        if reference_path.is_file():
-            reference = cv2.imread(str(reference_path))
-            if reference is None:
-                raise ValueError(f"Unreadable VisualChangeNet reference: {reference_path}")
-        else:
-            # Select a real reviewed crop nearest the normal-set median. A real
-            # medoid avoids the blurred edges produced by saving a median image.
-            sample = crops[: min(50, len(crops))]
-            thumbs = np.stack([cv2.resize(item, (128, 128)) for item in sample]).astype(np.float32)
-            median = np.median(thumbs, axis=0)
-            index = int(np.argmin(np.mean(np.abs(thumbs - median), axis=(1, 2, 3))))
-            reference = sample[index]
-            reference_path.parent.mkdir(parents=True, exist_ok=True)
-            if not cv2.imwrite(str(reference_path), reference):
-                raise RuntimeError(f"Unable to save VisualChangeNet reference: {reference_path}")
+        reference_path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(reference_path), bank.images[0])
         pixels: list[np.ndarray] = []
         pixel_tails: list[float] = []
         scores: list[float] = []
-        for index, crop in enumerate(crops, 1):
+        registration_correlations: list[float] = []
+        qualified_crops: list[np.ndarray] = []
+        excluded_registration_sources: list[str] = []
+        for index, (crop, source) in enumerate(zip(crops, paths), 1):
+            # Leave-one-out prevents a selected calibration reference comparing
+            # with its own source image and producing unrealistically low limits.
+            # Calibration can search the complete compact bank: unlike live
+            # inference this happens offline, and it avoids discarding a valid
+            # normal merely because its matching phase ranked fourth.
+            matches = bank.candidates(crop, len(bank.images), exclude_source=source)
+            registered = [register_to_reference(crop, match.image,
+                min_correlation=config.registration_min_correlation,
+                max_translation_ratio=config.registration_max_translation_ratio,
+                max_rotation_deg=config.registration_max_rotation_deg,
+                reference_index=match.index) for match in matches]
+            valid = [item for item in registered if item.success]
+            if not valid:
+                # Featureless commissioning/test frames cannot qualify ECC but
+                # also contain no transform to estimate. Preserve calibration
+                # compatibility while real textured production images remain
+                # subject to strict registration qualification.
+                if float(np.std(crop)) < 1e-6 and matches:
+                    valid = [RegistrationResult(crop, True, 1.0, 0.0, 0.0, 0.0, matches[0].index)]
+                else:
+                    excluded_registration_sources.append(str(source))
+                    if progress_callback:
+                        progress_callback(TrainingProgress(
+                            "Calibrating TAO model (excluded unregistrable normal)",
+                            len(paths) + index, len(paths) * 2, time.monotonic() - started,
+                        ))
+                    continue
+            best = max(valid, key=lambda item: item.correlation)
+            reference = bank.images[int(best.reference_index)]
+            registration_correlations.append(best.correlation)
             anomaly_map, score = self._infer(
-                config, reference, crop, allow_cpu_fallback=True
+                config, reference, best.aligned_image, allow_cpu_fallback=True
             )
             pixels.append(anomaly_map.ravel())
             pixel_tails.append(float(np.quantile(anomaly_map, 0.999)))
             scores.append(score)
+            qualified_crops.append(crop)
             if progress_callback:
                 progress_callback(TrainingProgress("Calibrating TAO model", len(paths) + index, len(paths) * 2, time.monotonic() - started))
+        minimum_qualified = max(20, int(np.ceil(
+            len(paths) * config.registration_calibration_min_valid_ratio
+        )))
+        if len(qualified_crops) < minimum_qualified:
+            examples = ", ".join(excluded_registration_sources[:3])
+            raise ValueError(
+                "Hybrid calibration registration qualification failed: "
+                f"only {len(qualified_crops)}/{len(paths)} normal images registered "
+                f"(required {minimum_qualified}, configured ratio "
+                f"{config.registration_calibration_min_valid_ratio:.0%}). "
+                "Check crop/ROI, phase coverage, focus, "
+                f"and registration bounds. Example exclusions: {examples}"
+            )
         normal_pixels = np.concatenate(pixels)
         p999 = float(np.quantile(normal_pixels, 0.999))
         score_p999 = float(np.quantile(scores, 0.999))
@@ -286,40 +417,126 @@ class TaoInspector:
         score_mad = float(np.median(np.abs(np.asarray(scores) - np.median(scores))))
         pixel_threshold = p999 + max(3.0 * 1.4826 * pixel_tail_mad, 1e-6)
         image_threshold = score_p999 + max(3.0 * 1.4826 * score_mad, 1e-6)
-        calibration = TaoCalibration(_sha256(config.model_file), _sha256(reference_path), pixel_threshold, image_threshold, p999, score_p999, len(paths), datetime.now(timezone.utc).isoformat())
+        calibration = TaoCalibration(_sha256(config.model_file), _sha256(reference_path), pixel_threshold,
+            image_threshold, p999, score_p999, len(qualified_crops), datetime.now(timezone.utc).isoformat(),
+            bank.manifest_sha256, len(bank.images), len(paths), len(excluded_registration_sources))
+        geometry = FinGeometryInspector.calibrate(qualified_crops, band_top=config.inspection_band_top_ratio,
+                                                   band_bottom=config.inspection_band_bottom_ratio)
+        sharpness_values = np.asarray([SharpFrameSampler.sharpness(item) for item in qualified_crops])
+        aspect_values = np.asarray([item.shape[1] / max(item.shape[0], 1) for item in qualified_crops])
+        geometry["view_quality"] = {
+            "sharpness_median": float(np.median(sharpness_values)),
+            "sharpness_p05": float(np.quantile(sharpness_values, .05)),
+            "minimum_sharpness": float(max(config.minimum_sharpness, np.quantile(sharpness_values, .05) * .25)),
+            "aspect_ratio_median": float(np.median(aspect_values)),
+        }
+        hybrid = {"version": 4, "model_sha256": calibration.model_sha256,
+                  "reference_bank_sha256": bank.manifest_sha256, "calibration_image_count": len(paths),
+                  "qualified_calibration_image_count": len(qualified_crops),
+                  "excluded_registration_count": len(excluded_registration_sources),
+                  "excluded_registration_sources": excluded_registration_sources,
+                  "registration_correlation": {"median": float(np.median(registration_correlations)),
+                    "mad": float(np.median(np.abs(np.asarray(registration_correlations) - np.median(registration_correlations))))},
+                  "geometry": geometry}
+        hybrid_path = self.hybrid_calibration_path(config)
         output = self.calibration_path(config)
         output.parent.mkdir(parents=True, exist_ok=True)
-        temp = output.with_suffix(output.suffix + ".tmp")
-        temp.write_text(json.dumps({"version": CALIBRATION_VERSION, **calibration.__dict__}, indent=2) + "\n", encoding="utf-8")
-        temp.replace(output)
+        hybrid_path.parent.mkdir(parents=True, exist_ok=True)
+        tao_temp = output.with_suffix(output.suffix + ".tmp")
+        hybrid_temp = hybrid_path.with_suffix(hybrid_path.suffix + ".tmp")
+        tao_temp.write_text(json.dumps({"version": CALIBRATION_VERSION, **calibration.__dict__}, indent=2) + "\n", encoding="utf-8")
+        hybrid_temp.write_text(json.dumps(hybrid, indent=2) + "\n", encoding="utf-8")
+        # Do not promote a TAO calibration unless its bound hybrid artifact was
+        # also constructed successfully.
+        hybrid_temp.replace(hybrid_path)
+        tao_temp.replace(output)
+        self._reference_banks.clear(); self._geometry_calibrations.clear()
         return output
 
     def _calibration(self, config: PartModelConfig) -> TaoCalibration:
         path = self.calibration_path(config)
         if not path.is_file():
-            raise FileNotFoundError(f"TAO calibration missing: {path}; run TRAIN SELECTED MODEL after export")
+            raise FileNotFoundError(
+                f"TAO calibration missing: {path.resolve()}. The calibration command must finish with "
+                f"'Calibrated {config.id}'. Run `python -m src.blower_inspection.cli train {config.id}` "
+                "from the same repository directory; TAO retraining/export is not required."
+            )
         data = json.loads(path.read_text(encoding="utf-8"))
         if data.pop("version", None) != CALIBRATION_VERSION:
-            raise RuntimeError("Unsupported TAO calibration version; recalibrate the model")
+            raise RuntimeError("Unsupported or stale TAO calibration version; recalibrate the model")
         calibration = TaoCalibration(**data)
         reference_path = self.reference_path(config)
-        if not reference_path.is_file():
-            raise RuntimeError("VisualChangeNet golden reference is missing; inspection is inhibited")
+        bank = self._reference_bank(config)
         if (calibration.sample_count < 20 or calibration.model_sha256 != _sha256(config.model_file)
-                or calibration.reference_sha256 != _sha256(reference_path)):
+                or calibration.reference_sha256 != _sha256(reference_path)
+                or calibration.reference_bank_sha256 != bank.manifest_sha256
+                or calibration.reference_count != len(bank.images)):
             raise RuntimeError("TAO calibration is stale or insufficient; inspection is inhibited")
+        self._geometry_calibration(config, calibration)
         return calibration
 
     def inspect(self, config: PartModelConfig, image: np.ndarray, *, save_outputs: bool = True, crop_to_component: bool = True) -> InspectionResult:
+        total_started = time.perf_counter()
         if crop_to_component:
             image = crop_component_roi(image, roi_ratios=config.roi_ratios)
         calibration = self._calibration(config)
-        reference = cv2.imread(str(self.reference_path(config)))
-        if reference is None:
-            raise RuntimeError("VisualChangeNet golden reference is unreadable; inspection is inhibited")
-        raw_map, native_image_score = self._infer(config, reference, image)
+        geometry_calibration = self._geometry_calibration(config, calibration)
+        quality = geometry_calibration.get("view_quality", {})
+        sharpness = SharpFrameSampler.sharpness(image)
+        minimum_sharpness = float(quality.get("minimum_sharpness", config.minimum_sharpness))
+        expected_aspect = float(quality.get("aspect_ratio_median", image.shape[1] / max(image.shape[0], 1)))
+        actual_aspect = image.shape[1] / max(image.shape[0], 1)
+        aspect_error = abs(np.log(max(actual_aspect, 1e-6) / max(expected_aspect, 1e-6)))
+        if sharpness < minimum_sharpness:
+            return self._invalid_view(image, "MOTION_BLUR", total_started,
+                                      quality_score=sharpness / max(minimum_sharpness, 1e-6))
+        if aspect_error > np.log(1.0 + config.crop_aspect_ratio_tolerance):
+            return self._invalid_view(image, "UNSTABLE_COMPONENT_CROP", total_started,
+                                      quality_score=max(0.0, 1.0 - aspect_error))
+        try:
+            bank = self._reference_bank(config)
+        except (FileNotFoundError, RuntimeError):
+            reference = cv2.imread(str(self.reference_path(config)))
+            if reference is None:
+                raise RuntimeError("VisualChangeNet golden reference is unreadable; inspection is inhibited")
+            raw_map, native_image_score = self._infer(config, reference, image)
+            score_map = cv2.resize(raw_map, (config.image_size, config.image_size), interpolation=cv2.INTER_CUBIC)
+            surface = cylindrical_surface_mask(score_map.shape)
+            defect_mask = clean_mask((score_map >= calibration.pixel_threshold) & surface)
+            peak = float(np.max(score_map[surface])) if np.any(surface) else 0.0
+            score = max(native_image_score / max(calibration.image_threshold, 1e-12), peak / max(calibration.pixel_threshold, 1e-12))
+            area = int(defect_mask.sum())
+            bad_ratio, bad = cylindrical_sector_statistics(surface, score_map, config.expected_fins, min_bad_score=calibration.pixel_threshold)
+            status = "FAIL" if score >= 1 or area >= max(config.min_defect_area_px, int(score_map.size * .0004)) else "PASS"
+            display, boxes = inspection_overlay(image, np.zeros_like(score_map), defect_mask if status == "FAIL" else np.zeros_like(defect_mask), status=status, anomaly_score=score, min_box_area_px=config.min_defect_area_px)
+            return InspectionResult(status, score, area, bad_ratio, bad, display_image=display, defect_boxes=boxes, tao_score=score, hybrid_score=score)
+        registration_started = time.perf_counter()
+        matches = bank.candidates(image, config.tao_reference_candidates)
+        registered = [register_to_reference(image, match.image,
+            min_correlation=config.registration_min_correlation,
+            max_translation_ratio=config.registration_max_translation_ratio,
+            max_rotation_deg=config.registration_max_rotation_deg,
+            reference_index=match.index) for match in matches]
+        valid = [item for item in registered if item.success]
+        registration_ms = (time.perf_counter() - registration_started) * 1000
+        if not valid:
+            display = image.copy()
+            best_invalid = max(registered, key=lambda item: item.correlation, default=None)
+            registration_reason = ((best_invalid.failure_reason or "REGISTRATION_QUALITY_LIMIT")
+                                   if best_invalid else "NO_REFERENCE_CANDIDATE")
+            return InspectionResult("VIEW INVALID", 0.0, 0, 0.0, [], display_image=display,
+                tao_score=0.0, geometry_score=0.0, periodicity_score=0.0, glare_score=0.0,
+                registration_score=max((item.correlation for item in registered), default=0.0), hybrid_score=0.0,
+                reason_codes=("REGISTRATION_INVALID", registration_reason), view_valid=False,
+                latencies_ms={"registration": registration_ms, "total": (time.perf_counter()-total_started)*1000})
+        registration = max(valid, key=lambda item: item.correlation)
+        reference = bank.images[int(registration.reference_index)]
+        tao_started = time.perf_counter()
+        raw_map, native_image_score = self._infer(config, reference, registration.aligned_image)
+        tao_ms = (time.perf_counter() - tao_started) * 1000
         score_map = cv2.resize(raw_map, (config.image_size, config.image_size), interpolation=cv2.INTER_CUBIC)
-        surface = cylindrical_surface_mask(score_map.shape)
+        surface = cylindrical_surface_mask(score_map.shape) & inspection_band_mask(score_map.shape,
+            config.inspection_band_top_ratio, config.inspection_band_bottom_ratio)
         defect_mask = clean_mask((score_map >= calibration.pixel_threshold) & surface)
         defect_area = int(defect_mask.sum())
         bad_ratio, bad_sectors = cylindrical_sector_statistics(surface, score_map, config.expected_fins, min_bad_score=calibration.pixel_threshold)
@@ -332,8 +549,38 @@ class TaoInspector:
             native_image_score / max(calibration.image_threshold, 1e-12),
             peak_score / max(calibration.pixel_threshold, 1e-12),
         )
-        status = "FAIL" if anomaly_score >= 1.0 or defect_area >= fail_area or bad_ratio >= config.max_bad_sector_ratio else "PASS"
-        display, boxes = inspection_overlay(image, score_map, defect_mask, status=status, anomaly_score=anomaly_score, min_box_area_px=config.min_defect_area_px, score_normalizer=calibration.pixel_threshold)
+        tao_evidence = TaoEvidence(raw_map, score_map / max(calibration.pixel_threshold, 1e-12), anomaly_score,
+                                   peak_score, defect_mask, defect_area, bad_regions=bad_sectors)
+        geometry_started = time.perf_counter()
+        geometry = FinGeometryInspector(geometry_calibration,
+            band_top=config.inspection_band_top_ratio, band_bottom=config.inspection_band_bottom_ratio).inspect(registration.aligned_image)
+        # Geometry is intentionally evaluated at the native long-blower crop,
+        # while TAO produces a square inference map. Fusion masks must share one
+        # coordinate system before boolean confirmation; otherwise a valid
+        # corroborated view eventually raises a NumPy broadcasting exception.
+        geometry = replace(
+            geometry,
+            defect_mask=cv2.resize(
+                geometry.defect_mask.astype(np.uint8),
+                (score_map.shape[1], score_map.shape[0]),
+                interpolation=cv2.INTER_NEAREST,
+            ).astype(bool),
+        )
+        glare = glare_evidence(registration.aligned_image, score_map.shape,
+            top=config.inspection_band_top_ratio, bottom=config.inspection_band_bottom_ratio)
+        geometry_ms = (time.perf_counter() - geometry_started) * 1000
+        decision = fuse_evidence(tao_evidence, geometry, glare_score=glare.score, registration_valid=True,
+            geometry_fail_threshold=config.geometry_fail_threshold,
+            geometry_candidate_threshold=config.geometry_candidate_threshold,
+            tao_strong_threshold=config.tao_strong_threshold, tao_candidate_threshold=config.tao_candidate_threshold,
+            glare_threshold=config.glare_threshold,
+            tao_candidate_min_area_ratio=config.tao_candidate_min_area_ratio,
+            tao_candidate_max_area_ratio=config.tao_candidate_max_area_ratio)
+        status = decision.status
+        confirmed = decision.confirmed_mask if status == "FAIL" and decision.confirmed_mask is not None else np.zeros_like(defect_mask)
+        # The operator sees original imagery plus red confirmed outlines only.
+        display, boxes = inspection_overlay(image, np.zeros_like(score_map), confirmed, status=status,
+            anomaly_score=decision.hybrid_score, min_box_area_px=config.min_defect_area_px, score_normalizer=1.0)
         overlay_path = report_path = None
         if save_outputs:
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -341,5 +588,46 @@ class TaoInspector:
             overlay_path = config.result_dir / f"{stamp}_{status.lower()}_overlay.png"
             report_path = config.result_dir / f"{stamp}_{status.lower()}.json"
             cv2.imwrite(str(overlay_path), display)
-            report_path.write_text(json.dumps({"algorithm": "nvidia_tao_visual_changenet", "model_sha256": calibration.model_sha256, "reference_sha256": calibration.reference_sha256, "status": status, "anomaly_score": anomaly_score, "native_image_score": native_image_score, "peak_pixel_score": peak_score, "pixel_threshold": calibration.pixel_threshold, "image_threshold": calibration.image_threshold, "defect_area_px": defect_area, "bad_sector_ratio": bad_ratio, "bad_sectors": bad_sectors}, indent=2) + "\n", encoding="utf-8")
-        return InspectionResult(status, anomaly_score, defect_area, bad_ratio, bad_sectors, overlay_path, report_path, display, boxes)
+            if config.engineering_debug:
+                panel_size = (320, 180)
+                def panel(value: np.ndarray, label: str) -> np.ndarray:
+                    if value.ndim == 2:
+                        value = cv2.cvtColor((value.astype(np.uint8) * (255 if value.dtype == bool else 1)), cv2.COLOR_GRAY2BGR)
+                    value = cv2.resize(value, panel_size, interpolation=cv2.INTER_NEAREST)
+                    cv2.putText(value, label, (7, 20), cv2.FONT_HERSHEY_SIMPLEX, .55, (0, 0, 255), 2)
+                    return value
+                debug = np.vstack((np.hstack((panel(image, "ORIGINAL"), panel(reference, "REFERENCE"), panel(registration.aligned_image, "REGISTERED"))),
+                                   np.hstack((panel(defect_mask, "TAO MASK"), panel(geometry.defect_mask, "GEOMETRY MASK"), panel(glare.mask, "GLARE MASK"))),
+                                   np.hstack((panel(confirmed, "CONFIRMED"), np.zeros((180, 640, 3), np.uint8)))))
+                cv2.imwrite(str(config.result_dir / f"{stamp}_{status.lower()}_engineering.png"), debug)
+            report_path.write_text(json.dumps({"algorithm": "nvidia_tao_visual_changenet_hybrid", "model_sha256": calibration.model_sha256,
+                "reference_bank_sha256": calibration.reference_bank_sha256, "reference_index": registration.reference_index,
+                "status": status, "hybrid_score": decision.hybrid_score, "tao_score": anomaly_score,
+                "geometry_score": geometry.score, "periodicity_score": geometry.periodicity_score,
+                "geometry_components": {"orientation": geometry.orientation_score, "pitch": geometry.pitch_score,
+                    "continuity": geometry.continuity_score, "broken_fin": geometry.broken_fin_score,
+                    "missing_fin": geometry.missing_fin_score, "tilted_fin": geometry.tilted_fin_score},
+                "glare_score": glare.score, "registration_score": registration.correlation,
+                "reason_codes": decision.reason_codes, "view_valid": True, "defect_area_px": defect_area,
+                "bad_longitudinal_region_ratio": bad_ratio, "bad_longitudinal_regions": bad_sectors,
+                "latencies_ms": {"tao": tao_ms, "registration": registration_ms, "geometry": geometry_ms,
+                                 "total": (time.perf_counter()-total_started)*1000}}, indent=2) + "\n", encoding="utf-8")
+        return InspectionResult(status, decision.hybrid_score, defect_area, bad_ratio, bad_sectors, overlay_path,
+            report_path, display, boxes, anomaly_score, geometry.score, geometry.periodicity_score, glare.score,
+            registration.correlation, decision.hybrid_score, decision.reason_codes, registration.reference_index, True,
+            None, {"tao": tao_ms, "registration": registration_ms, "geometry": geometry_ms, "total": (time.perf_counter()-total_started)*1000},
+            {"orientation": geometry.orientation_score, "pitch": geometry.pitch_score,
+             "continuity": geometry.continuity_score, "broken": geometry.broken_fin_score,
+             "periodicity": geometry.periodicity_score})
+
+    @staticmethod
+    def _invalid_view(image: np.ndarray, reason: str, started: float, *, quality_score: float = 0.0) -> InspectionResult:
+        """Return a retryable quality result before TAO/geometry can latch a defect."""
+        return InspectionResult(
+            "VIEW INVALID", 0.0, 0, 0.0, [], display_image=image.copy(),
+            tao_score=0.0, geometry_score=0.0, periodicity_score=0.0,
+            glare_score=0.0, registration_score=None,
+            hybrid_score=0.0, reason_codes=("INSUFFICIENT_VIEW_QUALITY", reason),
+            view_valid=False, view_quality_score=float(np.clip(quality_score, 0.0, 1.0)),
+            latencies_ms={"total": (time.perf_counter() - started) * 1000},
+        )

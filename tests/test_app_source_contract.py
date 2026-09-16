@@ -27,6 +27,48 @@ def test_app_validates_tao_readiness_before_opening_camera():
     assert '"TAO model not ready"' in source
 
 
+def test_app_does_not_replace_the_inspector_after_readiness_validation():
+    source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
+    start = source.index("def start_inspection")
+    validation = source.index("self.inspector.validate_ready(model)", start)
+    camera_open = source.index("self.camera.open()", validation)
+
+    assert "self._apply_selected_camera_settings()" not in source[validation:camera_open]
+
+
+def test_app_distinguishes_view_pass_from_final_part_pass():
+    source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
+
+    assert 'badge_object, badge_text = "statusPass", "VIEW PASS"' in source
+    assert "VIEW SCORE:" in source
+    assert "VIEWS:" in source
+
+
+def test_app_can_draw_a_horizontal_x_axis_counting_line():
+    source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
+
+    assert 'if counting_axis == "y"' in source
+    assert "(0, line_y), (display.shape[1] - 1, line_y)" in source
+
+
+def test_app_waits_for_distinct_rotation_phase_before_another_view():
+    source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
+
+    assert "RotationPhaseGate" in source
+    assert 'self.status_badge.setText("WAITING FOR ROTATION")' in source
+
+
+def test_fixed_nest_uses_one_operator_approved_yolo_roi():
+    source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
+
+    assert "def _confirm_and_lock_roi" in source
+    assert "self.part_detector.detect_best(raw_frame)" in source
+    assert '"Confirm fixed inspection ROI"' in source
+    assert "self.live_roi_bounds = detected.bounds" in source
+    assert "def _locked_roi_tracks" in source
+    assert "TrackedPart(self.locked_track_id, self.live_roi_bounds" in source
+
+
 def test_app_imports_backend_factory_from_its_own_module():
     source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
     assert "from .inspector_factory import inspector_for_model" in source

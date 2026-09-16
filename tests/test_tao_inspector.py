@@ -8,6 +8,7 @@ pytest.importorskip("cv2", exc_type=ImportError)
 
 from blower_inspection.config import PartModelConfig
 from blower_inspection.inspector_factory import inspector_for_model
+from blower_inspection.registration import RegistrationResult
 from blower_inspection.tao_inspector import TaoCalibration, TaoInspector
 
 
@@ -125,6 +126,78 @@ def test_calibration_requests_gpu_first_with_cpu_fallback(tmp_path, monkeypatch)
     assert cfg.tao_require_gpu is True
 
 
+def test_calibration_excludes_an_unregistrable_normal_instead_of_aborting(tmp_path, monkeypatch):
+    cfg = config(tmp_path)
+    cfg.normal_image_dir.mkdir()
+    import cv2
+
+    for index in range(21):
+        image = np.zeros((32, 48, 3), np.uint8)
+        cv2.line(image, (0, 8 + index % 8), (47, 8 + index % 8), (180, 180, 180), 2)
+        assert cv2.imwrite(str(cfg.normal_image_dir / f"normal-{index:02d}.png"), image)
+
+    first_candidate = None
+
+    def registration(candidate, reference, **kwargs):
+        nonlocal first_candidate
+        if first_candidate is None:
+            first_candidate = candidate
+        # Reject every bank candidate for the first calibration image only.
+        if candidate is first_candidate:
+            return RegistrationResult(candidate, False, 0.1, 0, 0, 0, kwargs["reference_index"])
+        return RegistrationResult(candidate, True, 0.9, 0, 0, 0, kwargs["reference_index"])
+
+    monkeypatch.setattr("blower_inspection.tao_inspector.register_to_reference", registration)
+    inspector = TaoInspector()
+    monkeypatch.setattr(inspector, "_infer", lambda *args, **kwargs: (np.zeros((4, 4), np.float32), 0.0))
+    output = inspector.train(cfg)
+    data = json.loads(output.read_text())
+    assert data["sample_count"] == 20
+    assert data["calibration_image_count"] == 21
+    assert data["excluded_registration_count"] == 1
+    hybrid = json.loads(TaoInspector.hybrid_calibration_path(cfg).read_text())
+    assert hybrid["version"] == 4
+    assert hybrid["geometry"]["view_quality"]["minimum_sharpness"] >= cfg.minimum_sharpness
+
+
+def test_calibration_valid_ratio_is_configurable(tmp_path):
+    from dataclasses import replace
+
+    cfg = replace(config(tmp_path), registration_calibration_min_valid_ratio=0.70)
+    assert cfg.registration_calibration_min_valid_ratio == pytest.approx(0.70)
+
+
+def test_calibration_uses_configured_yolo_exact_crop(tmp_path, monkeypatch):
+    from dataclasses import replace
+    import cv2
+
+    cfg = config(tmp_path)
+    detector_path = tmp_path / "best.pt"
+    detector_path.write_bytes(b"detector")
+    cfg = replace(cfg, yolo_model_path=detector_path)
+    cfg.normal_image_dir.mkdir()
+    image = np.zeros((24, 40, 3), np.uint8)
+    for index in range(20):
+        assert cv2.imwrite(str(cfg.normal_image_dir / f"normal-{index}.png"), image)
+    exact_crop_calls = []
+
+    class Detector:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def exact_crop(self, value):
+            exact_crop_calls.append(value.shape)
+            return value[:, 5:35].copy()
+
+    monkeypatch.setattr("blower_inspection.yolo_tracking.YoloByteTrackDetector", Detector)
+    inspector = TaoInspector()
+    monkeypatch.setattr(inspector, "_infer", lambda *args, **kwargs: (np.zeros((4, 4), np.float32), 0.0))
+
+    inspector.train(cfg)
+
+    assert exact_crop_calls == [(24, 40, 3)] * 20
+
+
 def test_cpu_calibration_session_cannot_be_reused_as_gpu_session(tmp_path, monkeypatch):
     cfg = config(tmp_path)
     inspector = TaoInspector()
@@ -172,6 +245,105 @@ def test_calibration_provider_order_prefers_gpu_then_cpu(tmp_path, monkeypatch):
     TaoInspector()._session(cfg, allow_cpu_fallback=True)
 
     assert selected == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+
+def test_cpu_fallback_is_used_when_permitted_and_cuda_is_unavailable(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    cfg = replace(config(tmp_path), tao_require_gpu=False)
+    selected = []
+
+    class Input:
+        name = "input"
+
+    class Session:
+        def __init__(self, path, providers):
+            selected.extend(providers)
+
+        def get_providers(self):
+            return selected
+
+        def get_inputs(self):
+            return [Input(), Input()]
+
+    class FakeOrt:
+        InferenceSession = Session
+
+        @staticmethod
+        def get_available_providers():
+            return ["CPUExecutionProvider"]
+
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", FakeOrt)
+    TaoInspector()._session(cfg, allow_cpu_fallback=True)
+
+    assert selected == ["CPUExecutionProvider"]
+
+
+def test_required_gpu_validates_active_session_provider(tmp_path, monkeypatch):
+    cfg = config(tmp_path)
+
+    class Input:
+        name = "input"
+
+    class Session:
+        def __init__(self, path, providers):
+            assert providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+        @staticmethod
+        def get_providers():
+            return ["CPUExecutionProvider"]
+
+        @staticmethod
+        def get_inputs():
+            return [Input(), Input()]
+
+    class FakeOrt:
+        InferenceSession = Session
+
+        @staticmethod
+        def get_available_providers():
+            return ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", FakeOrt)
+    with pytest.raises(RuntimeError, match="CUDAExecutionProvider is not active"):
+        TaoInspector()._session(cfg)
+
+
+def test_torch_loads_before_onnxruntime_and_preloads_dlls(tmp_path, monkeypatch):
+    import types
+    from dataclasses import replace
+
+    cfg = replace(config(tmp_path), tao_require_gpu=False)
+    events = []
+    torch_module = types.SimpleNamespace(version=types.SimpleNamespace(cuda="13.2"))
+
+    class Input:
+        name = "input"
+
+    class Session:
+        @staticmethod
+        def get_providers():
+            return ["CPUExecutionProvider"]
+
+        @staticmethod
+        def get_inputs():
+            return [Input(), Input()]
+
+    ort_module = types.SimpleNamespace(
+        __version__="1.30.0",
+        get_available_providers=lambda: ["CPUExecutionProvider"],
+        preload_dlls=lambda: events.append("preload"),
+        InferenceSession=lambda *args, **kwargs: Session(),
+    )
+
+    def load(name):
+        events.append(name)
+        return torch_module if name == "torch" else ort_module
+
+    monkeypatch.setattr("blower_inspection.tao_inspector.importlib.import_module", load)
+    TaoInspector()._session(cfg)
+
+    assert events == ["torch", "onnxruntime", "preload"]
 
 
 def test_inspection_score_is_normalized_to_calibrated_fail_line(tmp_path, monkeypatch):

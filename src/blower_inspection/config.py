@@ -26,14 +26,21 @@ class PartModelConfig:
     camera_fps: int = 30
     image_size: int = 640
     yolo_model_path: Path | None = None
-    yolo_confidence: float = 0.40
+    yolo_confidence: float = 0.70
     inspection_lost_timeout_s: float = 1.0
     capture_burst_frames: int = 5
     minimum_sharpness: float = 60.0
+    crop_aspect_ratio_tolerance: float = 0.35
+    # Fixed-nest stations use YOLO once at startup, ask the operator to approve
+    # the box, then retain those full-frame coordinates for every view.
+    lock_roi_after_confirmation: bool = True
     minimum_rotation_views: int = 8
+    minimum_rotation_descriptor_distance: float = 0.06
+    inspection_completion_mode: str = "counting_line"
     # Slightly left of frame center so the part reaches the count line within
     # the usable fixture/conveyor travel visible in the production camera.
     counting_line_ratio: float = 0.45
+    counting_axis: str = "x"
     counting_direction: str = "left_to_right"
     algorithm: str = "nvidia_tao"
     # TAO Deploy exports an ONNX model.  Calibration is deliberately stored
@@ -47,6 +54,32 @@ class PartModelConfig:
     tao_require_gpu: bool = True
     tao_reference_image: Path | None = None
     tao_change_class_index: int = 1
+    # Hybrid inspection defaults are deliberately conservative and remain
+    # optional so older models.json files continue to load.
+    hybrid_enabled: bool = True
+    inspection_band_top_ratio: float = 0.18
+    inspection_band_bottom_ratio: float = 0.82
+    tao_reference_bank_size: int = 16
+    tao_reference_candidates: int = 3
+    registration_enabled: bool = True
+    registration_min_correlation: float = 0.55
+    registration_max_translation_ratio: float = 0.06
+    registration_max_rotation_deg: float = 3.0
+    registration_calibration_min_valid_ratio: float = 0.70
+    geometry_enabled: bool = True
+    geometry_fail_threshold: float = 1.0
+    geometry_candidate_threshold: float = 0.55
+    glare_rejection_enabled: bool = True
+    glare_threshold: float = 0.55
+    periodicity_enabled: bool = True
+    tao_strong_threshold: float = 1.0
+    tao_candidate_threshold: float = 0.70
+    tao_candidate_min_area_ratio: float = 0.001
+    tao_candidate_max_area_ratio: float = 0.12
+    weak_candidate_required_views: int = 2
+    longitudinal_sections: int = 6
+    hybrid_calibration_file: Path | None = None
+    engineering_debug: bool = False
 
 
 class ModelRegistry:
@@ -63,7 +96,7 @@ class ModelRegistry:
 
     def get(self, model_id: str) -> PartModelConfig:
         for model in self.all():
-            if model.id == model_id:
+            if model.id.casefold() == model_id.casefold():
                 return model
         known = ", ".join(model.id for model in self.all())
         raise KeyError(f"Unknown model '{model_id}'. Known models: {known}")
@@ -132,12 +165,19 @@ class ModelRegistry:
             camera_fps=int(entry.get("camera_fps", 30)),
             image_size=int(entry.get("image_size", 640)),
             yolo_model_path=Path(entry["yolo_model_path"]) if entry.get("yolo_model_path") else None,
-            yolo_confidence=float(entry.get("yolo_confidence", 0.40)),
+            yolo_confidence=max(0.70, float(entry.get("yolo_confidence", 0.70))),
             inspection_lost_timeout_s=float(entry.get("inspection_lost_timeout_s", 1.0)),
             capture_burst_frames=max(2, int(entry.get("capture_burst_frames", 5))),
             minimum_sharpness=max(0.0, float(entry.get("minimum_sharpness", 60.0))),
+            crop_aspect_ratio_tolerance=max(0.05, float(entry.get("crop_aspect_ratio_tolerance", 0.35))),
+            lock_roi_after_confirmation=bool(entry.get("lock_roi_after_confirmation", True)),
             minimum_rotation_views=max(1, int(entry.get("minimum_rotation_views", 8))),
+            minimum_rotation_descriptor_distance=max(0.0, float(
+                entry.get("minimum_rotation_descriptor_distance", 0.06)
+            )),
+            inspection_completion_mode=str(entry.get("inspection_completion_mode", "counting_line")),
             counting_line_ratio=float(entry.get("counting_line_ratio", 0.45)),
+            counting_axis=str(entry.get("counting_axis", "x")),
             counting_direction=str(entry.get("counting_direction", "left_to_right")),
             algorithm=str(entry.get("algorithm", "nvidia_tao")),
             tao_calibration_file=Path(entry["tao_calibration_file"]) if entry.get("tao_calibration_file") else None,
@@ -149,6 +189,32 @@ class ModelRegistry:
             tao_require_gpu=bool(entry.get("tao_require_gpu", True)),
             tao_reference_image=Path(entry["tao_reference_image"]) if entry.get("tao_reference_image") else None,
             tao_change_class_index=max(0, int(entry.get("tao_change_class_index", 1))),
+            hybrid_enabled=bool(entry.get("hybrid_enabled", True)),
+            inspection_band_top_ratio=float(entry.get("inspection_band_top_ratio", 0.18)),
+            inspection_band_bottom_ratio=float(entry.get("inspection_band_bottom_ratio", 0.82)),
+            tao_reference_bank_size=max(2, int(entry.get("tao_reference_bank_size", 16))),
+            tao_reference_candidates=max(1, int(entry.get("tao_reference_candidates", 3))),
+            registration_enabled=bool(entry.get("registration_enabled", True)),
+            registration_min_correlation=float(entry.get("registration_min_correlation", 0.55)),
+            registration_max_translation_ratio=float(entry.get("registration_max_translation_ratio", 0.06)),
+            registration_max_rotation_deg=float(entry.get("registration_max_rotation_deg", 3.0)),
+            registration_calibration_min_valid_ratio=min(1.0, max(0.0, float(
+                entry.get("registration_calibration_min_valid_ratio", 0.70)
+            ))),
+            geometry_enabled=bool(entry.get("geometry_enabled", True)),
+            geometry_fail_threshold=float(entry.get("geometry_fail_threshold", 1.0)),
+            geometry_candidate_threshold=float(entry.get("geometry_candidate_threshold", 0.55)),
+            glare_rejection_enabled=bool(entry.get("glare_rejection_enabled", True)),
+            glare_threshold=float(entry.get("glare_threshold", 0.55)),
+            periodicity_enabled=bool(entry.get("periodicity_enabled", True)),
+            tao_strong_threshold=float(entry.get("tao_strong_threshold", 1.0)),
+            tao_candidate_threshold=float(entry.get("tao_candidate_threshold", 0.70)),
+            tao_candidate_min_area_ratio=float(entry.get("tao_candidate_min_area_ratio", 0.001)),
+            tao_candidate_max_area_ratio=float(entry.get("tao_candidate_max_area_ratio", 0.12)),
+            weak_candidate_required_views=max(1, int(entry.get("weak_candidate_required_views", 2))),
+            longitudinal_sections=max(1, int(entry.get("longitudinal_sections", 6))),
+            hybrid_calibration_file=Path(entry["hybrid_calibration_file"]) if entry.get("hybrid_calibration_file") else None,
+            engineering_debug=bool(entry.get("engineering_debug", False)),
         )
 
 

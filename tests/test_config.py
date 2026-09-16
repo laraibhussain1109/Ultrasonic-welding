@@ -40,6 +40,21 @@ def test_model_registry_defaults_camera_and_allows_missing_roi(tmp_path):
     assert model.counting_line_ratio == 0.45
     assert model.counting_direction == "left_to_right"
     assert model.tao_change_class_index == 1
+    assert model.registration_calibration_min_valid_ratio == 0.70
+    assert model.inspection_completion_mode == "counting_line"
+    assert model.crop_aspect_ratio_tolerance == 0.35
+    assert model.lock_roi_after_confirmation is True
+    assert model.yolo_confidence == 0.70
+    assert model.counting_axis == "x"
+    assert model.minimum_rotation_descriptor_distance == 0.06
+    assert model.tao_candidate_min_area_ratio == 0.001
+    assert model.tao_candidate_max_area_ratio == 0.12
+
+
+def test_model_ids_are_case_insensitive_for_cli_convenience(tmp_path):
+    registry = ModelRegistry(_registry_file(tmp_path))
+
+    assert registry.get("bf-001").id == "BF-001"
 
 
 def test_model_registry_persists_roi_and_camera_settings(tmp_path):
@@ -89,3 +104,6 @@ def test_supplied_tao_models_allow_gpu_first_cpu_fallback():
     assert models
     assert all(model.algorithm == "nvidia_tao" for model in models)
     assert all(model.tao_require_gpu is False for model in models)
+    assert all(model.inspection_completion_mode == "minimum_views" for model in models)
+    assert all(model.yolo_confidence >= 0.70 for model in models)
+    assert all(model.counting_axis == "y" for model in models)

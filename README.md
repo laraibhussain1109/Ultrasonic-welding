@@ -223,3 +223,50 @@ Flash `firmware/esp32_fail_output/esp32_fail_output.ino` and configure the seria
 pip install -e '.[dev]'
 pytest -q
 ```
+
+## Hybrid rotating-blower inspection
+
+Production inspection retains NVIDIA TAO VisualChangeNet but no longer treats a
+single change-map pixel as a physical defect. `CALIBRATE` builds a diverse,
+structural reference bank from reviewed normal images, qualifies conservative
+Euclidean registration, and learns robust fin geometry. Live views use only the
+best valid match among three descriptor candidates and run TAO once. Horizontal
+fin orientation, pitch, continuity and gradient periodicity are evaluated in a
+central cylinder band; persistent vertical support ribs are excluded.
+
+Fusion immediately rejects catastrophic/corroborated geometry, while a TAO-only
+change is provisional. Broad, smooth glare with intact geometry is reported as
+`LIKELY_GLARE` and does not latch rejection. Invalid registration is an unusable
+view; a part with insufficient qualified views fails closed. Operator imagery
+keeps the camera pixels and draws red outlines only for confirmed defects.
+Configuration is per model through the `hybrid_*`, `registration_*`,
+`geometry_*`, `glare_*`, inspection-band, TAO evidence, reference-bank,
+`longitudinal_sections`, and persistence fields in `config/models.json`.
+
+The qualified Windows GPU path loads the PyTorch CUDA runtime before ONNX
+Runtime, calls `onnxruntime.preload_dlls()`, and executes TAO through
+`CUDAExecutionProvider` with `CPUExecutionProvider` as the configured fallback.
+TensorRT is an optional future optimization and is not requested by default.
+
+For fixed-nest rotating blowers, `inspection_completion_mode: "minimum_views"`
+turns the configured rotation-view count into the physical-part completion
+trigger. Conveyor installations can retain `"counting_line"`. The UI labels a
+passing sample as `VIEW PASS` and reserves final `PASS` for completed sessions.
+
+Production YOLO crops require confidence strictly above 70%. Supplied blower
+profiles use `counting_axis: "y"`, so the displayed counting line runs horizontally
+along the image x-axis and crossing is measured from vertical part motion.
+
+Fixed-nest view counting requires structural phase diversity: a stationary
+blower produces one view and `WAITING FOR ROTATION`, not eight repeated decisions.
+Missing- and tilted-fin reasons require corroborating geometry measurements.
+Because pitch and periodicity share an autocorrelation source, missing-fin
+classification also requires an independent continuity disruption; global pitch,
+periodicity, or orientation noise alone cannot reject a part.
+
+For fixed-nest inspection, `lock_roi_after_confirmation` makes YOLO a startup
+localizer rather than a per-frame crop controller. Start Inspection displays the
+detected complete-blower box and asks the operator to accept, recapture, or
+cancel it. Once accepted, its full-frame coordinates remain immutable for every
+rotation view in that inspection session; changing YOLO boxes therefore cannot
+zoom into a few fins or expose neighboring/table regions mid-inspection.

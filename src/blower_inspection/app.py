@@ -46,7 +46,7 @@ from .camera import (
 from .config import ModelRegistry, PartModelConfig, ensure_model_folders
 from .daily_stats import DailyStatistics, operating_day
 from .fail_output import ESP32FailOutputBridge
-from .frame_selection import SharpFrameSampler
+from .frame_selection import RotationPhaseGate, SharpFrameSampler
 from .inspector_factory import inspector_for_model
 from .trainer import InspectionResult
 from .tao_training import run_visual_changenet_task
@@ -195,11 +195,16 @@ class InspectionWindow(QWidget):
         self.latest_annotated_frame = None
         self.current_display_frame = None
         self.live_roi_bounds = None
+        self.locked_roi_confidence = 0.0
+        self.locked_track_id = 1
+        self.locked_part_present = False
+        self.locked_missing_frames = 0
         self.raw_frame = None
         self.fps_frame_count = 0
         self.fps_started_at = time.perf_counter()
         self.tolerance_percent = 5.0
         self.frame_sampler: SharpFrameSampler | None = None
+        self.rotation_phase_gate: RotationPhaseGate | None = None
         self.pending_sharp_frames = {}
         self.daily_statistics = DailyStatistics()
         self.stats = self.daily_statistics.counts()
@@ -542,6 +547,14 @@ class InspectionWindow(QWidget):
         if model.yolo_model_path is None:
             QMessageBox.critical(self, "YOLO model required", "Select your trained YOLO best.pt with YOLO PART MODEL before starting live inspection.")
             return
+        # Applying camera settings also rebuilds the model-specific inspector.
+        # Do this before readiness validation so the validated TAO session is
+        # the same instance used for logging and inference.
+        try:
+            self._apply_selected_camera_settings()
+        except Exception as exc:
+            QMessageBox.critical(self, "Camera settings error", str(exc))
+            return
         if model.algorithm == "nvidia_tao":
             try:
                 self.inspector.validate_ready(model)
@@ -549,18 +562,29 @@ class InspectionWindow(QWidget):
                 QMessageBox.critical(self, "TAO model not ready", str(exc))
                 return
         try:
-            self._apply_selected_camera_settings()
             self.part_detector = YoloByteTrackDetector(model.yolo_model_path, model.yolo_confidence)
             self.rotating_parts = RotatingPartInspector(
                 model.inspection_lost_timeout_s,
                 model.counting_line_ratio,
                 model.counting_direction,
                 model.minimum_rotation_views,
+                model.weak_candidate_required_views,
+                model.inspection_completion_mode,
+                model.counting_axis,
             )
             self.frame_sampler = SharpFrameSampler(
                 model.capture_burst_frames, model.minimum_sharpness
             )
+            self.rotation_phase_gate = RotationPhaseGate(
+                model.minimum_rotation_descriptor_distance,
+                maximum_history=max(24, model.minimum_rotation_views * 2),
+            )
             self.camera.open()
+            if model.lock_roi_after_confirmation and not self._confirm_and_lock_roi(model):
+                self.camera.close()
+                self.part_detector = None
+                self.rotating_parts = None
+                return
         except Exception as exc:
             QMessageBox.critical(self, "Camera error", str(exc))
             return
@@ -575,13 +599,16 @@ class InspectionWindow(QWidget):
         self.last_inference_at = 0.0
         self.latest_annotated_frame = None
         self.current_display_frame = None
-        self.live_roi_bounds = None
+        if not model.lock_roi_after_confirmation:
+            self.live_roi_bounds = None
         self.raw_frame = None
         self.pending_sharp_frames = {}
         try:
             device_name = self.inspector.runtime_device_name()
+            runtime_summary = getattr(self.inspector, "runtime_summary", lambda: device_name)()
         except Exception as exc:
             device_name = f"unavailable ({exc})"
+            runtime_summary = f"TAO runtime diagnostics unavailable: {exc}"
         if self.fail_output.config.enabled:
             # ESP32FailOutputBridge is deliberately asynchronous and exposes
             # send_result/reset rather than the synchronous connect/set_fail
@@ -595,7 +622,82 @@ class InspectionWindow(QWidget):
             f"LIVE INSPECTION STARTED {self.selected_model().id} | "
             f"CAMERA {self.camera.width}x{self.camera.height}@{self.camera.fps} | DEVICE {device_name} | {esp32_status}"
         )
+        self.log.addItem(runtime_summary)
         self.live_timer.start(1)
+
+    def _confirm_and_lock_roi(self, model: PartModelConfig) -> bool:
+        """Use YOLO once and require operator approval of a fixed live ROI."""
+        assert self.part_detector is not None
+        while True:
+            # Discard initial auto-exposure frames before presenting the box.
+            raw_frame = None
+            for _ in range(3):
+                raw_frame = self.camera.read()
+            assert raw_frame is not None
+            self.raw_frame = raw_frame
+            try:
+                detected = self.part_detector.detect_best(raw_frame)
+            except ValueError as exc:
+                choice = QMessageBox.warning(
+                    self, "ROI not found", f"{exc}\n\nRetry the camera frame?",
+                    QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Retry,
+                )
+                if choice == QMessageBox.StandardButton.Retry:
+                    continue
+                return False
+
+            preview = raw_frame.copy()
+            x, y, w, h = detected.bounds
+            cv2.rectangle(preview, (x, y), (x + w, y + h), (0, 255, 255), 3)
+            cv2.putText(preview, f"PROPOSED FIXED ROI {detected.confidence:.0%}",
+                        (x, max(24, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 255, 255), 2)
+            self.show_frame(preview)
+            QApplication.processEvents()
+            choice = QMessageBox.question(
+                self,
+                "Confirm fixed inspection ROI",
+                "Is the yellow box the correct complete blower ROI?\n\n"
+                "YES: lock this exact ROI for the entire inspection.\n"
+                "NO: capture again.\nCANCEL: do not start inspection.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Yes,
+            )
+            if choice == QMessageBox.StandardButton.No:
+                continue
+            if choice == QMessageBox.StandardButton.Cancel:
+                return False
+            self.live_roi_bounds = detected.bounds
+            self.locked_roi_confidence = detected.confidence
+            self.locked_track_id = 1
+            self.locked_part_present = True
+            self.locked_missing_frames = 0
+            self.log.addItem(
+                f"LOCKED ROI {model.id} | x={x} y={y} w={w} h={h} | YOLO={detected.confidence:.0%}"
+            )
+            return True
+
+    def _locked_roi_tracks(self, raw_frame) -> list[TrackedPart]:
+        """Return the approved immutable ROI, with debounced part presence."""
+        if self.live_roi_bounds is None:
+            return []
+        roi = crop_bounds(raw_frame, self.live_roi_bounds)
+        if is_part_present(roi):
+            if not self.locked_part_present:
+                self.locked_track_id += 1
+            self.locked_part_present = True
+            self.locked_missing_frames = 0
+        else:
+            self.locked_missing_frames += 1
+            # A rotating, manually focused blower may look texture-poor for a
+            # few consecutive blurred frames. Require roughly half a second of
+            # absence before ending the fixed-nest part session.
+            model = self.selected_model()
+            missing_limit = max(model.capture_burst_frames, model.camera_fps // 2)
+            if self.locked_missing_frames >= missing_limit:
+                self.locked_part_present = False
+                return []
+        return [TrackedPart(self.locked_track_id, self.live_roi_bounds, self.locked_roi_confidence)]
 
     def _process_live_frame(self) -> None:
         if not self.inspection_running:
@@ -604,13 +706,15 @@ class InspectionWindow(QWidget):
             raw_frame = self.camera.read()
             self.raw_frame = raw_frame
             assert self.part_detector is not None and self.rotating_parts is not None
-            tracks = self.part_detector.track(raw_frame)
-            self.rotating_parts.observe_tracks(tracks, raw_frame.shape[1])
+            tracks = (self._locked_roi_tracks(raw_frame) if self.live_roi_bounds is not None
+                      else self.part_detector.track(raw_frame))
+            self.rotating_parts.observe_tracks(tracks, raw_frame.shape[1], frame_height=raw_frame.shape[0])
             frame = self._draw_tracks(
                 raw_frame,
                 tracks,
                 self.rotating_parts.counting_line_ratio,
                 self.rotating_parts.counting_direction,
+                self.rotating_parts.counting_axis,
             )
         except Exception as exc:
             self._handle_live_error(f"Camera frame error: {exc}")
@@ -627,6 +731,8 @@ class InspectionWindow(QWidget):
         assert self.frame_sampler is not None
         active_ids = {part.track_id for part in tracks}
         self.frame_sampler.discard_missing(active_ids)
+        if self.rotation_phase_gate is not None:
+            self.rotation_phase_gate.discard_missing(active_ids)
         self.pending_sharp_frames = {
             track_id: selected
             for track_id, selected in self.pending_sharp_frames.items()
@@ -637,7 +743,13 @@ class InspectionWindow(QWidget):
                 part.track_id, crop_bounds(raw_frame, part.bounds)
             )
             if selected is not None:
-                self.pending_sharp_frames[part.track_id] = selected
+                if self.rotation_phase_gate is None or self.rotation_phase_gate.accept(part.track_id, selected.frame):
+                    self.pending_sharp_frames[part.track_id] = selected
+                elif self.inference_worker is None:
+                    self.status_badge.setObjectName("statusStandby")
+                    self.status_badge.setText("WAITING FOR ROTATION")
+                    self.status_badge.style().unpolish(self.status_badge)
+                    self.status_badge.style().polish(self.status_badge)
         now = time.perf_counter()
         if (
             self.inference_worker is None
@@ -647,7 +759,8 @@ class InspectionWindow(QWidget):
             # Give each simultaneously tracked part one exact-crop inspection
             # before spending more frames on any already observed rotation.
             assert self.rotating_parts is not None
-            candidates = [part for part in tracks if part.track_id in self.pending_sharp_frames]
+            candidates = [part for part in tracks if part.track_id in self.pending_sharp_frames
+                          and self.rotating_parts.accepts_inspection(part.track_id)]
             if not candidates:
                 return
             part = max(
@@ -676,29 +789,50 @@ class InspectionWindow(QWidget):
             self._handle_no_part_result(result, latency_ms)
             return
         completed_part = None
-        latched_failure = not result.is_pass
+        latched_failure = result.status == "FAIL"
+        view_progress = (0, 0, self.selected_model().minimum_rotation_views)
         if self.rotating_parts is not None:
             completed_part = self.rotating_parts.record_inspection(
-                track_id, is_pass=result.is_pass, anomaly_score=result.anomaly_score
+                track_id, is_pass=result.is_pass, anomaly_score=result.anomaly_score,
+                view_valid=result.view_valid, immediate_failure=result.status == "FAIL",
+                provisional_candidate=result.status == "CANDIDATE",
+                geometry_score=result.geometry_score or 0.0,
+                tao_score=result.tao_score, reason_codes=result.reason_codes,
             )
             latched_failure = self.rotating_parts.latched_failure(track_id) or latched_failure
+            view_progress = ((completed_part.frames_inspected, completed_part.valid_views,
+                              self.rotating_parts.minimum_rotation_views) if completed_part is not None
+                             else self.rotating_parts.view_progress(track_id))
         self.score_slider.setValue(int(result.anomaly_score * 1000))
         self.score_label.setText(f"{result.anomaly_score:.3f}")
-        self.status_badge.setObjectName("statusFail" if latched_failure else "statusStandby")
-        self.status_badge.setText("FAIL LATCHED" if latched_failure else "INSPECTING")
+        if latched_failure:
+            badge_object, badge_text = "statusFail", "FAIL LATCHED"
+        elif result.status == "PASS":
+            badge_object, badge_text = "statusPass", "VIEW PASS"
+        elif result.status == "VIEW INVALID":
+            badge_object, badge_text = "statusStandby", "VIEW INVALID"
+        else:
+            badge_object, badge_text = "statusStandby", "INSPECTING"
+        self.status_badge.setObjectName(badge_object)
+        self.status_badge.setText(badge_text)
         self.status_badge.style().unpolish(self.status_badge)
         self.status_badge.style().polish(self.status_badge)
         if result.display_image is not None:
             self.latest_annotated_frame = result.display_image
             self.show_frame(result.display_image)
-        bad_sector_text = ",".join(str(sector) for sector in result.bad_sectors[:8]) if result.bad_sectors else "-"
-        if len(result.bad_sectors) > 8:
-            bad_sector_text += ",..."
+        reason_text = ", ".join(result.reason_codes) or "NORMAL"
+        geometry_components = result.geometry_components
+        geometry_detail = (f"PITCH: {geometry_components.get('pitch', 0):.2f}   "
+                           f"CONT: {geometry_components.get('continuity', 0):.2f}   "
+                           f"BROKEN: {geometry_components.get('broken', 0):.2f}")
         self.last_result.setText(
-            f"TRACK:  {track_id} (rotation in progress)\nSCORE:  {result.anomaly_score:.3f}\n"
-            f"COVERAGE:  {result.defect_area_px}px\nBOXES:  {len(result.defect_boxes)}\n"
-            f"BAD SECTORS:  {bad_sector_text}\nSECTOR RATIO:  {result.bad_sector_ratio:.2%}\n"
-            f"LATENCY:  {latency_ms:.1f} ms"
+            f"TRACK: {track_id}   VIEW SCORE: {result.anomaly_score:.2f}\n"
+            f"TAO: {result.tao_score or 0:.2f}   GEOMETRY: {result.geometry_score or 0:.2f}\n"
+            f"GLARE: {result.glare_score or 0:.2f}   REGISTRATION: {result.registration_score or 0:.2f}\n"
+            f"VIEW QUALITY: {result.view_quality_score if result.view_quality_score is not None else 1.0:.2f}\n"
+            f"{geometry_detail}\n"
+            f"VIEWS: {view_progress[1]}/{view_progress[2]} valid ({view_progress[0]} attempted)\n"
+            f"REASON: {reason_text}\nLATENCY: {latency_ms:.1f} ms"
         )
         self.latency_top.setText(f"LATENCY:  {latency_ms:.0f} ms")
         self.log.addItem(f"VIEW {result.status} | track={track_id} | score={result.anomaly_score:.3f}")
@@ -717,20 +851,22 @@ class InspectionWindow(QWidget):
 
     @staticmethod
     def _draw_tracks(
-        frame, tracks: list[TrackedPart], counting_line_ratio: float, counting_direction: str
+        frame, tracks: list[TrackedPart], counting_line_ratio: float, counting_direction: str,
+        counting_axis: str = "x",
     ):
         display = frame.copy()
-        line_x = int(round(display.shape[1] * counting_line_ratio))
-        cv2.line(display, (line_x, 0), (line_x, display.shape[0] - 1), (0, 255, 255), 2)
-        cv2.putText(
-            display,
-            "COUNT LINE " + (">" if counting_direction == "left_to_right" else "<"),
-            (max(4, line_x - 135), 24),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (0, 255, 255),
-            2,
-        )
+        if counting_axis == "y":
+            line_y = int(round(display.shape[0] * counting_line_ratio))
+            cv2.line(display, (0, line_y), (display.shape[1] - 1, line_y), (0, 255, 255), 2)
+            marker = "v" if counting_direction == "top_to_bottom" else "^"
+            cv2.putText(display, f"COUNT LINE {marker}", (8, max(20, line_y - 8)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
+        else:
+            line_x = int(round(display.shape[1] * counting_line_ratio))
+            cv2.line(display, (line_x, 0), (line_x, display.shape[0] - 1), (0, 255, 255), 2)
+            marker = ">" if counting_direction == "left_to_right" else "<"
+            cv2.putText(display, f"COUNT LINE {marker}", (max(4, line_x - 135), 24),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
         for track in tracks:
             x, y, w, h = track.bounds
             cv2.rectangle(display, (x, y), (x + w, y + h), (0, 217, 255), 2)
@@ -883,11 +1019,17 @@ class InspectionWindow(QWidget):
         self.latest_annotated_frame = None
         self.current_display_frame = None
         self.live_roi_bounds = None
+        self.locked_roi_confidence = 0.0
+        self.locked_part_present = False
+        self.locked_missing_frames = 0
         self.raw_frame = None
         self.pending_sharp_frames = {}
         if self.frame_sampler is not None:
             self.frame_sampler.clear()
         self.frame_sampler = None
+        if self.rotation_phase_gate is not None:
+            self.rotation_phase_gate.clear()
+        self.rotation_phase_gate = None
         self.viewer.clear()
         self.viewer.setText("NO CAMERA FRAME")
         self.fps_top.setText("FPS:  -")
