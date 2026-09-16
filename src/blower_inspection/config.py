@@ -30,6 +30,7 @@ class PartModelConfig:
     inspection_lost_timeout_s: float = 1.0
     capture_burst_frames: int = 5
     minimum_sharpness: float = 60.0
+    crop_aspect_ratio_tolerance: float = 0.35
     minimum_rotation_views: int = 8
     inspection_completion_mode: str = "counting_line"
     # Slightly left of frame center so the part reaches the count line within
@@ -163,6 +164,7 @@ class ModelRegistry:
             inspection_lost_timeout_s=float(entry.get("inspection_lost_timeout_s", 1.0)),
             capture_burst_frames=max(2, int(entry.get("capture_burst_frames", 5))),
             minimum_sharpness=max(0.0, float(entry.get("minimum_sharpness", 60.0))),
+            crop_aspect_ratio_tolerance=max(0.05, float(entry.get("crop_aspect_ratio_tolerance", 0.35))),
             minimum_rotation_views=max(1, int(entry.get("minimum_rotation_views", 8))),
             inspection_completion_mode=str(entry.get("inspection_completion_mode", "counting_line")),
             counting_line_ratio=float(entry.get("counting_line_ratio", 0.45)),

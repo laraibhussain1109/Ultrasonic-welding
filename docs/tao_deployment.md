@@ -590,6 +590,12 @@ that rotates in a fixed nest; the final PASS/FAIL is published after
 `minimum_rotation_views`, and the same tracked part is not counted again until it
 leaves the camera. The supplied BF configurations use `minimum_views`.
 
+Hybrid calibration version 2 stores the normal sharpness distribution and median
+YOLO crop aspect ratio. Live crops below the robust sharpness floor return
+`VIEW INVALID / MOTION_BLUR`; crops outside `crop_aspect_ratio_tolerance` return
+`VIEW INVALID / UNSTABLE_COMPONENT_CROP`. These views never run geometry or latch
+a defect. Updating from hybrid calibration version 1 requires recalibration.
+
 ### Windows GPU provider warnings
 
 The verified Windows deployment uses Python 3.13, PyTorch 2.12.0+cu132 and

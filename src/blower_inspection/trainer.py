@@ -43,6 +43,7 @@ class InspectionResult:
     reason_codes: tuple[str, ...] = field(default_factory=tuple)
     reference_index: int | None = None
     view_valid: bool = True
+    view_quality_score: float | None = None
     latencies_ms: dict[str, float] = field(default_factory=dict)
 
     @property

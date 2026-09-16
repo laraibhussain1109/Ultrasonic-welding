@@ -28,6 +28,7 @@ from .hybrid_fusion import TaoEvidence, fuse_evidence
 from .reference_bank import ReferenceBank
 from .registration import RegistrationResult, register_to_reference
 from .training_progress import TrainingProgress
+from .frame_selection import SharpFrameSampler
 
 CALIBRATION_VERSION = 4
 LOGGER = logging.getLogger(__name__)
@@ -103,7 +104,7 @@ class TaoInspector:
         else:
             data = json.loads(path.read_text(encoding="utf-8"))
             self._geometry_calibrations[path] = (stamp, data)
-        if (data.get("version") != 1 or data.get("model_sha256") != calibration.model_sha256 or
+        if (data.get("version") != 2 or data.get("model_sha256") != calibration.model_sha256 or
                 data.get("reference_bank_sha256") != calibration.reference_bank_sha256):
             raise RuntimeError("Hybrid calibration is stale; inspection is inhibited")
         return data["geometry"]
@@ -421,7 +422,15 @@ class TaoInspector:
             bank.manifest_sha256, len(bank.images), len(paths), len(excluded_registration_sources))
         geometry = FinGeometryInspector.calibrate(qualified_crops, band_top=config.inspection_band_top_ratio,
                                                    band_bottom=config.inspection_band_bottom_ratio)
-        hybrid = {"version": 1, "model_sha256": calibration.model_sha256,
+        sharpness_values = np.asarray([SharpFrameSampler.sharpness(item) for item in qualified_crops])
+        aspect_values = np.asarray([item.shape[1] / max(item.shape[0], 1) for item in qualified_crops])
+        geometry["view_quality"] = {
+            "sharpness_median": float(np.median(sharpness_values)),
+            "sharpness_p05": float(np.quantile(sharpness_values, .05)),
+            "minimum_sharpness": float(max(config.minimum_sharpness, np.quantile(sharpness_values, .05) * .25)),
+            "aspect_ratio_median": float(np.median(aspect_values)),
+        }
+        hybrid = {"version": 2, "model_sha256": calibration.model_sha256,
                   "reference_bank_sha256": bank.manifest_sha256, "calibration_image_count": len(paths),
                   "qualified_calibration_image_count": len(qualified_crops),
                   "excluded_registration_count": len(excluded_registration_sources),
@@ -471,6 +480,19 @@ class TaoInspector:
         if crop_to_component:
             image = crop_component_roi(image, roi_ratios=config.roi_ratios)
         calibration = self._calibration(config)
+        geometry_calibration = self._geometry_calibration(config, calibration)
+        quality = geometry_calibration.get("view_quality", {})
+        sharpness = SharpFrameSampler.sharpness(image)
+        minimum_sharpness = float(quality.get("minimum_sharpness", config.minimum_sharpness))
+        expected_aspect = float(quality.get("aspect_ratio_median", image.shape[1] / max(image.shape[0], 1)))
+        actual_aspect = image.shape[1] / max(image.shape[0], 1)
+        aspect_error = abs(np.log(max(actual_aspect, 1e-6) / max(expected_aspect, 1e-6)))
+        if sharpness < minimum_sharpness:
+            return self._invalid_view(image, "MOTION_BLUR", total_started,
+                                      quality_score=sharpness / max(minimum_sharpness, 1e-6))
+        if aspect_error > np.log(1.0 + config.crop_aspect_ratio_tolerance):
+            return self._invalid_view(image, "UNSTABLE_COMPONENT_CROP", total_started,
+                                      quality_score=max(0.0, 1.0 - aspect_error))
         try:
             bank = self._reference_bank(config)
         except (FileNotFoundError, RuntimeError):
@@ -530,7 +552,7 @@ class TaoInspector:
         tao_evidence = TaoEvidence(raw_map, score_map / max(calibration.pixel_threshold, 1e-12), anomaly_score,
                                    peak_score, defect_mask, defect_area, bad_regions=bad_sectors)
         geometry_started = time.perf_counter()
-        geometry = FinGeometryInspector(self._geometry_calibration(config, calibration),
+        geometry = FinGeometryInspector(geometry_calibration,
             band_top=config.inspection_band_top_ratio, band_bottom=config.inspection_band_bottom_ratio).inspect(registration.aligned_image)
         # Geometry is intentionally evaluated at the native long-blower crop,
         # while TAO produces a square inference map. Fusion masks must share one
@@ -590,4 +612,16 @@ class TaoInspector:
         return InspectionResult(status, decision.hybrid_score, defect_area, bad_ratio, bad_sectors, overlay_path,
             report_path, display, boxes, anomaly_score, geometry.score, geometry.periodicity_score, glare.score,
             registration.correlation, decision.hybrid_score, decision.reason_codes, registration.reference_index, True,
-            {"tao": tao_ms, "registration": registration_ms, "geometry": geometry_ms, "total": (time.perf_counter()-total_started)*1000})
+            None, {"tao": tao_ms, "registration": registration_ms, "geometry": geometry_ms, "total": (time.perf_counter()-total_started)*1000})
+
+    @staticmethod
+    def _invalid_view(image: np.ndarray, reason: str, started: float, *, quality_score: float = 0.0) -> InspectionResult:
+        """Return a retryable quality result before TAO/geometry can latch a defect."""
+        return InspectionResult(
+            "VIEW INVALID", 0.0, 0, 0.0, [], display_image=image.copy(),
+            tao_score=0.0, geometry_score=0.0, periodicity_score=0.0,
+            glare_score=0.0, registration_score=None,
+            hybrid_score=0.0, reason_codes=("INSUFFICIENT_VIEW_QUALITY", reason),
+            view_valid=False, view_quality_score=float(np.clip(quality_score, 0.0, 1.0)),
+            latencies_ms={"total": (time.perf_counter() - started) * 1000},
+        )

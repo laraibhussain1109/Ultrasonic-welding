@@ -155,6 +155,9 @@ def test_calibration_excludes_an_unregistrable_normal_instead_of_aborting(tmp_pa
     assert data["sample_count"] == 20
     assert data["calibration_image_count"] == 21
     assert data["excluded_registration_count"] == 1
+    hybrid = json.loads(TaoInspector.hybrid_calibration_path(cfg).read_text())
+    assert hybrid["version"] == 2
+    assert hybrid["geometry"]["view_quality"]["minimum_sharpness"] >= cfg.minimum_sharpness
 
 
 def test_calibration_valid_ratio_is_configurable(tmp_path):

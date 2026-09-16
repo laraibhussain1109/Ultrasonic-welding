@@ -75,3 +75,10 @@ ByteTrack ID until the physical part leaves. A passing individual view is shown
 as `VIEW PASS`; only session completion is shown and counted as final `PASS`.
 If twice the required view count is attempted without enough valid views, the
 fixed-nest session completes as a fail-closed `INSUFFICIENT_VIEW_QUALITY` fault.
+
+Before registration or defect scoring, calibrated view-quality gates reject
+motion blur and abnormal crop aspect ratio as retryable invalid views. Burst
+selection also prevents a transient, small YOLO crop from winning merely because
+its Laplacian variance is artificially high. Reflection-normalized geometry and
+direct glare-mask exclusion prevent smooth moving highlights from manufacturing
+isolated broken-fin evidence; strong surrounding geometry remains authoritative.

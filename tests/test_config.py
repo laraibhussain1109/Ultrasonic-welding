@@ -42,6 +42,7 @@ def test_model_registry_defaults_camera_and_allows_missing_roi(tmp_path):
     assert model.tao_change_class_index == 1
     assert model.registration_calibration_min_valid_ratio == 0.70
     assert model.inspection_completion_mode == "counting_line"
+    assert model.crop_aspect_ratio_tolerance == 0.35
     assert model.tao_candidate_min_area_ratio == 0.001
     assert model.tao_candidate_max_area_ratio == 0.12
 

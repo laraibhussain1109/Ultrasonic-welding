@@ -28,3 +28,18 @@ def test_sampler_rejects_a_burst_when_every_picture_is_blurry():
     assert sampler.offer(9, flat) is None
     assert sampler.offer(9, flat) is None
     assert sampler.rejected_blurry_frames == 2
+
+
+def test_sampler_does_not_choose_transient_small_zoomed_detector_crop():
+    normal = np.zeros((80, 240, 3), np.uint8)
+    normal[:, ::8] = 180
+    zoomed = np.zeros((35, 60, 3), np.uint8)
+    zoomed[:, ::2] = 255
+    sampler = SharpFrameSampler(burst_size=3, minimum_sharpness=1.0)
+
+    assert sampler.offer(3, normal) is None
+    assert sampler.offer(3, zoomed) is None
+    selected = sampler.offer(3, normal)
+
+    assert selected is not None
+    assert selected.frame.shape == normal.shape

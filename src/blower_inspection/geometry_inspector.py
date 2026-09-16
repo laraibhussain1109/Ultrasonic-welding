@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 import cv2
 import numpy as np
 
-from .trainer import broken_fin_mask, smooth_reflection_mask
+from .trainer import broken_fin_mask, reflection_invariant_gray, smooth_reflection_mask
 
 
 @dataclass(frozen=True)
@@ -51,7 +51,11 @@ def support_rib_mask(image: np.ndarray) -> tuple[np.ndarray, float]:
 
 
 def _features(image: np.ndarray, top: float, bottom: float) -> tuple[dict[str, float], np.ndarray, np.ndarray]:
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    # Remove broad illumination gradients before structural measurements. This
+    # keeps moving cylindrical highlights from rotating the dominant-gradient
+    # estimate or disrupting pitch/periodicity evidence.
+    normalized = reflection_invariant_gray(image, image.shape[:2])
+    gray = cv2.normalize(normalized, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
     band = inspection_band_mask(gray.shape, top, bottom)
     ribs, rib_confidence = support_rib_mask(gray)
@@ -109,7 +113,11 @@ class FinGeometryInspector:
         periodicity = high("periodicity", features["periodicity"])
         continuity = high("continuity", features["continuity"])
         broken = broken_fin_mask(image, image.shape[:2])
-        broken &= ~ribs & inspection_band_mask(image.shape[:2], self.band_top, self.band_bottom)
+        reflection = smooth_reflection_mask(image, image.shape[:2])
+        # Reflection may reduce geometry authority but cannot erase surrounding
+        # strong geometry scores. Only pixels directly identified as smooth
+        # glare are excluded from the isolated-gap mask.
+        broken &= ~ribs & ~reflection & inspection_band_mask(image.shape[:2], self.band_top, self.band_bottom)
         broken_score = float(np.clip(np.count_nonzero(broken) / max(image.size / 3 * .001, 1), 0, 2))
         score = max(broken_score, orientation, pitch, periodicity, continuity,
                     .55 * orientation + .35 * periodicity + .3 * continuity)
