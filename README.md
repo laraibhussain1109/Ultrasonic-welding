@@ -247,3 +247,8 @@ The qualified Windows GPU path loads the PyTorch CUDA runtime before ONNX
 Runtime, calls `onnxruntime.preload_dlls()`, and executes TAO through
 `CUDAExecutionProvider` with `CPUExecutionProvider` as the configured fallback.
 TensorRT is an optional future optimization and is not requested by default.
+
+For fixed-nest rotating blowers, `inspection_completion_mode: "minimum_views"`
+turns the configured rotation-view count into the physical-part completion
+trigger. Conveyor installations can retain `"counting_line"`. The UI labels a
+passing sample as `VIEW PASS` and reserves final `PASS` for completed sessions.

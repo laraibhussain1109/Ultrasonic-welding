@@ -584,6 +584,12 @@ visual change; a larger, broadly distributed mask is an unlocalized phase or
 appearance mismatch. Neither is allowed to accumulate as a persistent localized
 defect, but corroborating geometry can still reject independently.
 
+`inspection_completion_mode` controls when a physical-part verdict is published.
+Use `counting_line` for a translating conveyor. Use `minimum_views` for a blower
+that rotates in a fixed nest; the final PASS/FAIL is published after
+`minimum_rotation_views`, and the same tracked part is not counted again until it
+leaves the camera. The supplied BF configurations use `minimum_views`.
+
 ### Windows GPU provider warnings
 
 The verified Windows deployment uses Python 3.13, PyTorch 2.12.0+cu132 and

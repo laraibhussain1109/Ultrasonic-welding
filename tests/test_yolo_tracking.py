@@ -80,3 +80,42 @@ def test_crossed_part_waits_for_minimum_surface_view_count():
 
     assert completed is not None
     assert completed.frames_inspected == 3
+
+
+def test_fixed_station_part_completes_after_minimum_rotation_views_once():
+    inspector = RotatingPartInspector(
+        counting_line_ratio=0.8, minimum_rotation_views=3,
+        completion_mode="minimum_views",
+    )
+    inspector.observe_tracks([tracked(9, 50)], frame_width=100, now=0.0)
+
+    assert inspector.record_inspection(9, is_pass=True, anomaly_score=.2) is None
+    assert inspector.record_inspection(9, is_pass=True, anomaly_score=.1) is None
+    completed = inspector.record_inspection(9, is_pass=True, anomaly_score=.1)
+
+    assert completed is not None
+    assert completed.status == "PASS"
+    assert completed.valid_views == 3
+    assert not inspector.accepts_inspection(9)
+
+    # The same ByteTrack ID cannot be counted repeatedly while the part remains.
+    inspector.observe_tracks([tracked(9, 50)], frame_width=100, now=1.0)
+    assert not inspector.accepts_inspection(9)
+    inspector.observe_tracks([], frame_width=100, now=2.0)
+    inspector.observe_tracks([tracked(9, 50)], frame_width=100, now=3.0)
+    assert inspector.accepts_inspection(9)
+
+
+def test_fixed_station_fails_closed_after_too_many_invalid_views():
+    inspector = RotatingPartInspector(minimum_rotation_views=2, completion_mode="minimum_views")
+    inspector.observe_tracks([tracked(4, 50)], frame_width=100)
+
+    for _ in range(3):
+        assert inspector.record_inspection(4, is_pass=False, anomaly_score=0,
+                                           view_valid=False, immediate_failure=False) is None
+    completed = inspector.record_inspection(4, is_pass=False, anomaly_score=0,
+                                             view_valid=False, immediate_failure=False)
+
+    assert completed is not None
+    assert completed.status == "FAIL"
+    assert "INSUFFICIENT_VIEW_QUALITY" in completed.reason_codes

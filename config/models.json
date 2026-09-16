@@ -51,7 +51,8 @@
       "longitudinal_sections": 6,
       "registration_calibration_min_valid_ratio": 0.7,
       "tao_candidate_min_area_ratio": 0.001,
-      "tao_candidate_max_area_ratio": 0.12
+      "tao_candidate_max_area_ratio": 0.12,
+      "inspection_completion_mode": "minimum_views"
     },
     {
       "id": "BF-002",
@@ -103,7 +104,8 @@
       "longitudinal_sections": 7,
       "registration_calibration_min_valid_ratio": 0.7,
       "tao_candidate_min_area_ratio": 0.001,
-      "tao_candidate_max_area_ratio": 0.12
+      "tao_candidate_max_area_ratio": 0.12,
+      "inspection_completion_mode": "minimum_views"
     },
     {
       "id": "BF-003",
@@ -155,7 +157,8 @@
       "longitudinal_sections": 8,
       "registration_calibration_min_valid_ratio": 0.7,
       "tao_candidate_min_area_ratio": 0.001,
-      "tao_candidate_max_area_ratio": 0.12
+      "tao_candidate_max_area_ratio": 0.12,
+      "inspection_completion_mode": "minimum_views"
     },
     {
       "id": "BF-004",
@@ -207,7 +210,8 @@
       "longitudinal_sections": 9,
       "registration_calibration_min_valid_ratio": 0.7,
       "tao_candidate_min_area_ratio": 0.001,
-      "tao_candidate_max_area_ratio": 0.12
+      "tao_candidate_max_area_ratio": 0.12,
+      "inspection_completion_mode": "minimum_views"
     }
   ]
 }

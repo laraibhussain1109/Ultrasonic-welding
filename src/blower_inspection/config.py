@@ -31,6 +31,7 @@ class PartModelConfig:
     capture_burst_frames: int = 5
     minimum_sharpness: float = 60.0
     minimum_rotation_views: int = 8
+    inspection_completion_mode: str = "counting_line"
     # Slightly left of frame center so the part reaches the count line within
     # the usable fixture/conveyor travel visible in the production camera.
     counting_line_ratio: float = 0.45
@@ -163,6 +164,7 @@ class ModelRegistry:
             capture_burst_frames=max(2, int(entry.get("capture_burst_frames", 5))),
             minimum_sharpness=max(0.0, float(entry.get("minimum_sharpness", 60.0))),
             minimum_rotation_views=max(1, int(entry.get("minimum_rotation_views", 8))),
+            inspection_completion_mode=str(entry.get("inspection_completion_mode", "counting_line")),
             counting_line_ratio=float(entry.get("counting_line_ratio", 0.45)),
             counting_direction=str(entry.get("counting_direction", "left_to_right")),
             algorithm=str(entry.get("algorithm", "nvidia_tao")),

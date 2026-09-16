@@ -36,6 +36,14 @@ def test_app_does_not_replace_the_inspector_after_readiness_validation():
     assert "self._apply_selected_camera_settings()" not in source[validation:camera_open]
 
 
+def test_app_distinguishes_view_pass_from_final_part_pass():
+    source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
+
+    assert 'badge_object, badge_text = "statusPass", "VIEW PASS"' in source
+    assert "VIEW SCORE:" in source
+    assert "VIEWS:" in source
+
+
 def test_app_imports_backend_factory_from_its_own_module():
     source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
     assert "from .inspector_factory import inspector_for_model" in source

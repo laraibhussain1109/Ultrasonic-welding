@@ -103,12 +103,12 @@ class CompletedPart:
 
 
 class RotatingPartInspector:
-    """Latch every surface result until the physical part crosses a count line.
+    """Aggregate rotating views until the configured physical completion event.
 
     ByteTrack IDs are implementation details and can change when a hand briefly
     occludes a rotating cylinder. New IDs that overlap a recent active detection
-    are therefore attached to the same physical session. A session is finalized
-    only after its center crosses the configured line in the configured direction.
+    are therefore attached to the same physical session. Conveyor mode finalizes
+    at line crossing; fixed-nest mode finalizes after the required rotation views.
     """
 
     def __init__(
@@ -118,24 +118,33 @@ class RotatingPartInspector:
         counting_direction: str = "left_to_right",
         minimum_rotation_views: int = 1,
         weak_candidate_required_views: int = 2,
+        completion_mode: str = "counting_line",
     ) -> None:
         if not 0.0 < counting_line_ratio < 1.0:
             raise ValueError("counting_line_ratio must be between 0 and 1")
         if counting_direction not in {"left_to_right", "right_to_left"}:
             raise ValueError("counting_direction must be 'left_to_right' or 'right_to_left'")
+        if completion_mode not in {"counting_line", "minimum_views"}:
+            raise ValueError("completion_mode must be 'counting_line' or 'minimum_views'")
         self.lost_timeout_s = lost_timeout_s
         self.counting_line_ratio = counting_line_ratio
         self.counting_direction = counting_direction
         self.minimum_rotation_views = max(1, int(minimum_rotation_views))
         self.weak_candidate_required_views = max(1, int(weak_candidate_required_views))
+        self.completion_mode = completion_mode
         self.sessions: dict[int, RotatingPartSession] = {}
         self.track_to_part: dict[int, int] = {}
+        self.completed_tracker_ids: set[int] = set()
 
     def observe_tracks(
         self, tracks: list[TrackedPart], frame_width: int, now: float | None = None
     ) -> None:
         now = time.monotonic() if now is None else now
+        active_ids = {track.track_id for track in tracks}
+        self.completed_tracker_ids.intersection_update(active_ids)
         for track in tracks:
+            if track.track_id in self.completed_tracker_ids:
+                continue
             center_ratio = (track.bounds[0] + track.bounds[2] / 2.0) / max(frame_width, 1)
             part_id = self.track_to_part.get(track.track_id)
             if part_id is None:
@@ -180,10 +189,12 @@ class RotatingPartInspector:
         session.worst_geometry_score = max(session.worst_geometry_score, geometry_score)
         session.worst_tao_score = max(session.worst_tao_score, tao_score if tao_score is not None else anomaly_score)
         session.reason_codes.update(reason_codes)
-        if (
-            session.crossed_counting_line
-            and session.frames_inspected >= self.minimum_rotation_views
-        ):
+        completion_triggered = (
+            self.completion_mode == "minimum_views" or session.crossed_counting_line
+        )
+        enough_valid = session.valid_views >= self.minimum_rotation_views
+        quality_exhausted = session.frames_inspected >= self.minimum_rotation_views * 2
+        if completion_triggered and (enough_valid or quality_exhausted):
             return self._finish(session)
         return None
 
@@ -200,20 +211,34 @@ class RotatingPartInspector:
         session = self._session_for_track(track_id)
         return bool(
             session
-            and session.crossed_counting_line
-            and session.frames_inspected < self.minimum_rotation_views
+            and (self.completion_mode == "minimum_views" or session.crossed_counting_line)
+            and session.valid_views < self.minimum_rotation_views
+            and session.frames_inspected < self.minimum_rotation_views * 2
         )
+
+    def accepts_inspection(self, track_id: int) -> bool:
+        """Return false after a physical part is finalized until its track leaves."""
+        return track_id not in self.completed_tracker_ids and self._session_for_track(track_id) is not None
+
+    def view_progress(self, track_id: int) -> tuple[int, int, int]:
+        """Return inspected, valid and required view counts for operator status."""
+        session = self._session_for_track(track_id)
+        if session is None:
+            return 0, 0, self.minimum_rotation_views
+        return session.frames_inspected, session.valid_views, self.minimum_rotation_views
 
     def flush(self) -> list[CompletedPart]:
         """Clear unfinished sessions without counting parts that never crossed."""
         completed = [
             self._complete(session)
             for session in self.sessions.values()
-            if session.crossed_counting_line
-            and session.frames_inspected >= self.minimum_rotation_views
+            if (self.completion_mode == "minimum_views" or session.crossed_counting_line)
+            and (session.valid_views >= self.minimum_rotation_views
+                 or session.frames_inspected >= self.minimum_rotation_views * 2)
         ]
         self.sessions.clear()
         self.track_to_part.clear()
+        self.completed_tracker_ids.clear()
         return completed
 
     def _reattach_or_start(self, track: TrackedPart, center_ratio: float, now: float) -> int | None:
@@ -225,7 +250,7 @@ class RotatingPartInspector:
         if candidates:
             session = max(candidates, key=lambda item: self._iou(item.last_bounds, track.bounds))
             return session.part_id
-        if not self._entry_side(center_ratio):
+        if self.completion_mode == "counting_line" and not self._entry_side(center_ratio):
             return None
         session = RotatingPartSession(track.track_id, now, now, track.bounds, {track.track_id})
         self.sessions[session.part_id] = session
@@ -236,6 +261,7 @@ class RotatingPartInspector:
         self.sessions.pop(session.part_id, None)
         for tracker_id in session.tracker_ids:
             self.track_to_part.pop(tracker_id, None)
+            self.completed_tracker_ids.add(tracker_id)
         return completed
 
     def _session_for_track(self, track_id: int) -> RotatingPartSession | None:
@@ -258,10 +284,9 @@ class RotatingPartInspector:
         intersection = max(0, x1 - x0) * max(0, y1 - y0)
         return intersection / max(aw * ah + bw * bh - intersection, 1)
 
-    @staticmethod
-    def _complete(session: RotatingPartSession) -> CompletedPart:
+    def _complete(self, session: RotatingPartSession) -> CompletedPart:
         # Crossing with too few registered views is a fail-closed quality fault.
-        insufficient = session.valid_views < session.frames_inspected and session.valid_views == 0
+        insufficient = session.valid_views < self.minimum_rotation_views
         reasons = set(session.reason_codes)
         if insufficient:
             reasons.add("INSUFFICIENT_VIEW_QUALITY")

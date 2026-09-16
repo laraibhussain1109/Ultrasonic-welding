@@ -66,3 +66,12 @@ are treated as acceptable minor visual changes, while very broad TAO masks with
 normal geometry are treated as unlocalized phase/appearance changes rather than
 physical defects. The per-model minimum and maximum candidate-area ratios bound
 this gate; geometry corroboration always retains authority regardless of area.
+
+Part completion is configurable. `counting_line` preserves conveyor behavior and
+publishes a final result only after line crossing plus the required rotation
+views. `minimum_views` supports a fixed inspection nest: it publishes one final
+result after the configured number of valid views and suppresses that
+ByteTrack ID until the physical part leaves. A passing individual view is shown
+as `VIEW PASS`; only session completion is shown and counted as final `PASS`.
+If twice the required view count is attempted without enough valid views, the
+fixed-nest session completes as a fail-closed `INSUFFICIENT_VIEW_QUALITY` fault.

@@ -41,6 +41,7 @@ def test_model_registry_defaults_camera_and_allows_missing_roi(tmp_path):
     assert model.counting_direction == "left_to_right"
     assert model.tao_change_class_index == 1
     assert model.registration_calibration_min_valid_ratio == 0.70
+    assert model.inspection_completion_mode == "counting_line"
     assert model.tao_candidate_min_area_ratio == 0.001
     assert model.tao_candidate_max_area_ratio == 0.12
 
@@ -98,3 +99,4 @@ def test_supplied_tao_models_allow_gpu_first_cpu_fallback():
     assert models
     assert all(model.algorithm == "nvidia_tao" for model in models)
     assert all(model.tao_require_gpu is False for model in models)
+    assert all(model.inspection_completion_mode == "minimum_views" for model in models)

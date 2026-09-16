@@ -564,6 +564,7 @@ class InspectionWindow(QWidget):
                 model.counting_direction,
                 model.minimum_rotation_views,
                 model.weak_candidate_required_views,
+                model.inspection_completion_mode,
             )
             self.frame_sampler = SharpFrameSampler(
                 model.capture_burst_frames, model.minimum_sharpness
@@ -658,7 +659,8 @@ class InspectionWindow(QWidget):
             # Give each simultaneously tracked part one exact-crop inspection
             # before spending more frames on any already observed rotation.
             assert self.rotating_parts is not None
-            candidates = [part for part in tracks if part.track_id in self.pending_sharp_frames]
+            candidates = [part for part in tracks if part.track_id in self.pending_sharp_frames
+                          and self.rotating_parts.accepts_inspection(part.track_id)]
             if not candidates:
                 return
             part = max(
@@ -688,6 +690,7 @@ class InspectionWindow(QWidget):
             return
         completed_part = None
         latched_failure = result.status == "FAIL"
+        view_progress = (0, 0, self.selected_model().minimum_rotation_views)
         if self.rotating_parts is not None:
             completed_part = self.rotating_parts.record_inspection(
                 track_id, is_pass=result.is_pass, anomaly_score=result.anomaly_score,
@@ -697,10 +700,21 @@ class InspectionWindow(QWidget):
                 tao_score=result.tao_score, reason_codes=result.reason_codes,
             )
             latched_failure = self.rotating_parts.latched_failure(track_id) or latched_failure
+            view_progress = ((completed_part.frames_inspected, completed_part.valid_views,
+                              self.rotating_parts.minimum_rotation_views) if completed_part is not None
+                             else self.rotating_parts.view_progress(track_id))
         self.score_slider.setValue(int(result.anomaly_score * 1000))
         self.score_label.setText(f"{result.anomaly_score:.3f}")
-        self.status_badge.setObjectName("statusFail" if latched_failure else "statusStandby")
-        self.status_badge.setText("FAIL LATCHED" if latched_failure else "INSPECTING")
+        if latched_failure:
+            badge_object, badge_text = "statusFail", "FAIL LATCHED"
+        elif result.status == "PASS":
+            badge_object, badge_text = "statusPass", "VIEW PASS"
+        elif result.status == "VIEW INVALID":
+            badge_object, badge_text = "statusStandby", "VIEW INVALID"
+        else:
+            badge_object, badge_text = "statusStandby", "INSPECTING"
+        self.status_badge.setObjectName(badge_object)
+        self.status_badge.setText(badge_text)
         self.status_badge.style().unpolish(self.status_badge)
         self.status_badge.style().polish(self.status_badge)
         if result.display_image is not None:
@@ -708,9 +722,10 @@ class InspectionWindow(QWidget):
             self.show_frame(result.display_image)
         reason_text = ", ".join(result.reason_codes) or "NORMAL"
         self.last_result.setText(
-            f"TRACK: {track_id}   FINAL: {result.anomaly_score:.2f}\n"
+            f"TRACK: {track_id}   VIEW SCORE: {result.anomaly_score:.2f}\n"
             f"TAO: {result.tao_score or 0:.2f}   GEOMETRY: {result.geometry_score or 0:.2f}\n"
             f"GLARE: {result.glare_score or 0:.2f}   REGISTRATION: {result.registration_score or 0:.2f}\n"
+            f"VIEWS: {view_progress[1]}/{view_progress[2]} valid ({view_progress[0]} attempted)\n"
             f"REASON: {reason_text}\nLATENCY: {latency_ms:.1f} ms"
         )
         self.latency_top.setText(f"LATENCY:  {latency_ms:.0f} ms")
