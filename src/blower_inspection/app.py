@@ -45,7 +45,7 @@ from .camera import (
 )
 from .config import ModelRegistry, PartModelConfig, ensure_model_folders
 from .daily_stats import DailyStatistics, operating_day
-from .fail_output import ESP32FailOutputBridge
+from .fail_output import ESP32FailOutputBridge, ManualDecision
 from .frame_selection import RotationPhaseGate, SharpFrameSampler
 from .inspector_factory import inspector_for_model
 from .trainer import InspectionResult
@@ -185,6 +185,9 @@ class InspectionWindow(QWidget):
         ensure_model_folders(self.registry)
         self.inspector = inspector_for_model(self.registry.active())
         self.fail_output = ESP32FailOutputBridge()
+        self.manual_decision: ManualDecision | None = None
+        self.manual_decision_future = None
+        self.last_manual_sequence = 0
         active_model = self.registry.active()
         self.camera = USBCamera(width=active_model.camera_width, height=active_model.camera_height, fps=active_model.camera_fps)
         self.frame = None
@@ -221,6 +224,9 @@ class InspectionWindow(QWidget):
         self.clock.start(500)
         self.live_timer = QTimer(self)
         self.live_timer.timeout.connect(self._process_live_frame)
+        self.manual_poll_timer = QTimer(self)
+        self.manual_poll_timer.timeout.connect(self._poll_manual_decision)
+        self.manual_poll_timer.start(300)
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -615,6 +621,7 @@ class InspectionWindow(QWidget):
             # API of the legacy serial driver. Queue a safe PASS state without
             # blocking camera startup.
             self.fail_output.reset()
+            self._apply_manual_status()
             esp32_status = f"ESP32 CONFIGURED {self.fail_output.config.base_url}"
         else:
             esp32_status = "ESP32 DISABLED"
@@ -720,6 +727,8 @@ class InspectionWindow(QWidget):
                 self.rotating_parts.counting_direction,
                 self.rotating_parts.counting_axis,
             )
+            if self.manual_decision is not None:
+                frame = self._draw_manual_decision(frame, tracks, self.manual_decision)
         except Exception as exc:
             self._handle_live_error(f"Camera frame error: {exc}")
             return
@@ -844,8 +853,16 @@ class InspectionWindow(QWidget):
         self.log.addItem(f"VIEW {result.status} | track={track_id} | score={result.anomaly_score:.3f}")
         if completed_part is not None:
             self._handle_completed_part(completed_part)
+        self._apply_manual_status()
 
     def _handle_completed_part(self, part) -> None:
+        if self.manual_decision is not None:
+            self.log.addItem(
+                f"AUTOMATIC {part.status} SUPPRESSED BY MANUAL MODE | "
+                f"track={part.track_id} | views={part.frames_inspected}"
+            )
+            self._apply_manual_status()
+            return
         self.stats = self.daily_statistics.record(part.status)
         self.update_stats()
         self.status_badge.setObjectName("statusPass" if part.status == "PASS" else "statusFail")
@@ -854,6 +871,77 @@ class InspectionWindow(QWidget):
         self.status_badge.style().polish(self.status_badge)
         self.fail_output.send_result(part.status == "FAIL")
         self.log.addItem(f"FINAL {part.status} | track={part.track_id} | views={part.frames_inspected} | worst={part.worst_score:.3f}")
+        self._apply_manual_status()
+
+    def _poll_manual_decision(self) -> None:
+        """Poll the ESP32 command page while keeping all network I/O off Qt's UI thread."""
+        if self.manual_decision_future is None:
+            self.manual_decision_future = self.fail_output.poll_manual_decision()
+            return
+        if not self.manual_decision_future.done():
+            return
+        future = self.manual_decision_future
+        self.manual_decision_future = None
+        try:
+            decision = future.result()
+        except Exception:
+            # A disconnected hotspot must not freeze or stop the camera. The
+            # bridge retains last_error for diagnostics and the next tick retries.
+            return
+        if decision.sequence <= self.last_manual_sequence:
+            return
+        self.last_manual_sequence = decision.sequence
+        self.manual_decision = decision
+        if decision.result in {"PASS", "FAIL"}:
+            self.stats = self.daily_statistics.record(decision.result)
+            self.update_stats()
+        self.fail_output.send_result(decision.result == "FAIL")
+        sector_text = f" | sector={decision.sector}" if decision.sector is not None else ""
+        self.log.addItem(f"MANUAL {decision.result}{sector_text} | mobile sequence={decision.sequence}")
+        self._apply_manual_status()
+        if self.raw_frame is not None:
+            tracks = ([TrackedPart(self.locked_track_id, self.live_roi_bounds, self.locked_roi_confidence)]
+                      if self.live_roi_bounds is not None else [])
+            self.show_frame(self._draw_manual_decision(self.raw_frame, tracks, decision))
+
+    def _apply_manual_status(self) -> None:
+        if self.manual_decision is None:
+            return
+        result = self.manual_decision.result
+        self.fail_output.send_result(result == "FAIL")
+        object_name = {"PASS": "statusPass", "FAIL": "statusFail", "RECHECK": "statusStandby"}[result]
+        label = f"MANUAL {result}"
+        if self.manual_decision.sector is not None:
+            label += f" · SECTOR {self.manual_decision.sector}"
+        self.status_badge.setObjectName(object_name)
+        self.status_badge.setText(label)
+        self.status_badge.style().unpolish(self.status_badge)
+        self.status_badge.style().polish(self.status_badge)
+
+    @staticmethod
+    def _draw_manual_decision(frame, tracks: list[TrackedPart], decision: ManualDecision):
+        """Mark one of 14 left-to-right sectors inside the currently tracked part."""
+        display = frame.copy()
+        if decision.result != "FAIL" or decision.sector is None:
+            cv2.putText(display, f"MANUAL {decision.result}", (20, 42),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 220, 0) if decision.result == "PASS" else (0, 190, 255), 3)
+            return display
+        if tracks:
+            x, y, w, h = max(tracks, key=lambda item: item.confidence).bounds
+        else:
+            x, y, w, h = 0, 0, display.shape[1], display.shape[0]
+        left = x + round(w * (decision.sector - 1) / 14)
+        right = x + round(w * decision.sector / 14)
+        overlay = display.copy()
+        cv2.rectangle(overlay, (left, y), (right, y + h), (0, 0, 255), -1)
+        cv2.addWeighted(overlay, 0.34, display, 0.66, 0, display)
+        cv2.rectangle(display, (left, y), (right, y + h), (0, 0, 255), 4)
+        text_y = min(display.shape[0] - 12, max(36, y + 42))
+        cv2.putText(display, f"FAIL SECTOR {decision.sector}", (max(8, x + 8), text_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 5)
+        cv2.putText(display, f"FAIL SECTOR {decision.sector}", (max(8, x + 8), text_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+        return display
 
     @staticmethod
     def _draw_tracks(

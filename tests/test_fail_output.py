@@ -2,7 +2,7 @@ import urllib.error
 
 import pytest
 
-from blower_inspection.fail_output import ESP32FailOutputBridge, FailOutputConfig
+from blower_inspection.fail_output import ESP32FailOutputBridge, FailOutputConfig, ManualDecision
 
 
 class FakeResponse:
@@ -58,3 +58,37 @@ def test_fail_output_retries_same_state_after_error(monkeypatch):
         output.close()
 
     assert calls == ["http://esp32.local/fail", "http://esp32.local/fail"]
+
+
+def test_poll_manual_fail_decision_with_sector(monkeypatch):
+    class DecisionResponse(FakeResponse):
+        def read(self, _limit):
+            return b'{"sequence":7,"result":"FAIL","sector":12}'
+
+    calls = []
+
+    def fake_urlopen(request, timeout):
+        calls.append((request.full_url, request.headers.get("Accept"), timeout))
+        return DecisionResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    output = bridge()
+    try:
+        decision = output.poll_manual_decision().result(timeout=1)
+    finally:
+        output.close()
+
+    assert decision == ManualDecision(sequence=7, result="FAIL", sector=12)
+    assert calls == [("http://esp32.local/api/decision", "application/json", 0.01)]
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"sequence": 1, "result": "FAIL", "sector": 15}, "sector from 1 to 14"),
+        ({"sequence": 1, "result": "MAYBE"}, "Unsupported manual result"),
+    ],
+)
+def test_manual_decision_rejects_invalid_mobile_input(payload, message):
+    with pytest.raises(ValueError, match=message):
+        ManualDecision.from_payload(payload)
