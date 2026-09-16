@@ -46,9 +46,9 @@ def fuse_evidence(tao: TaoEvidence, geometry: GeometryEvidence, *, glare_score: 
     reasons: list[str] = []
     if geometry.broken_fin_score >= geometry_fail_threshold:
         reasons.append("BROKEN_FIN")
-    if geometry.orientation_score >= geometry_fail_threshold:
+    if geometry.tilted_fin_score >= geometry_fail_threshold:
         reasons.append("TILTED_FIN")
-    if geometry.pitch_score >= geometry_fail_threshold:
+    if geometry.missing_fin_score >= geometry_fail_threshold:
         reasons.append("MISSING_FIN")
     catastrophic = g >= 1.0
     corroborated = geometry.score >= geometry_candidate_threshold and tao.anomaly_score >= tao_candidate_threshold

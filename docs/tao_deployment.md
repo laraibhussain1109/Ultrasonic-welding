@@ -608,6 +608,12 @@ for structural phase change. Hybrid calibration version 3 also records robust
 geometry reject deltas with physical floors, preventing extremely small MAD from
 amplifying harmless pitch/orientation quantization into `GEOMETRY_DEFORMATION`.
 
+Hybrid calibration version 4 adds corroborated semantic geometry scoring. A high
+pitch score alone no longer emits `MISSING_FIN` or reaches candidate severity;
+pitch and periodicity must agree with independent continuity evidence.
+Orientation likewise requires a neighboring inconsistency before `TILTED_FIN` is emitted. Recalibrate
+after upgrading so the current geometry artifact contract is explicit.
+
 ### Windows GPU provider warnings
 
 The verified Windows deployment uses Python 3.13, PyTorch 2.12.0+cu132 and

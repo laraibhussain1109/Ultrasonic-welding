@@ -104,7 +104,7 @@ class TaoInspector:
         else:
             data = json.loads(path.read_text(encoding="utf-8"))
             self._geometry_calibrations[path] = (stamp, data)
-        if (data.get("version") != 3 or data.get("model_sha256") != calibration.model_sha256 or
+        if (data.get("version") != 4 or data.get("model_sha256") != calibration.model_sha256 or
                 data.get("reference_bank_sha256") != calibration.reference_bank_sha256):
             raise RuntimeError("Hybrid calibration is stale; inspection is inhibited")
         return data["geometry"]
@@ -430,7 +430,7 @@ class TaoInspector:
             "minimum_sharpness": float(max(config.minimum_sharpness, np.quantile(sharpness_values, .05) * .25)),
             "aspect_ratio_median": float(np.median(aspect_values)),
         }
-        hybrid = {"version": 3, "model_sha256": calibration.model_sha256,
+        hybrid = {"version": 4, "model_sha256": calibration.model_sha256,
                   "reference_bank_sha256": bank.manifest_sha256, "calibration_image_count": len(paths),
                   "qualified_calibration_image_count": len(qualified_crops),
                   "excluded_registration_count": len(excluded_registration_sources),
@@ -604,6 +604,9 @@ class TaoInspector:
                 "reference_bank_sha256": calibration.reference_bank_sha256, "reference_index": registration.reference_index,
                 "status": status, "hybrid_score": decision.hybrid_score, "tao_score": anomaly_score,
                 "geometry_score": geometry.score, "periodicity_score": geometry.periodicity_score,
+                "geometry_components": {"orientation": geometry.orientation_score, "pitch": geometry.pitch_score,
+                    "continuity": geometry.continuity_score, "broken_fin": geometry.broken_fin_score,
+                    "missing_fin": geometry.missing_fin_score, "tilted_fin": geometry.tilted_fin_score},
                 "glare_score": glare.score, "registration_score": registration.correlation,
                 "reason_codes": decision.reason_codes, "view_valid": True, "defect_area_px": defect_area,
                 "bad_longitudinal_region_ratio": bad_ratio, "bad_longitudinal_regions": bad_sectors,
@@ -612,7 +615,10 @@ class TaoInspector:
         return InspectionResult(status, decision.hybrid_score, defect_area, bad_ratio, bad_sectors, overlay_path,
             report_path, display, boxes, anomaly_score, geometry.score, geometry.periodicity_score, glare.score,
             registration.correlation, decision.hybrid_score, decision.reason_codes, registration.reference_index, True,
-            None, {"tao": tao_ms, "registration": registration_ms, "geometry": geometry_ms, "total": (time.perf_counter()-total_started)*1000})
+            None, {"tao": tao_ms, "registration": registration_ms, "geometry": geometry_ms, "total": (time.perf_counter()-total_started)*1000},
+            {"orientation": geometry.orientation_score, "pitch": geometry.pitch_score,
+             "continuity": geometry.continuity_score, "broken": geometry.broken_fin_score,
+             "periodicity": geometry.periodicity_score})
 
     @staticmethod
     def _invalid_view(image: np.ndarray, reason: str, started: float, *, quality_score: float = 0.0) -> InspectionResult:

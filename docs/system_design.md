@@ -96,3 +96,13 @@ latch a repeated false result. Geometry calibration stores minimum physical
 reject deltas for orientation, pitch, periodicity, and continuity so a locked
 camera with near-zero MAD does not turn a one-pixel measurement change into a
 maximum-severity deformation.
+
+Semantic fin reasons require corroboration inside geometry. A pitch anomaly by
+itself is not a missing fin because autocorrelation can select an adjacent
+harmonic on a complete pattern. Because pitch and periodicity come from the same
+autocorrelation signal, they cannot corroborate one another. `MISSING_FIN`
+requires pitch and periodicity plus independent continuity disruption;
+`TILTED_FIN` requires orientation plus neighboring
+structural inconsistency. A single global scalar cannot independently cross the
+geometry candidate boundary. Isolated broken-fin evidence remains independently
+authoritative because it is localized and rib/glare masked.

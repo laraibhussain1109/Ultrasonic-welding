@@ -259,3 +259,7 @@ along the image x-axis and crossing is measured from vertical part motion.
 
 Fixed-nest view counting requires structural phase diversity: a stationary
 blower produces one view and `WAITING FOR ROTATION`, not eight repeated decisions.
+Missing- and tilted-fin reasons require corroborating geometry measurements.
+Because pitch and periodicity share an autocorrelation source, missing-fin
+classification also requires an independent continuity disruption; global pitch,
+periodicity, or orientation noise alone cannot reject a part.

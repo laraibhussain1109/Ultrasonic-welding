@@ -129,6 +129,64 @@ def test_tao_only_evidence_must_be_localized_before_becoming_persistent():
     assert decision.provisional_candidate
 
 
+def test_pitch_anomaly_alone_is_not_labeled_missing_fin():
+    mask = np.zeros((20, 20), bool)
+    tao = TaoEvidence(mask.astype(np.float32), mask.astype(np.float32), .1, .1, mask, 0)
+    geometry = GeometryEvidence(
+        score=.5, orientation_score=0, pitch_score=2.0, continuity_score=0,
+        broken_fin_score=0, periodicity_score=0, support_rib_confidence=1,
+        defect_mask=mask, missing_fin_score=0,
+    )
+
+    decision = fuse_evidence(tao, geometry, glare_score=0, registration_valid=True)
+
+    assert decision.status == "PASS"
+    assert "MISSING_FIN" not in decision.reason_codes
+
+
+def test_pitch_and_periodicity_harmonic_need_continuity_corroboration(monkeypatch):
+    import blower_inspection.geometry_inspector as geometry_module
+
+    image = fins()
+    features = {"orientation": 0, "pitch": 30, "periodicity": .2,
+                "continuity": .5, "rib_confidence": 1}
+    calibration = {
+        "orientation": {"median": 0, "mad": 1, "reject_delta": 4},
+        "pitch": {"median": 10, "mad": 1, "reject_delta": 2},
+        "periodicity": {"median": .8, "mad": .01, "reject_delta": .15},
+        "continuity": {"median": .5, "mad": .01, "reject_delta": .12},
+    }
+    monkeypatch.setattr(geometry_module, "_features", lambda *_args: (
+        features, np.zeros(image.shape[:2], bool), np.zeros(image.shape[:2], bool)))
+    monkeypatch.setattr(geometry_module, "broken_fin_mask",
+                        lambda *_args: np.zeros(image.shape[:2], bool))
+    monkeypatch.setattr(geometry_module, "smooth_reflection_mask",
+                        lambda *_args: np.zeros(image.shape[:2], bool))
+
+    result = FinGeometryInspector(calibration).inspect(image)
+
+    assert result.pitch_score == 2
+    assert result.periodicity_score == 2
+    assert result.continuity_score == 0
+    assert result.missing_fin_score == 0
+    assert result.score == 0
+
+
+def test_missing_fin_reason_requires_corroborated_geometry_score():
+    mask = np.zeros((20, 20), bool)
+    tao = TaoEvidence(mask.astype(np.float32), mask.astype(np.float32), .1, .1, mask, 0)
+    geometry = GeometryEvidence(
+        score=1.2, orientation_score=0, pitch_score=1.5, continuity_score=1.2,
+        broken_fin_score=0, periodicity_score=1.1, support_rib_confidence=1,
+        defect_mask=mask, missing_fin_score=1.2,
+    )
+
+    decision = fuse_evidence(tao, geometry, glare_score=0, registration_valid=True)
+
+    assert decision.status == "FAIL"
+    assert "MISSING_FIN" in decision.reason_codes
+
+
 def test_temporal_candidate_requires_persistence_and_catastrophe_is_immediate():
     tracker = RotatingPartInspector(counting_line_ratio=.8, weak_candidate_required_views=2)
     tracker.observe_tracks([TrackedPart(1, (10, 0, 20, 20), .9)], 100)

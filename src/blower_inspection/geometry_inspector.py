@@ -23,6 +23,8 @@ class GeometryEvidence:
     defect_mask: np.ndarray
     candidate_regions: list[tuple[int, int, int, int]] = field(default_factory=list)
     valid: bool = True
+    missing_fin_score: float = 0.0
+    tilted_fin_score: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -128,13 +130,28 @@ class FinGeometryInspector:
         # glare are excluded from the isolated-gap mask.
         broken &= ~ribs & ~reflection & inspection_band_mask(image.shape[:2], self.band_top, self.band_bottom)
         broken_score = float(np.clip(np.count_nonzero(broken) / max(image.size / 3 * .001, 1), 0, 2))
-        score = max(broken_score, orientation, pitch, periodicity, continuity,
-                    .55 * orientation + .35 * periodicity + .3 * continuity)
+        # Pitch and periodicity come from the same autocorrelation signal, so
+        # they cannot corroborate one another. A normal phase can move the
+        # strongest peak to a harmonic and make both values look abnormal.
+        # Require independent loss of edge continuity as well.
+        missing_fin_score = min(pitch, periodicity, continuity)
+        # Likewise, dominant orientation alone is exposure/perspective sensitive;
+        # require a neighboring structural inconsistency for a tilted-fin score.
+        tilted_fin_score = min(orientation, max(continuity, .5 * periodicity))
+        # No single global scalar may cross the geometry candidate threshold;
+        # two or more independent abnormal measurements must accumulate.
+        # Gate the repeated-pattern branch with independent continuity. Without
+        # this gate, pitch plus periodicity (the same measurement family) could
+        # falsely produce a catastrophic deformation score on an intact fan.
+        combined_deformation = min(continuity, .5 * pitch + .5 * periodicity)
+        score = max(broken_score, missing_fin_score, tilted_fin_score, combined_deformation)
         count, _labels, stats, _ = cv2.connectedComponentsWithStats(broken.astype(np.uint8), 8)
         regions = [tuple(map(int, stats[i, :4])) for i in range(1, count)]
         return GeometryEvidence(float(score), orientation, pitch, continuity, broken_score,
                                 periodicity, features["rib_confidence"], broken, regions,
-                                valid=bool(features["rib_confidence"] >= .15))
+                                valid=bool(features["rib_confidence"] >= .15),
+                                missing_fin_score=float(missing_fin_score),
+                                tilted_fin_score=float(tilted_fin_score))
 
 
 def glare_evidence(image: np.ndarray, output_shape: tuple[int, int], *, top: float = .18, bottom: float = .82) -> GlareEvidence:

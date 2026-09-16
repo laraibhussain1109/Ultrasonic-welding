@@ -736,11 +736,16 @@ class InspectionWindow(QWidget):
             self.latest_annotated_frame = result.display_image
             self.show_frame(result.display_image)
         reason_text = ", ".join(result.reason_codes) or "NORMAL"
+        geometry_components = result.geometry_components
+        geometry_detail = (f"PITCH: {geometry_components.get('pitch', 0):.2f}   "
+                           f"CONT: {geometry_components.get('continuity', 0):.2f}   "
+                           f"BROKEN: {geometry_components.get('broken', 0):.2f}")
         self.last_result.setText(
             f"TRACK: {track_id}   VIEW SCORE: {result.anomaly_score:.2f}\n"
             f"TAO: {result.tao_score or 0:.2f}   GEOMETRY: {result.geometry_score or 0:.2f}\n"
             f"GLARE: {result.glare_score or 0:.2f}   REGISTRATION: {result.registration_score or 0:.2f}\n"
             f"VIEW QUALITY: {result.view_quality_score if result.view_quality_score is not None else 1.0:.2f}\n"
+            f"{geometry_detail}\n"
             f"VIEWS: {view_progress[1]}/{view_progress[2]} valid ({view_progress[0]} attempted)\n"
             f"REASON: {reason_text}\nLATENCY: {latency_ms:.1f} ms"
         )

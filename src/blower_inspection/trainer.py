@@ -45,6 +45,7 @@ class InspectionResult:
     view_valid: bool = True
     view_quality_score: float | None = None
     latencies_ms: dict[str, float] = field(default_factory=dict)
+    geometry_components: dict[str, float] = field(default_factory=dict)
 
     @property
     def is_pass(self) -> bool:
