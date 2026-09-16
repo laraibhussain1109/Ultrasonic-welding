@@ -596,6 +596,12 @@ YOLO crop aspect ratio. Live crops below the robust sharpness floor return
 `VIEW INVALID / UNSTABLE_COMPONENT_CROP`. These views never run geometry or latch
 a defect. Updating from hybrid calibration version 1 requires recalibration.
 
+The supplied models use `yolo_confidence: 0.70`; detections must be strictly
+greater than this threshold before cropping. `counting_axis: "y"` draws the line
+parallel to the x-axis and pairs with `counting_direction: "top_to_bottom"` (or
+`bottom_to_top`). Set `counting_axis: "x"` only for a vertical line and pair it
+with `left_to_right` or `right_to_left`.
+
 ### Windows GPU provider warnings
 
 The verified Windows deployment uses Python 3.13, PyTorch 2.12.0+cu132 and

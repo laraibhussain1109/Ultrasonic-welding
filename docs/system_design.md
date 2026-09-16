@@ -82,3 +82,9 @@ selection also prevents a transient, small YOLO crop from winning merely because
 its Laplacian variance is artificially high. Reflection-normalized geometry and
 direct glare-mask exclusion prevent smooth moving highlights from manufacturing
 isolated broken-fin evidence; strong surrounding geometry remains authoritative.
+
+YOLO localization requires confidence strictly above 70% before a box can create
+a crop or ByteTrack inspection view. The counting-line axis is independent of the
+blower axis: supplied models draw a horizontal line parallel to the image x-axis
+and evaluate top-to-bottom motion using the tracked box's y-center. Legacy
+conveyors can retain a vertical line with `counting_axis: "x"`.

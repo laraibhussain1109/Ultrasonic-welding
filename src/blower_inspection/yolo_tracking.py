@@ -22,7 +22,7 @@ class TrackedPart:
 class YoloByteTrackDetector:
     """Load a user supplied Ultralytics checkpoint and retain ByteTrack IDs."""
 
-    def __init__(self, model_path: str | Path, confidence: float = 0.40) -> None:
+    def __init__(self, model_path: str | Path, confidence: float = 0.70) -> None:
         self.model_path = Path(model_path)
         self.confidence = confidence
         self._model: Any | None = None
@@ -48,6 +48,8 @@ class YoloByteTrackDetector:
         height, width = frame.shape[:2]
         parts: list[TrackedPart] = []
         for box, track_id, confidence in zip(xyxy, ids, confidences):
+            if float(confidence) <= self.confidence:
+                continue
             x0, y0, x1, y1 = box.astype(int)
             x0, y0 = max(0, x0), max(0, y0)
             x1, y1 = min(width, x1), min(height, y1)
@@ -61,7 +63,11 @@ class YoloByteTrackDetector:
         if not results or results[0].boxes is None or len(results[0].boxes) == 0:
             raise ValueError("YOLO did not detect a part in the training image")
         boxes = results[0].boxes
-        best = int(boxes.conf.argmax().item())
+        confidences = boxes.conf.detach().cpu().numpy()
+        eligible = np.flatnonzero(confidences > self.confidence)
+        if eligible.size == 0:
+            raise ValueError(f"YOLO did not detect a part above {self.confidence:.0%} confidence")
+        best = int(eligible[np.argmax(confidences[eligible])])
         x0, y0, x1, y1 = boxes.xyxy[best].detach().cpu().numpy().astype(int)
         height, width = frame.shape[:2]
         x0, y0 = max(0, x0), max(0, y0)
@@ -119,16 +125,22 @@ class RotatingPartInspector:
         minimum_rotation_views: int = 1,
         weak_candidate_required_views: int = 2,
         completion_mode: str = "counting_line",
+        counting_axis: str = "x",
     ) -> None:
         if not 0.0 < counting_line_ratio < 1.0:
             raise ValueError("counting_line_ratio must be between 0 and 1")
-        if counting_direction not in {"left_to_right", "right_to_left"}:
-            raise ValueError("counting_direction must be 'left_to_right' or 'right_to_left'")
+        if counting_axis not in {"x", "y"}:
+            raise ValueError("counting_axis must be 'x' or 'y'")
+        valid_directions = ({"left_to_right", "right_to_left"} if counting_axis == "x"
+                            else {"top_to_bottom", "bottom_to_top"})
+        if counting_direction not in valid_directions:
+            raise ValueError(f"counting_direction {counting_direction!r} is invalid for axis {counting_axis!r}")
         if completion_mode not in {"counting_line", "minimum_views"}:
             raise ValueError("completion_mode must be 'counting_line' or 'minimum_views'")
         self.lost_timeout_s = lost_timeout_s
         self.counting_line_ratio = counting_line_ratio
         self.counting_direction = counting_direction
+        self.counting_axis = counting_axis
         self.minimum_rotation_views = max(1, int(minimum_rotation_views))
         self.weak_candidate_required_views = max(1, int(weak_candidate_required_views))
         self.completion_mode = completion_mode
@@ -137,7 +149,8 @@ class RotatingPartInspector:
         self.completed_tracker_ids: set[int] = set()
 
     def observe_tracks(
-        self, tracks: list[TrackedPart], frame_width: int, now: float | None = None
+        self, tracks: list[TrackedPart], frame_width: int, now: float | None = None,
+        frame_height: int | None = None,
     ) -> None:
         now = time.monotonic() if now is None else now
         active_ids = {track.track_id for track in tracks}
@@ -145,14 +158,14 @@ class RotatingPartInspector:
         for track in tracks:
             if track.track_id in self.completed_tracker_ids:
                 continue
-            center_ratio = (track.bounds[0] + track.bounds[2] / 2.0) / max(frame_width, 1)
+            center_ratio = self._center_ratio(track.bounds, frame_width, frame_height)
             part_id = self.track_to_part.get(track.track_id)
             if part_id is None:
                 part_id = self._reattach_or_start(track, center_ratio, now)
                 if part_id is None:
                     continue  # First observed beyond the line: it was not counted here.
             session = self.sessions[part_id]
-            previous_center = (session.last_bounds[0] + session.last_bounds[2] / 2.0) / max(frame_width, 1)
+            previous_center = self._center_ratio(session.last_bounds, frame_width, frame_height)
             session.last_seen = now
             session.last_bounds = track.bounds
             session.tracker_ids.add(track.track_id)
@@ -269,12 +282,20 @@ class RotatingPartInspector:
         return self.sessions.get(part_id) if part_id is not None else None
 
     def _entry_side(self, center: float) -> bool:
-        return center < self.counting_line_ratio if self.counting_direction == "left_to_right" else center > self.counting_line_ratio
+        forward = self.counting_direction in {"left_to_right", "top_to_bottom"}
+        return center < self.counting_line_ratio if forward else center > self.counting_line_ratio
 
     def _crossed(self, previous: float, current: float) -> bool:
-        if self.counting_direction == "left_to_right":
+        if self.counting_direction in {"left_to_right", "top_to_bottom"}:
             return previous < self.counting_line_ratio <= current
         return previous > self.counting_line_ratio >= current
+
+    def _center_ratio(self, bounds: tuple[int, int, int, int], frame_width: int,
+                      frame_height: int | None) -> float:
+        x, y, width, height = bounds
+        if self.counting_axis == "y":
+            return (y + height / 2.0) / max(frame_height or 1, 1)
+        return (x + width / 2.0) / max(frame_width, 1)
 
     @staticmethod
     def _iou(first: tuple[int, int, int, int], second: tuple[int, int, int, int]) -> float:

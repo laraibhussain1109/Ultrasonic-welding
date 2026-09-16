@@ -252,3 +252,7 @@ For fixed-nest rotating blowers, `inspection_completion_mode: "minimum_views"`
 turns the configured rotation-view count into the physical-part completion
 trigger. Conveyor installations can retain `"counting_line"`. The UI labels a
 passing sample as `VIEW PASS` and reserves final `PASS` for completed sessions.
+
+Production YOLO crops require confidence strictly above 70%. Supplied blower
+profiles use `counting_axis: "y"`, so the displayed counting line runs horizontally
+along the image x-axis and crossing is measured from vertical part motion.

@@ -119,3 +119,19 @@ def test_fixed_station_fails_closed_after_too_many_invalid_views():
     assert completed is not None
     assert completed.status == "FAIL"
     assert "INSUFFICIENT_VIEW_QUALITY" in completed.reason_codes
+
+
+def test_horizontal_counting_line_uses_vertical_part_motion():
+    inspector = RotatingPartInspector(
+        counting_line_ratio=.5, counting_axis="y", counting_direction="top_to_bottom"
+    )
+    above = TrackedPart(12, (20, 20, 40, 20), .9)
+    below = TrackedPart(12, (20, 60, 40, 20), .9)
+
+    inspector.observe_tracks([above], frame_width=100, frame_height=100)
+    inspector.record_inspection(12, is_pass=True, anomaly_score=.1)
+    inspector.observe_tracks([below], frame_width=100, frame_height=100)
+    completed = inspector.record_inspection(12, is_pass=True, anomaly_score=.1)
+
+    assert completed is not None
+    assert completed.status == "PASS"

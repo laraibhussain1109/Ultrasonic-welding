@@ -53,7 +53,10 @@
       "tao_candidate_min_area_ratio": 0.001,
       "tao_candidate_max_area_ratio": 0.12,
       "inspection_completion_mode": "minimum_views",
-      "crop_aspect_ratio_tolerance": 0.35
+      "crop_aspect_ratio_tolerance": 0.35,
+      "yolo_confidence": 0.7,
+      "counting_axis": "y",
+      "counting_direction": "top_to_bottom"
     },
     {
       "id": "BF-002",
@@ -107,7 +110,10 @@
       "tao_candidate_min_area_ratio": 0.001,
       "tao_candidate_max_area_ratio": 0.12,
       "inspection_completion_mode": "minimum_views",
-      "crop_aspect_ratio_tolerance": 0.35
+      "crop_aspect_ratio_tolerance": 0.35,
+      "yolo_confidence": 0.7,
+      "counting_axis": "y",
+      "counting_direction": "top_to_bottom"
     },
     {
       "id": "BF-003",
@@ -161,7 +167,10 @@
       "tao_candidate_min_area_ratio": 0.001,
       "tao_candidate_max_area_ratio": 0.12,
       "inspection_completion_mode": "minimum_views",
-      "crop_aspect_ratio_tolerance": 0.35
+      "crop_aspect_ratio_tolerance": 0.35,
+      "yolo_confidence": 0.7,
+      "counting_axis": "y",
+      "counting_direction": "top_to_bottom"
     },
     {
       "id": "BF-004",
@@ -215,7 +224,10 @@
       "tao_candidate_min_area_ratio": 0.001,
       "tao_candidate_max_area_ratio": 0.12,
       "inspection_completion_mode": "minimum_views",
-      "crop_aspect_ratio_tolerance": 0.35
+      "crop_aspect_ratio_tolerance": 0.35,
+      "yolo_confidence": 0.7,
+      "counting_axis": "y",
+      "counting_direction": "top_to_bottom"
     }
   ]
 }

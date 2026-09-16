@@ -44,6 +44,13 @@ def test_app_distinguishes_view_pass_from_final_part_pass():
     assert "VIEWS:" in source
 
 
+def test_app_can_draw_a_horizontal_x_axis_counting_line():
+    source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
+
+    assert 'if counting_axis == "y"' in source
+    assert "(0, line_y), (display.shape[1] - 1, line_y)" in source
+
+
 def test_app_imports_backend_factory_from_its_own_module():
     source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
     assert "from .inspector_factory import inspector_for_model" in source

@@ -565,6 +565,7 @@ class InspectionWindow(QWidget):
                 model.minimum_rotation_views,
                 model.weak_candidate_required_views,
                 model.inspection_completion_mode,
+                model.counting_axis,
             )
             self.frame_sampler = SharpFrameSampler(
                 model.capture_burst_frames, model.minimum_sharpness
@@ -617,12 +618,13 @@ class InspectionWindow(QWidget):
             self.raw_frame = raw_frame
             assert self.part_detector is not None and self.rotating_parts is not None
             tracks = self.part_detector.track(raw_frame)
-            self.rotating_parts.observe_tracks(tracks, raw_frame.shape[1])
+            self.rotating_parts.observe_tracks(tracks, raw_frame.shape[1], frame_height=raw_frame.shape[0])
             frame = self._draw_tracks(
                 raw_frame,
                 tracks,
                 self.rotating_parts.counting_line_ratio,
                 self.rotating_parts.counting_direction,
+                self.rotating_parts.counting_axis,
             )
         except Exception as exc:
             self._handle_live_error(f"Camera frame error: {exc}")
@@ -746,20 +748,22 @@ class InspectionWindow(QWidget):
 
     @staticmethod
     def _draw_tracks(
-        frame, tracks: list[TrackedPart], counting_line_ratio: float, counting_direction: str
+        frame, tracks: list[TrackedPart], counting_line_ratio: float, counting_direction: str,
+        counting_axis: str = "x",
     ):
         display = frame.copy()
-        line_x = int(round(display.shape[1] * counting_line_ratio))
-        cv2.line(display, (line_x, 0), (line_x, display.shape[0] - 1), (0, 255, 255), 2)
-        cv2.putText(
-            display,
-            "COUNT LINE " + (">" if counting_direction == "left_to_right" else "<"),
-            (max(4, line_x - 135), 24),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (0, 255, 255),
-            2,
-        )
+        if counting_axis == "y":
+            line_y = int(round(display.shape[0] * counting_line_ratio))
+            cv2.line(display, (0, line_y), (display.shape[1] - 1, line_y), (0, 255, 255), 2)
+            marker = "v" if counting_direction == "top_to_bottom" else "^"
+            cv2.putText(display, f"COUNT LINE {marker}", (8, max(20, line_y - 8)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
+        else:
+            line_x = int(round(display.shape[1] * counting_line_ratio))
+            cv2.line(display, (line_x, 0), (line_x, display.shape[0] - 1), (0, 255, 255), 2)
+            marker = ">" if counting_direction == "left_to_right" else "<"
+            cv2.putText(display, f"COUNT LINE {marker}", (max(4, line_x - 135), 24),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
         for track in tracks:
             x, y, w, h = track.bounds
             cv2.rectangle(display, (x, y), (x + w, y + h), (0, 217, 255), 2)

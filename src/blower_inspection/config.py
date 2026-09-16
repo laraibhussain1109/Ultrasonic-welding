@@ -26,7 +26,7 @@ class PartModelConfig:
     camera_fps: int = 30
     image_size: int = 640
     yolo_model_path: Path | None = None
-    yolo_confidence: float = 0.40
+    yolo_confidence: float = 0.70
     inspection_lost_timeout_s: float = 1.0
     capture_burst_frames: int = 5
     minimum_sharpness: float = 60.0
@@ -36,6 +36,7 @@ class PartModelConfig:
     # Slightly left of frame center so the part reaches the count line within
     # the usable fixture/conveyor travel visible in the production camera.
     counting_line_ratio: float = 0.45
+    counting_axis: str = "x"
     counting_direction: str = "left_to_right"
     algorithm: str = "nvidia_tao"
     # TAO Deploy exports an ONNX model.  Calibration is deliberately stored
@@ -160,7 +161,7 @@ class ModelRegistry:
             camera_fps=int(entry.get("camera_fps", 30)),
             image_size=int(entry.get("image_size", 640)),
             yolo_model_path=Path(entry["yolo_model_path"]) if entry.get("yolo_model_path") else None,
-            yolo_confidence=float(entry.get("yolo_confidence", 0.40)),
+            yolo_confidence=max(0.70, float(entry.get("yolo_confidence", 0.70))),
             inspection_lost_timeout_s=float(entry.get("inspection_lost_timeout_s", 1.0)),
             capture_burst_frames=max(2, int(entry.get("capture_burst_frames", 5))),
             minimum_sharpness=max(0.0, float(entry.get("minimum_sharpness", 60.0))),
@@ -168,6 +169,7 @@ class ModelRegistry:
             minimum_rotation_views=max(1, int(entry.get("minimum_rotation_views", 8))),
             inspection_completion_mode=str(entry.get("inspection_completion_mode", "counting_line")),
             counting_line_ratio=float(entry.get("counting_line_ratio", 0.45)),
+            counting_axis=str(entry.get("counting_axis", "x")),
             counting_direction=str(entry.get("counting_direction", "left_to_right")),
             algorithm=str(entry.get("algorithm", "nvidia_tao")),
             tao_calibration_file=Path(entry["tao_calibration_file"]) if entry.get("tao_calibration_file") else None,
