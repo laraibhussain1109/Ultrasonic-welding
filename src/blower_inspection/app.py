@@ -738,6 +738,9 @@ class InspectionWindow(QWidget):
         # camera frame must replace them so removal/motion remains visible.
         self.show_frame(frame)
         self.fps_frame_count += 1
+        if self.manual_decision is not None:
+            self._apply_manual_status()
+            return
         if not tracks:
             if self.frame_sampler is not None:
                 self.frame_sampler.discard_missing(set())
@@ -800,6 +803,11 @@ class InspectionWindow(QWidget):
     def _handle_inspection_result(self, track_id: int, result, latency_ms: float) -> None:
         if not self.inspection_running:
             return
+        # A phone selection is the displayed and recorded result. Discard
+        # subsequently arriving inference results until another selection is made.
+        if self.manual_decision is not None:
+            self._apply_manual_status()
+            return
         if result.is_no_part:
             self._handle_no_part_result(result, latency_ms)
             return
@@ -857,10 +865,6 @@ class InspectionWindow(QWidget):
 
     def _handle_completed_part(self, part) -> None:
         if self.manual_decision is not None:
-            self.log.addItem(
-                f"AUTOMATIC {part.status} SUPPRESSED BY MANUAL MODE | "
-                f"track={part.track_id} | views={part.frames_inspected}"
-            )
             self._apply_manual_status()
             return
         self.stats = self.daily_statistics.record(part.status)
@@ -897,7 +901,7 @@ class InspectionWindow(QWidget):
             self.update_stats()
         self.fail_output.send_result(decision.result == "FAIL")
         sector_text = f" | sector={decision.sector}" if decision.sector is not None else ""
-        self.log.addItem(f"MANUAL {decision.result}{sector_text} | mobile sequence={decision.sequence}")
+        self.log.addItem(f"{decision.result}{sector_text} | sequence={decision.sequence}")
         self._apply_manual_status()
         if self.raw_frame is not None:
             tracks = ([TrackedPart(self.locked_track_id, self.live_roi_bounds, self.locked_roi_confidence)]
@@ -910,9 +914,7 @@ class InspectionWindow(QWidget):
         result = self.manual_decision.result
         self.fail_output.send_result(result == "FAIL")
         object_name = {"PASS": "statusPass", "FAIL": "statusFail", "RECHECK": "statusStandby"}[result]
-        label = f"MANUAL {result}"
-        if self.manual_decision.sector is not None:
-            label += f" · SECTOR {self.manual_decision.sector}"
+        label = result
         self.status_badge.setObjectName(object_name)
         self.status_badge.setText(label)
         self.status_badge.style().unpolish(self.status_badge)
@@ -923,7 +925,7 @@ class InspectionWindow(QWidget):
         """Mark one of 14 left-to-right sectors inside the currently tracked part."""
         display = frame.copy()
         if decision.result != "FAIL" or decision.sector is None:
-            cv2.putText(display, f"MANUAL {decision.result}", (20, 42),
+            cv2.putText(display, decision.result, (20, 42),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 220, 0) if decision.result == "PASS" else (0, 190, 255), 3)
             return display
         if tracks:
@@ -979,6 +981,9 @@ class InspectionWindow(QWidget):
         self._handle_no_part_result(result, 0.0)
 
     def _handle_no_part_result(self, result, latency_ms: float) -> None:
+        if self.manual_decision is not None:
+            self._apply_manual_status()
+            return
         self.status_badge.setObjectName("statusNoPart")
         self.status_badge.setText("NO PART")
         self.status_badge.style().unpolish(self.status_badge)

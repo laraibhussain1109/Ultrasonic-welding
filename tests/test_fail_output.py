@@ -86,7 +86,7 @@ def test_poll_manual_fail_decision_with_sector(monkeypatch):
     ("payload", "message"),
     [
         ({"sequence": 1, "result": "FAIL", "sector": 15}, "sector from 1 to 14"),
-        ({"sequence": 1, "result": "MAYBE"}, "Unsupported manual result"),
+        ({"sequence": 1, "result": "MAYBE"}, "Unsupported result"),
     ],
 )
 def test_manual_decision_rejects_invalid_mobile_input(payload, message):

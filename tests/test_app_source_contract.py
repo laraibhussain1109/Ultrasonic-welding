@@ -44,6 +44,20 @@ def test_app_distinguishes_view_pass_from_final_part_pass():
     assert "VIEWS:" in source
 
 
+def test_phone_decision_uses_plain_result_labels_and_takes_precedence():
+    source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
+
+    assert 'label = result' in source
+    assert 'cv2.putText(display, decision.result' in source
+    assert 'f"MANUAL {result}"' not in source
+    assert 'f"MANUAL {decision.result}' not in source
+    assert 'f"AUTOMATIC {part.status}' not in source
+    inference_handler = source[source.index("def _handle_inspection_result"):]
+    override = inference_handler.index("if self.manual_decision is not None:")
+    ai_status = inference_handler.index('latched_failure = result.status == "FAIL"')
+    assert override < ai_status
+
+
 def test_app_can_draw_a_horizontal_x_axis_counting_line():
     source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
 

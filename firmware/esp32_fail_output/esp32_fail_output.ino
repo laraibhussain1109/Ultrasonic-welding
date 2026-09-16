@@ -57,11 +57,11 @@ uint32_t decisionSequence = 0;
 
 const char OPERATOR_PAGE[] PROGMEM = R"HTML(
 <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>NeuroIris Manual Inspection</title><style>
+<title>NeuroIris Inspection</title><style>
 body{margin:0;background:#07111f;color:#d9eaff;font:700 18px Arial;text-align:center}main{max-width:560px;margin:auto;padding:24px}
 h1{color:#20dfff;font-size:25px}.button{display:block;width:100%;box-sizing:border-box;border:0;border-radius:12px;padding:20px;margin:14px 0;font-size:24px;font-weight:800;color:white}
 .pass{background:#08783f}.fail{background:#b51627}.recheck{background:#a66500}.panel{display:none;background:#111f32;border-radius:12px;padding:16px}.sectors{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}.sector{padding:15px 4px;background:#263b57;border:2px solid #57799e;border-radius:8px;color:white;font-size:20px}.sector.selected{background:#c51f31;border-color:#ff8290}#status{min-height:24px;color:#75ffba}</style></head>
-<body><main><h1>MANUAL INSPECTION</h1><p>Select the result for the part on camera.</p>
+<body><main><h1>INSPECTION RESULT</h1><p>Select the result for the part on camera.</p>
 <button class="button pass" onclick="sendDecision('PASS')">PASS</button>
 <button class="button fail" onclick="showSectors()">FAIL</button>
 <section class="panel" id="failPanel"><p>Select failed sector (1–14)</p><div class="sectors" id="sectors"></div></section>
@@ -123,7 +123,7 @@ void handleManualDecision() {
   manualSector = result == "FAIL" ? sector : 0;
   decisionSequence++;
   setFailOutput(result == "FAIL");
-  Serial.println("MANUAL_DECISION=" + manualResult + " SECTOR=" + String(manualSector) + " SEQUENCE=" + String(decisionSequence));
+  Serial.println("DECISION=" + manualResult + " SECTOR=" + String(manualSector) + " SEQUENCE=" + String(decisionSequence));
   sendDecisionJson(200);
 }
 

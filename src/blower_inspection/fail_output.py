@@ -35,7 +35,7 @@ class ManualDecision:
     def from_payload(cls, payload: dict) -> "ManualDecision":
         result = str(payload.get("result", "RECHECK")).upper()
         if result not in {"PASS", "FAIL", "RECHECK"}:
-            raise ValueError(f"Unsupported manual result: {result}")
+            raise ValueError(f"Unsupported result: {result}")
         sector_value = payload.get("sector")
         sector = int(sector_value) if sector_value is not None else None
         if result == "FAIL" and (sector is None or not 1 <= sector <= 14):
