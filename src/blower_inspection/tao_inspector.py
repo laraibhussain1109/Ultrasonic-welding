@@ -104,7 +104,7 @@ class TaoInspector:
         else:
             data = json.loads(path.read_text(encoding="utf-8"))
             self._geometry_calibrations[path] = (stamp, data)
-        if (data.get("version") != 2 or data.get("model_sha256") != calibration.model_sha256 or
+        if (data.get("version") != 3 or data.get("model_sha256") != calibration.model_sha256 or
                 data.get("reference_bank_sha256") != calibration.reference_bank_sha256):
             raise RuntimeError("Hybrid calibration is stale; inspection is inhibited")
         return data["geometry"]
@@ -430,7 +430,7 @@ class TaoInspector:
             "minimum_sharpness": float(max(config.minimum_sharpness, np.quantile(sharpness_values, .05) * .25)),
             "aspect_ratio_median": float(np.median(aspect_values)),
         }
-        hybrid = {"version": 2, "model_sha256": calibration.model_sha256,
+        hybrid = {"version": 3, "model_sha256": calibration.model_sha256,
                   "reference_bank_sha256": bank.manifest_sha256, "calibration_image_count": len(paths),
                   "qualified_calibration_image_count": len(qualified_crops),
                   "excluded_registration_count": len(excluded_registration_sources),

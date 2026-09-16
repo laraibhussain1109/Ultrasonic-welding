@@ -45,6 +45,7 @@ def test_model_registry_defaults_camera_and_allows_missing_roi(tmp_path):
     assert model.crop_aspect_ratio_tolerance == 0.35
     assert model.yolo_confidence == 0.70
     assert model.counting_axis == "x"
+    assert model.minimum_rotation_descriptor_distance == 0.06
     assert model.tao_candidate_min_area_ratio == 0.001
     assert model.tao_candidate_max_area_ratio == 0.12
 

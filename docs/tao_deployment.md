@@ -602,6 +602,12 @@ parallel to the x-axis and pairs with `counting_direction: "top_to_bottom"` (or
 `bottom_to_top`). Set `counting_axis: "x"` only for a vertical line and pair it
 with `left_to_right` or `right_to_left`.
 
+`minimum_rotation_descriptor_distance` qualifies distinct surface views. With
+the motor stopped, only the first sharp view is inspected and the station waits
+for structural phase change. Hybrid calibration version 3 also records robust
+geometry reject deltas with physical floors, preventing extremely small MAD from
+amplifying harmless pitch/orientation quantization into `GEOMETRY_DEFORMATION`.
+
 ### Windows GPU provider warnings
 
 The verified Windows deployment uses Python 3.13, PyTorch 2.12.0+cu132 and

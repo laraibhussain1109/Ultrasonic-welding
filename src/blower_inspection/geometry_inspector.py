@@ -101,13 +101,22 @@ class FinGeometryInspector:
             median = float(np.median(values))
             output[name] = {"median": median, "mad": float(max(np.median(np.abs(values - median)), 1e-3)),
                             "p01": float(np.quantile(values, .01)), "p99": float(np.quantile(values, .99))}
+        # MAD can be nearly zero for a locked camera and quantized pitch. Store
+        # physically meaningful reject deltas so one-pixel/noise changes cannot
+        # become maximum-severity geometry failures.
+        output["orientation"]["reject_delta"] = max(4.0, 6 * 1.4826 * output["orientation"]["mad"])
+        output["pitch"]["reject_delta"] = max(2.0, .15 * output["pitch"]["median"],
+                                                6 * 1.4826 * output["pitch"]["mad"])
+        output["periodicity"]["reject_delta"] = max(.15, 6 * 1.4826 * output["periodicity"]["mad"])
+        output["continuity"]["reject_delta"] = max(.12, 6 * 1.4826 * output["continuity"]["mad"])
         return output
 
     def inspect(self, image: np.ndarray) -> GeometryEvidence:
         features, _edges, ribs = _features(image, self.band_top, self.band_bottom)
         def high(name: str, value: float) -> float:
             item = self.calibration.get(name)
-            return float(np.clip(abs(value - item["median"]) / max(6 * 1.4826 * item["mad"], 1e-3), 0, 2)) if item else 0.0
+            return float(np.clip(abs(value - item["median"]) /
+                                 max(item.get("reject_delta", 6 * 1.4826 * item["mad"]), 1e-3), 0, 2)) if item else 0.0
         orientation = high("orientation", features["orientation"])
         pitch = high("pitch", features["pitch"])
         periodicity = high("periodicity", features["periodicity"])

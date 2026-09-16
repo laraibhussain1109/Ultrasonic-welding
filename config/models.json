@@ -56,7 +56,8 @@
       "crop_aspect_ratio_tolerance": 0.35,
       "yolo_confidence": 0.7,
       "counting_axis": "y",
-      "counting_direction": "top_to_bottom"
+      "counting_direction": "top_to_bottom",
+      "minimum_rotation_descriptor_distance": 0.06
     },
     {
       "id": "BF-002",
@@ -113,7 +114,8 @@
       "crop_aspect_ratio_tolerance": 0.35,
       "yolo_confidence": 0.7,
       "counting_axis": "y",
-      "counting_direction": "top_to_bottom"
+      "counting_direction": "top_to_bottom",
+      "minimum_rotation_descriptor_distance": 0.06
     },
     {
       "id": "BF-003",
@@ -170,7 +172,8 @@
       "crop_aspect_ratio_tolerance": 0.35,
       "yolo_confidence": 0.7,
       "counting_axis": "y",
-      "counting_direction": "top_to_bottom"
+      "counting_direction": "top_to_bottom",
+      "minimum_rotation_descriptor_distance": 0.06
     },
     {
       "id": "BF-004",
@@ -227,7 +230,8 @@
       "crop_aspect_ratio_tolerance": 0.35,
       "yolo_confidence": 0.7,
       "counting_axis": "y",
-      "counting_direction": "top_to_bottom"
+      "counting_direction": "top_to_bottom",
+      "minimum_rotation_descriptor_distance": 0.06
     }
   ]
 }

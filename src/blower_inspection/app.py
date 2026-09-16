@@ -46,7 +46,7 @@ from .camera import (
 from .config import ModelRegistry, PartModelConfig, ensure_model_folders
 from .daily_stats import DailyStatistics, operating_day
 from .fail_output import ESP32FailOutputBridge
-from .frame_selection import SharpFrameSampler
+from .frame_selection import RotationPhaseGate, SharpFrameSampler
 from .inspector_factory import inspector_for_model
 from .trainer import InspectionResult
 from .tao_training import run_visual_changenet_task
@@ -200,6 +200,7 @@ class InspectionWindow(QWidget):
         self.fps_started_at = time.perf_counter()
         self.tolerance_percent = 5.0
         self.frame_sampler: SharpFrameSampler | None = None
+        self.rotation_phase_gate: RotationPhaseGate | None = None
         self.pending_sharp_frames = {}
         self.daily_statistics = DailyStatistics()
         self.stats = self.daily_statistics.counts()
@@ -570,6 +571,10 @@ class InspectionWindow(QWidget):
             self.frame_sampler = SharpFrameSampler(
                 model.capture_burst_frames, model.minimum_sharpness
             )
+            self.rotation_phase_gate = RotationPhaseGate(
+                model.minimum_rotation_descriptor_distance,
+                maximum_history=max(24, model.minimum_rotation_views * 2),
+            )
             self.camera.open()
         except Exception as exc:
             QMessageBox.critical(self, "Camera error", str(exc))
@@ -641,6 +646,8 @@ class InspectionWindow(QWidget):
         assert self.frame_sampler is not None
         active_ids = {part.track_id for part in tracks}
         self.frame_sampler.discard_missing(active_ids)
+        if self.rotation_phase_gate is not None:
+            self.rotation_phase_gate.discard_missing(active_ids)
         self.pending_sharp_frames = {
             track_id: selected
             for track_id, selected in self.pending_sharp_frames.items()
@@ -651,7 +658,13 @@ class InspectionWindow(QWidget):
                 part.track_id, crop_bounds(raw_frame, part.bounds)
             )
             if selected is not None:
-                self.pending_sharp_frames[part.track_id] = selected
+                if self.rotation_phase_gate is None or self.rotation_phase_gate.accept(part.track_id, selected.frame):
+                    self.pending_sharp_frames[part.track_id] = selected
+                elif self.inference_worker is None:
+                    self.status_badge.setObjectName("statusStandby")
+                    self.status_badge.setText("WAITING FOR ROTATION")
+                    self.status_badge.style().unpolish(self.status_badge)
+                    self.status_badge.style().polish(self.status_badge)
         now = time.perf_counter()
         if (
             self.inference_worker is None
@@ -921,6 +934,9 @@ class InspectionWindow(QWidget):
         if self.frame_sampler is not None:
             self.frame_sampler.clear()
         self.frame_sampler = None
+        if self.rotation_phase_gate is not None:
+            self.rotation_phase_gate.clear()
+        self.rotation_phase_gate = None
         self.viewer.clear()
         self.viewer.setText("NO CAMERA FRAME")
         self.fps_top.setText("FPS:  -")

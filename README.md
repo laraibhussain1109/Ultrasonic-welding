@@ -256,3 +256,6 @@ passing sample as `VIEW PASS` and reserves final `PASS` for completed sessions.
 Production YOLO crops require confidence strictly above 70%. Supplied blower
 profiles use `counting_axis: "y"`, so the displayed counting line runs horizontally
 along the image x-axis and crossing is measured from vertical part motion.
+
+Fixed-nest view counting requires structural phase diversity: a stationary
+blower produces one view and `WAITING FOR ROTATION`, not eight repeated decisions.

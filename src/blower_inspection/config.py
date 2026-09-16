@@ -32,6 +32,7 @@ class PartModelConfig:
     minimum_sharpness: float = 60.0
     crop_aspect_ratio_tolerance: float = 0.35
     minimum_rotation_views: int = 8
+    minimum_rotation_descriptor_distance: float = 0.06
     inspection_completion_mode: str = "counting_line"
     # Slightly left of frame center so the part reaches the count line within
     # the usable fixture/conveyor travel visible in the production camera.
@@ -167,6 +168,9 @@ class ModelRegistry:
             minimum_sharpness=max(0.0, float(entry.get("minimum_sharpness", 60.0))),
             crop_aspect_ratio_tolerance=max(0.05, float(entry.get("crop_aspect_ratio_tolerance", 0.35))),
             minimum_rotation_views=max(1, int(entry.get("minimum_rotation_views", 8))),
+            minimum_rotation_descriptor_distance=max(0.0, float(
+                entry.get("minimum_rotation_descriptor_distance", 0.06)
+            )),
             inspection_completion_mode=str(entry.get("inspection_completion_mode", "counting_line")),
             counting_line_ratio=float(entry.get("counting_line_ratio", 0.45)),
             counting_axis=str(entry.get("counting_axis", "x")),

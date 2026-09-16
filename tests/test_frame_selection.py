@@ -3,7 +3,7 @@ import pytest
 
 cv2 = pytest.importorskip("cv2", exc_type=ImportError)
 
-from blower_inspection.frame_selection import SharpFrameSampler
+from blower_inspection.frame_selection import RotationPhaseGate, SharpFrameSampler
 
 
 def test_sampler_selects_sharpest_picture_from_each_burst():
@@ -43,3 +43,18 @@ def test_sampler_does_not_choose_transient_small_zoomed_detector_crop():
 
     assert selected is not None
     assert selected.frame.shape == normal.shape
+
+
+def test_rotation_phase_gate_rejects_repeated_stationary_view():
+    first = np.zeros((80, 240, 3), np.uint8)
+    first[:, ::10] = 255
+    different = np.zeros_like(first)
+    different[::8, :] = 255
+    gate = RotationPhaseGate(minimum_distance=.06)
+
+    assert gate.accept(5, first)
+    assert not gate.accept(5, first.copy())
+    assert gate.accept(5, different)
+
+    gate.discard_missing(set())
+    assert gate.accept(5, first)

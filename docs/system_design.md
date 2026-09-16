@@ -88,3 +88,11 @@ a crop or ByteTrack inspection view. The counting-line axis is independent of th
 blower axis: supplied models draw a horizontal line parallel to the image x-axis
 and evaluate top-to-bottom motion using the tracked box's y-center. Legacy
 conveyors can retain a vertical line with `counting_axis: "x"`.
+
+The minimum-view counter advances only for structurally distinct rotation phases.
+Repeated frames of a stationary blower are rejected by `RotationPhaseGate` and
+the UI displays `WAITING FOR ROTATION`; they cannot be counted as eight views or
+latch a repeated false result. Geometry calibration stores minimum physical
+reject deltas for orientation, pitch, periodicity, and continuity so a locked
+camera with near-zero MAD does not turn a one-pixel measurement change into a
+maximum-severity deformation.

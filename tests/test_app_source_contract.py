@@ -51,6 +51,13 @@ def test_app_can_draw_a_horizontal_x_axis_counting_line():
     assert "(0, line_y), (display.shape[1] - 1, line_y)" in source
 
 
+def test_app_waits_for_distinct_rotation_phase_before_another_view():
+    source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
+
+    assert "RotationPhaseGate" in source
+    assert 'self.status_badge.setText("WAITING FOR ROTATION")' in source
+
+
 def test_app_imports_backend_factory_from_its_own_module():
     source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
     assert "from .inspector_factory import inspector_for_model" in source
