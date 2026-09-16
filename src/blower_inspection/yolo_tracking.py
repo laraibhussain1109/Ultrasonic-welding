@@ -175,7 +175,7 @@ class RotatingPartInspector:
     def observe_tracks(
         self, tracks: list[TrackedPart], frame_width: int, now: float | None = None,
         frame_height: int | None = None,
-    ) -> None:
+    ) -> list[CompletedPart]:
         now = time.monotonic() if now is None else now
         active_ids = {track.track_id for track in tracks}
         self.completed_tracker_ids.intersection_update(active_ids)
@@ -196,6 +196,23 @@ class RotatingPartInspector:
             self.track_to_part[track.track_id] = part_id
             if self._crossed(previous_center, center_ratio):
                 session.crossed_counting_line = True
+
+        # A fixed-nest inspection has no counting-line event. If the operator
+        # removes a part before enough distinct views were acquired, terminate
+        # that session after the configured loss debounce instead of leaving a
+        # stale session (and its last annotated image) on screen indefinitely.
+        # This is deliberately fail-closed: an incompletely inspected part is
+        # reported as failed, never silently discarded as a pass.
+        completed: list[CompletedPart] = []
+        if self.completion_mode == "minimum_views":
+            lost = [
+                session for session in self.sessions.values()
+                if not (session.tracker_ids & active_ids)
+                and now - session.last_seen >= self.lost_timeout_s
+            ]
+            for session in lost:
+                completed.append(self._finish(session))
+        return completed
 
     def record_inspection(
         self, track_id: int, *, is_pass: bool, anomaly_score: float,

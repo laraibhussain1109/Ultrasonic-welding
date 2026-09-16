@@ -708,7 +708,11 @@ class InspectionWindow(QWidget):
             assert self.part_detector is not None and self.rotating_parts is not None
             tracks = (self._locked_roi_tracks(raw_frame) if self.live_roi_bounds is not None
                       else self.part_detector.track(raw_frame))
-            self.rotating_parts.observe_tracks(tracks, raw_frame.shape[1], frame_height=raw_frame.shape[0])
+            removed_parts = self.rotating_parts.observe_tracks(
+                tracks, raw_frame.shape[1], frame_height=raw_frame.shape[0]
+            )
+            for completed_part in removed_parts:
+                self._handle_completed_part(completed_part)
             frame = self._draw_tracks(
                 raw_frame,
                 tracks,
@@ -720,8 +724,10 @@ class InspectionWindow(QWidget):
             self._handle_live_error(f"Camera frame error: {exc}")
             return
         self.frame = frame
-        if self.latest_annotated_frame is None:
-            self.show_frame(frame)
+        # Never pin the last inference overlay over the live camera stream.
+        # Results are still displayed when they arrive, but the following
+        # camera frame must replace them so removal/motion remains visible.
+        self.show_frame(frame)
         self.fps_frame_count += 1
         if not tracks:
             if self.frame_sampler is not None:
