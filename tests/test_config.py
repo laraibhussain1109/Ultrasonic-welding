@@ -43,6 +43,7 @@ def test_model_registry_defaults_camera_and_allows_missing_roi(tmp_path):
     assert model.registration_calibration_min_valid_ratio == 0.70
     assert model.inspection_completion_mode == "counting_line"
     assert model.crop_aspect_ratio_tolerance == 0.35
+    assert model.lock_roi_after_confirmation is True
     assert model.yolo_confidence == 0.70
     assert model.counting_axis == "x"
     assert model.minimum_rotation_descriptor_distance == 0.06

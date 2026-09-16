@@ -1,8 +1,44 @@
-from blower_inspection.yolo_tracking import RotatingPartInspector, TrackedPart
+import numpy as np
+
+from blower_inspection.yolo_tracking import RotatingPartInspector, TrackedPart, YoloByteTrackDetector
 
 
 def tracked(track_id, center_x, width=20):
     return TrackedPart(track_id, (center_x - width // 2, 20, width, 40), 0.9)
+
+
+class FakeTensor:
+    def __init__(self, value):
+        self.value = np.asarray(value)
+
+    def detach(self):
+        return self
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self.value
+
+    def __getitem__(self, item):
+        return FakeTensor(self.value[item])
+
+
+def test_startup_roi_selects_one_best_detection_without_bytetrack_id(monkeypatch, tmp_path):
+    detector = YoloByteTrackDetector(tmp_path / "best.pt", confidence=.70)
+    boxes = type("Boxes", (), {
+        "conf": FakeTensor([.71, .94]),
+        "xyxy": FakeTensor([[5, 10, 80, 50], [10, 20, 110, 70]]),
+        "__len__": lambda self: 2,
+    })()
+    result = type("Result", (), {"boxes": boxes})()
+    model = type("Model", (), {"predict": lambda self, *_args, **_kwargs: [result]})()
+    monkeypatch.setattr(detector, "_load", lambda: model)
+
+    selected = detector.detect_best(np.zeros((80, 120, 3), np.uint8))
+
+    assert selected.bounds == (10, 20, 100, 50)
+    assert selected.confidence == .94
 
 
 def test_failed_surface_stays_latched_until_one_line_crossing_verdict():

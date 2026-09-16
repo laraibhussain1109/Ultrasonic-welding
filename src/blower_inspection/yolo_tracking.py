@@ -57,6 +57,30 @@ class YoloByteTrackDetector:
                 parts.append(TrackedPart(int(track_id), (x0, y0, x1 - x0, y1 - y0), float(confidence)))
         return parts
 
+    def detect_best(self, frame: np.ndarray) -> TrackedPart:
+        """Return one qualified detection for operator-approved ROI locking.
+
+        Unlike :meth:`track`, this does not require ByteTrack to have assigned
+        an ID on the first camera frame. It is only used while inspection is
+        stopped; production frames then reuse the approved coordinates.
+        """
+        results = self._load().predict(frame, conf=self.confidence, verbose=False)
+        if not results or results[0].boxes is None or len(results[0].boxes) == 0:
+            raise ValueError("YOLO did not detect a blower for ROI confirmation")
+        boxes = results[0].boxes
+        confidences = boxes.conf.detach().cpu().numpy()
+        eligible = np.flatnonzero(confidences > self.confidence)
+        if eligible.size == 0:
+            raise ValueError(f"YOLO did not detect a blower above {self.confidence:.0%} confidence")
+        best = int(eligible[np.argmax(confidences[eligible])])
+        x0, y0, x1, y1 = boxes.xyxy[best].detach().cpu().numpy().astype(int)
+        height, width = frame.shape[:2]
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(width, x1), min(height, y1)
+        if x1 <= x0 or y1 <= y0:
+            raise ValueError("YOLO returned an empty ROI")
+        return TrackedPart(1, (x0, y0, x1 - x0, y1 - y0), float(confidences[best]))
+
     def exact_crop(self, frame: np.ndarray) -> np.ndarray:
         """Return the highest-confidence YOLO part crop for training/inference parity."""
         results = self._load().predict(frame, conf=self.confidence, verbose=False)

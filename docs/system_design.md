@@ -106,3 +106,14 @@ requires pitch and periodicity plus independent continuity disruption;
 structural inconsistency. A single global scalar cannot independently cross the
 geometry candidate boundary. Isolated broken-fin evidence remains independently
 authoritative because it is localized and rib/glare masked.
+
+### Operator-qualified fixed ROI
+
+Fixed-nest profiles set `lock_roi_after_confirmation: true`. YOLO runs once
+after camera warm-up and proposes the complete-blower rectangle. Inspection does
+not begin until the operator accepts that preview. Rejected previews are captured
+again, and Cancel leaves inspection stopped. The accepted pixel coordinates are
+then reused for sharp-frame selection, registration, TAO, and geometry throughout
+the session. YOLO is not allowed to resize the crop from one rotation frame to
+the next. Part-presence loss is debounced before a new fixed-nest part session is
+created; it never changes the accepted rectangle.

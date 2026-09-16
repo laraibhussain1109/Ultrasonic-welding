@@ -57,7 +57,8 @@
       "yolo_confidence": 0.7,
       "counting_axis": "y",
       "counting_direction": "top_to_bottom",
-      "minimum_rotation_descriptor_distance": 0.06
+      "minimum_rotation_descriptor_distance": 0.06,
+      "lock_roi_after_confirmation": true
     },
     {
       "id": "BF-002",
@@ -115,7 +116,8 @@
       "yolo_confidence": 0.7,
       "counting_axis": "y",
       "counting_direction": "top_to_bottom",
-      "minimum_rotation_descriptor_distance": 0.06
+      "minimum_rotation_descriptor_distance": 0.06,
+      "lock_roi_after_confirmation": true
     },
     {
       "id": "BF-003",
@@ -173,7 +175,8 @@
       "yolo_confidence": 0.7,
       "counting_axis": "y",
       "counting_direction": "top_to_bottom",
-      "minimum_rotation_descriptor_distance": 0.06
+      "minimum_rotation_descriptor_distance": 0.06,
+      "lock_roi_after_confirmation": true
     },
     {
       "id": "BF-004",
@@ -231,7 +234,8 @@
       "yolo_confidence": 0.7,
       "counting_axis": "y",
       "counting_direction": "top_to_bottom",
-      "minimum_rotation_descriptor_distance": 0.06
+      "minimum_rotation_descriptor_distance": 0.06,
+      "lock_roi_after_confirmation": true
     }
   ]
 }

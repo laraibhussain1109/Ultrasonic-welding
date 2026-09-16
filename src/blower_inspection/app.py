@@ -195,6 +195,10 @@ class InspectionWindow(QWidget):
         self.latest_annotated_frame = None
         self.current_display_frame = None
         self.live_roi_bounds = None
+        self.locked_roi_confidence = 0.0
+        self.locked_track_id = 1
+        self.locked_part_present = False
+        self.locked_missing_frames = 0
         self.raw_frame = None
         self.fps_frame_count = 0
         self.fps_started_at = time.perf_counter()
@@ -576,6 +580,11 @@ class InspectionWindow(QWidget):
                 maximum_history=max(24, model.minimum_rotation_views * 2),
             )
             self.camera.open()
+            if model.lock_roi_after_confirmation and not self._confirm_and_lock_roi(model):
+                self.camera.close()
+                self.part_detector = None
+                self.rotating_parts = None
+                return
         except Exception as exc:
             QMessageBox.critical(self, "Camera error", str(exc))
             return
@@ -590,7 +599,8 @@ class InspectionWindow(QWidget):
         self.last_inference_at = 0.0
         self.latest_annotated_frame = None
         self.current_display_frame = None
-        self.live_roi_bounds = None
+        if not model.lock_roi_after_confirmation:
+            self.live_roi_bounds = None
         self.raw_frame = None
         self.pending_sharp_frames = {}
         try:
@@ -615,6 +625,80 @@ class InspectionWindow(QWidget):
         self.log.addItem(runtime_summary)
         self.live_timer.start(1)
 
+    def _confirm_and_lock_roi(self, model: PartModelConfig) -> bool:
+        """Use YOLO once and require operator approval of a fixed live ROI."""
+        assert self.part_detector is not None
+        while True:
+            # Discard initial auto-exposure frames before presenting the box.
+            raw_frame = None
+            for _ in range(3):
+                raw_frame = self.camera.read()
+            assert raw_frame is not None
+            self.raw_frame = raw_frame
+            try:
+                detected = self.part_detector.detect_best(raw_frame)
+            except ValueError as exc:
+                choice = QMessageBox.warning(
+                    self, "ROI not found", f"{exc}\n\nRetry the camera frame?",
+                    QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Retry,
+                )
+                if choice == QMessageBox.StandardButton.Retry:
+                    continue
+                return False
+
+            preview = raw_frame.copy()
+            x, y, w, h = detected.bounds
+            cv2.rectangle(preview, (x, y), (x + w, y + h), (0, 255, 255), 3)
+            cv2.putText(preview, f"PROPOSED FIXED ROI {detected.confidence:.0%}",
+                        (x, max(24, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 255, 255), 2)
+            self.show_frame(preview)
+            QApplication.processEvents()
+            choice = QMessageBox.question(
+                self,
+                "Confirm fixed inspection ROI",
+                "Is the yellow box the correct complete blower ROI?\n\n"
+                "YES: lock this exact ROI for the entire inspection.\n"
+                "NO: capture again.\nCANCEL: do not start inspection.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Yes,
+            )
+            if choice == QMessageBox.StandardButton.No:
+                continue
+            if choice == QMessageBox.StandardButton.Cancel:
+                return False
+            self.live_roi_bounds = detected.bounds
+            self.locked_roi_confidence = detected.confidence
+            self.locked_track_id = 1
+            self.locked_part_present = True
+            self.locked_missing_frames = 0
+            self.log.addItem(
+                f"LOCKED ROI {model.id} | x={x} y={y} w={w} h={h} | YOLO={detected.confidence:.0%}"
+            )
+            return True
+
+    def _locked_roi_tracks(self, raw_frame) -> list[TrackedPart]:
+        """Return the approved immutable ROI, with debounced part presence."""
+        if self.live_roi_bounds is None:
+            return []
+        roi = crop_bounds(raw_frame, self.live_roi_bounds)
+        if is_part_present(roi):
+            if not self.locked_part_present:
+                self.locked_track_id += 1
+            self.locked_part_present = True
+            self.locked_missing_frames = 0
+        else:
+            self.locked_missing_frames += 1
+            # A rotating, manually focused blower may look texture-poor for a
+            # few consecutive blurred frames. Require roughly half a second of
+            # absence before ending the fixed-nest part session.
+            model = self.selected_model()
+            missing_limit = max(model.capture_burst_frames, model.camera_fps // 2)
+            if self.locked_missing_frames >= missing_limit:
+                self.locked_part_present = False
+                return []
+        return [TrackedPart(self.locked_track_id, self.live_roi_bounds, self.locked_roi_confidence)]
+
     def _process_live_frame(self) -> None:
         if not self.inspection_running:
             return
@@ -622,7 +706,8 @@ class InspectionWindow(QWidget):
             raw_frame = self.camera.read()
             self.raw_frame = raw_frame
             assert self.part_detector is not None and self.rotating_parts is not None
-            tracks = self.part_detector.track(raw_frame)
+            tracks = (self._locked_roi_tracks(raw_frame) if self.live_roi_bounds is not None
+                      else self.part_detector.track(raw_frame))
             self.rotating_parts.observe_tracks(tracks, raw_frame.shape[1], frame_height=raw_frame.shape[0])
             frame = self._draw_tracks(
                 raw_frame,
@@ -934,6 +1019,9 @@ class InspectionWindow(QWidget):
         self.latest_annotated_frame = None
         self.current_display_frame = None
         self.live_roi_bounds = None
+        self.locked_roi_confidence = 0.0
+        self.locked_part_present = False
+        self.locked_missing_frames = 0
         self.raw_frame = None
         self.pending_sharp_frames = {}
         if self.frame_sampler is not None:

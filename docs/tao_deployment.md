@@ -614,6 +614,12 @@ pitch and periodicity must agree with independent continuity evidence.
 Orientation likewise requires a neighboring inconsistency before `TILTED_FIN` is emitted. Recalibrate
 after upgrading so the current geometry artifact contract is explicit.
 
+For a fixed nest, keep `lock_roi_after_confirmation` enabled. On **Start
+Inspection**, verify that the yellow proposed ROI contains the complete blower
+and no neighboring part. Select **Yes** to freeze it, **No** to acquire another
+YOLO proposal, or **Cancel** to remain stopped. The approved ROI is held for the
+entire run; YOLO is not executed per frame and cannot cause crop zoom changes.
+
 ### Windows GPU provider warnings
 
 The verified Windows deployment uses Python 3.13, PyTorch 2.12.0+cu132 and

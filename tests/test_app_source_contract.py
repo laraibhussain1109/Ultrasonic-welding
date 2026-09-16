@@ -58,6 +58,17 @@ def test_app_waits_for_distinct_rotation_phase_before_another_view():
     assert 'self.status_badge.setText("WAITING FOR ROTATION")' in source
 
 
+def test_fixed_nest_uses_one_operator_approved_yolo_roi():
+    source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
+
+    assert "def _confirm_and_lock_roi" in source
+    assert "self.part_detector.detect_best(raw_frame)" in source
+    assert '"Confirm fixed inspection ROI"' in source
+    assert "self.live_roi_bounds = detected.bounds" in source
+    assert "def _locked_roi_tracks" in source
+    assert "TrackedPart(self.locked_track_id, self.live_roi_bounds" in source
+
+
 def test_app_imports_backend_factory_from_its_own_module():
     source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
     assert "from .inspector_factory import inspector_for_model" in source

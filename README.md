@@ -263,3 +263,10 @@ Missing- and tilted-fin reasons require corroborating geometry measurements.
 Because pitch and periodicity share an autocorrelation source, missing-fin
 classification also requires an independent continuity disruption; global pitch,
 periodicity, or orientation noise alone cannot reject a part.
+
+For fixed-nest inspection, `lock_roi_after_confirmation` makes YOLO a startup
+localizer rather than a per-frame crop controller. Start Inspection displays the
+detected complete-blower box and asks the operator to accept, recapture, or
+cancel it. Once accepted, its full-frame coordinates remain immutable for every
+rotation view in that inspection session; changing YOLO boxes therefore cannot
+zoom into a few fins or expose neighboring/table regions mid-inspection.

@@ -31,6 +31,9 @@ class PartModelConfig:
     capture_burst_frames: int = 5
     minimum_sharpness: float = 60.0
     crop_aspect_ratio_tolerance: float = 0.35
+    # Fixed-nest stations use YOLO once at startup, ask the operator to approve
+    # the box, then retain those full-frame coordinates for every view.
+    lock_roi_after_confirmation: bool = True
     minimum_rotation_views: int = 8
     minimum_rotation_descriptor_distance: float = 0.06
     inspection_completion_mode: str = "counting_line"
@@ -167,6 +170,7 @@ class ModelRegistry:
             capture_burst_frames=max(2, int(entry.get("capture_burst_frames", 5))),
             minimum_sharpness=max(0.0, float(entry.get("minimum_sharpness", 60.0))),
             crop_aspect_ratio_tolerance=max(0.05, float(entry.get("crop_aspect_ratio_tolerance", 0.35))),
+            lock_roi_after_confirmation=bool(entry.get("lock_roi_after_confirmation", True)),
             minimum_rotation_views=max(1, int(entry.get("minimum_rotation_views", 8))),
             minimum_rotation_descriptor_distance=max(0.0, float(
                 entry.get("minimum_rotation_descriptor_distance", 0.06)
