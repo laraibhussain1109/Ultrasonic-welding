@@ -80,6 +80,33 @@ class PartModelConfig:
     longitudinal_sections: int = 6
     hybrid_calibration_file: Path | None = None
     engineering_debug: bool = False
+    production_algorithm: str = "patchcore_geometry"
+    patchcore_primary: bool = True
+    padim_enabled: bool = False
+    distillation_enabled: bool = False
+    engineering_compare_tao: bool = False
+    patchcore_edge_ignore_ratio: float = 0.05
+    patchcore_embedding_layers: tuple[str, ...] = ("layer2", "layer3")
+    patchcore_memory_bank_size: int = 8192
+    patchcore_coreset_ratio: float = 0.08
+    roi_mode: str = "fixed_after_detection"
+    roi_smoothing_frames: int = 5
+    roi_padding_ratio: float = 0.04
+    support_rib_mask_enabled: bool = True
+    support_rib_margin_ratio: float = 0.01
+    patchcore_section_mode: str = "support_ribs"
+    patchcore_section_count: int = 6
+    training_min_sharpness: float = 60.0
+    inference_min_sharpness: float = 60.0
+    max_glare_ratio: float = 0.20
+    max_saturation_ratio: float = 0.12
+    minimum_qualified_views: int = 3
+    patchcore_candidate_threshold: float = 0.0
+    patchcore_fail_threshold: float = 0.0
+    required_persistent_views: int = 2
+    patchcore_calibration_file: Path | None = None
+    hard_good_dir: Path | None = None
+    patchcore_model_file: Path | None = None
 
 
 class ModelRegistry:
@@ -215,6 +242,33 @@ class ModelRegistry:
             longitudinal_sections=max(1, int(entry.get("longitudinal_sections", 6))),
             hybrid_calibration_file=Path(entry["hybrid_calibration_file"]) if entry.get("hybrid_calibration_file") else None,
             engineering_debug=bool(entry.get("engineering_debug", False)),
+            production_algorithm=str(entry.get("production_algorithm", "patchcore_geometry")),
+            patchcore_primary=bool(entry.get("patchcore_primary", True)),
+            padim_enabled=bool(entry.get("padim_enabled", False)),
+            distillation_enabled=bool(entry.get("distillation_enabled", False)),
+            engineering_compare_tao=bool(entry.get("engineering_compare_tao", False)),
+            patchcore_edge_ignore_ratio=float(entry.get("patchcore_edge_ignore_ratio", .05)),
+            patchcore_embedding_layers=tuple(entry.get("patchcore_embedding_layers", ["layer2", "layer3"])),
+            patchcore_memory_bank_size=max(1, int(entry.get("patchcore_memory_bank_size", 8192))),
+            patchcore_coreset_ratio=float(entry.get("patchcore_coreset_ratio", .08)),
+            roi_mode=str(entry.get("roi_mode", "fixed_after_detection")),
+            roi_smoothing_frames=max(1, int(entry.get("roi_smoothing_frames", 5))),
+            roi_padding_ratio=max(0., float(entry.get("roi_padding_ratio", .04))),
+            support_rib_mask_enabled=bool(entry.get("support_rib_mask_enabled", True)),
+            support_rib_margin_ratio=max(0., float(entry.get("support_rib_margin_ratio", .01))),
+            patchcore_section_mode=str(entry.get("patchcore_section_mode", "support_ribs")),
+            patchcore_section_count=max(1, int(entry.get("patchcore_section_count", entry.get("longitudinal_sections", 6)))),
+            training_min_sharpness=max(0., float(entry.get("training_min_sharpness", entry.get("minimum_sharpness", 60.)))),
+            inference_min_sharpness=max(0., float(entry.get("inference_min_sharpness", entry.get("minimum_sharpness", 60.)))),
+            max_glare_ratio=float(entry.get("max_glare_ratio", .20)),
+            max_saturation_ratio=float(entry.get("max_saturation_ratio", .12)),
+            minimum_qualified_views=max(1, int(entry.get("minimum_qualified_views", 3))),
+            patchcore_candidate_threshold=float(entry.get("patchcore_candidate_threshold", 0.0)),
+            patchcore_fail_threshold=float(entry.get("patchcore_fail_threshold", 0.0)),
+            required_persistent_views=max(1, int(entry.get("required_persistent_views", 2))),
+            patchcore_calibration_file=Path(entry["patchcore_calibration_file"]) if entry.get("patchcore_calibration_file") else None,
+            hard_good_dir=Path(entry["hard_good_dir"]) if entry.get("hard_good_dir") else None,
+            patchcore_model_file=Path(entry["patchcore_model_file"]) if entry.get("patchcore_model_file") else None,
         )
 
 

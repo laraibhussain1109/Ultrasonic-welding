@@ -1,6 +1,13 @@
 # NeuroIris Blower Fan Industrial Vision Inspection
 
-Python/PyQt6 inspection software for ultrasonic-welded blower fan parts. The production anomaly path consumes an **NVIDIA TAO Deploy ONNX export**; PatchCore and SuperSimpleNet are not used for production decisions.
+Python/PyQt6 inspection software for ultrasonic-welded blower fan parts. The
+default production decision uses **PatchCore + structural fin geometry +
+multi-view confirmation**. NVIDIA TAO VisualChangeNet remains available for
+engineering comparison, training, export, and ONNX runtime experiments, but it
+does not control PASS/FAIL by default.
+
+> **New installation?** Follow the complete [step-by-step operating guide](docs/getting_started.md)
+> for PatchCore model training and starting a live inspection.
 
 ## Safety and quality boundary
 
@@ -16,7 +23,9 @@ The TAO runtime adds these production gates:
 - A failed view is latched across the rotating physical part, and a runtime fault stops inspection and asserts the reject/inhibit output.
 - Reports record the algorithm, model digest, thresholds, score, affected area, and sectors.
 
-See [the TAO deployment and validation gate](docs/tao_deployment.md) before commissioning.
+See [the step-by-step operating guide](docs/getting_started.md) and qualification
+notes before commissioning. See [the TAO deployment guide](docs/tao_deployment.md)
+only when using the optional TAO engineering workflow.
 
 ## Installation
 
@@ -38,7 +47,11 @@ pip install -e ".[industrial,tao]"
 
 Start the UI with `python -m blower_inspection.app`.
 
-## Model and dataset workflow
+## Optional TAO engineering workflow (not default production training)
+
+The section below is retained for teams that deliberately train/export TAO for
+research comparison. For normal PatchCore production setup, skip this section
+and use [the step-by-step operating guide](docs/getting_started.md).
 
 Each part in `config/models.json` points to its own TAO ONNX export, calibration file, normal-image directory, output directory, camera mode, ROI, and YOLO locator. Export a fixed-spatial-shape TAO visual-anomaly model as, for example, `data/models/BF-001/tao_anomaly.onnx`.
 
@@ -224,9 +237,9 @@ pip install -e '.[dev]'
 pytest -q
 ```
 
-## Hybrid rotating-blower inspection
+## Legacy TAO hybrid rotating-blower inspection
 
-Production inspection retains NVIDIA TAO VisualChangeNet but no longer treats a
+The optional TAO comparison path retains NVIDIA TAO VisualChangeNet but does not treat a
 single change-map pixel as a physical defect. `CALIBRATE` builds a diverse,
 structural reference bank from reviewed normal images, qualifies conservative
 Euclidean registration, and learns robust fin geometry. Live views use only the

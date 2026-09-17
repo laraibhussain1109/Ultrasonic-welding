@@ -119,6 +119,11 @@ class RotatingPartSession:
     persistent_candidate_count: int = 0
     worst_geometry_score: float = 0.0
     worst_tao_score: float = 0.0
+    blurry_views: int = 0
+    glare_rejected_views: int = 0
+    patchcore_candidate_views: int = 0
+    geometry_candidate_views: int = 0
+    confirmed_defect_views: int = 0
     reason_codes: set[str] = field(default_factory=set)
 
 
@@ -226,18 +231,26 @@ class RotatingPartInspector:
         session.frames_inspected += 1
         if not view_valid:
             session.invalid_registration_views += 1
+            if "MOTION_BLUR" in reason_codes or "LOW_SHARPNESS" in reason_codes:
+                session.blurry_views += 1
         else:
             session.valid_views += 1
         if geometry_score >= 1.0:
             session.geometry_strong_views += 1
         if provisional_candidate:
-            session.tao_only_candidate_views += 1
+            session.patchcore_candidate_views += 1
             session.persistent_candidate_count += 1
         else:
             session.persistent_candidate_count = 0
         # Old callers preserve fail-latching. Hybrid callers explicitly label
         # severe versus provisional evidence.
         severe = (not is_pass) if immediate_failure is None else immediate_failure
+        if geometry_score >= 0.55:
+            session.geometry_candidate_views += 1
+        if "LIKELY_GLARE" in reason_codes:
+            session.glare_rejected_views += 1
+        if severe:
+            session.confirmed_defect_views += 1
         session.has_failure |= severe or session.persistent_candidate_count >= self.weak_candidate_required_views
         session.worst_score = max(session.worst_score, anomaly_score)
         session.worst_geometry_score = max(session.worst_geometry_score, geometry_score)
@@ -351,6 +364,7 @@ class RotatingPartInspector:
         insufficient = session.valid_views < self.minimum_rotation_views
         reasons = set(session.reason_codes)
         if insufficient:
-            reasons.add("INSUFFICIENT_VIEW_QUALITY")
+            reasons.add("INSUFFICIENT_VALID_VIEWS")
+            reasons.add("INSUFFICIENT_VIEW_QUALITY")  # legacy storage/API compatibility
         return CompletedPart(session.part_id, "FAIL" if session.has_failure or insufficient else "PASS",
                              session.frames_inspected, session.worst_score, session.valid_views, tuple(sorted(reasons)))

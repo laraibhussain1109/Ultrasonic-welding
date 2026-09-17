@@ -13,6 +13,8 @@ import numpy as np
 class SelectedFrame:
     frame: np.ndarray
     sharpness: float
+    blur_score: float = 0.0
+    selected_index: int = -1
 
 
 class SharpFrameSampler:
@@ -43,7 +45,8 @@ class SharpFrameSampler:
 
     def offer(self, track_id: int, frame: np.ndarray) -> SelectedFrame | None:
         burst = self._bursts[track_id]
-        burst.append(SelectedFrame(frame.copy(), self.sharpness(frame)))
+        sharpness = self.sharpness(frame)
+        burst.append(SelectedFrame(frame.copy(), sharpness, 1.0 / (1.0 + sharpness), len(burst)))
         if len(burst) < self.burst_size:
             return None
         # A transient bad YOLO box can be a tiny, artificially sharp crop. Do

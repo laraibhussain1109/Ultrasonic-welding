@@ -63,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     train = sub.add_parser(
         "train",
-        help="Train legacy models or calibrate a NVIDIA TAO ONNX export from normal images",
+        help="Train/calibrate the configured production detector from known-good images",
     )
     train.add_argument("model_id")
     train.add_argument("--model-file", help="TAO Deploy ONNX export to import before calibration")
@@ -148,9 +148,10 @@ def main(argv: list[str] | None = None) -> int:
                 raise SystemExit(str(exc)) from exc
             model = registry.update_model_settings(model.id, model_file=candidate)
         inspector = inspector_for_model(model)
-        if model.algorithm == "hybrid_patchcore_padim" and model.yolo_model_path is None:
+        patchcore_production = model.production_algorithm == "patchcore_geometry"
+        if patchcore_production and model.yolo_model_path is None:
             raise SystemExit(f"No yolo_model_path is configured for {model.id}")
-        if model.algorithm == "nvidia_tao":
+        if not patchcore_production and model.algorithm == "nvidia_tao":
             if not model.model_file.is_file():
                 raise SystemExit(
                     f"VisualChangeNet export not found: {model.model_file}. The `train` command calibrates an "
@@ -164,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
                 "before training (source images will not be modified)..."
             )
         output = inspector.train(model, progress_callback=_print_progress)
-        action = "Calibrated" if model.algorithm == "nvidia_tao" else "Trained"
+        action = "Calibrated" if not patchcore_production and model.algorithm == "nvidia_tao" else "Trained"
         print(f"{action} {model.id}: {output}")
         return 0
 
