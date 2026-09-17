@@ -555,7 +555,7 @@ class InspectionWindow(QWidget):
         except Exception as exc:
             QMessageBox.critical(self, "Camera settings error", str(exc))
             return
-        if model.algorithm == "nvidia_tao":
+        if model.production_algorithm != "patchcore_geometry" and model.algorithm == "nvidia_tao":
             try:
                 self.inspector.validate_ready(model)
             except Exception as exc:
@@ -833,7 +833,7 @@ class InspectionWindow(QWidget):
                            f"BROKEN: {geometry_components.get('broken', 0):.2f}")
         self.last_result.setText(
             f"TRACK: {track_id}   VIEW SCORE: {result.anomaly_score:.2f}\n"
-            f"TAO: {result.tao_score or 0:.2f}   GEOMETRY: {result.geometry_score or 0:.2f}\n"
+            f"PATCHCORE: {result.anomaly_score:.2f}   GEOMETRY: {result.geometry_score or 0:.2f}\n"
             f"GLARE: {result.glare_score or 0:.2f}   REGISTRATION: {result.registration_score or 0:.2f}\n"
             f"VIEW QUALITY: {result.view_quality_score if result.view_quality_score is not None else 1.0:.2f}\n"
             f"{geometry_detail}\n"

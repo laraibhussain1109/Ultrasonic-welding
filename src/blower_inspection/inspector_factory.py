@@ -10,6 +10,10 @@ from .tao_inspector import TaoInspector
 
 def inspector_for_model(config: PartModelConfig) -> Any:
     """Create the inspection backend configured for a part model."""
+    if config.production_algorithm == "patchcore_geometry" or config.algorithm == "patchcore_primary":
+        from .patchcore_inspector import PatchCoreInspector
+
+        return PatchCoreInspector()
     if config.algorithm == "nvidia_tao":
         return TaoInspector()
     if config.algorithm == "hybrid_patchcore_padim":
