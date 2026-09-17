@@ -128,7 +128,11 @@ class TrainWorker(QThread):
             output = self.inspector.train(
                 self.model, progress_callback=lambda update: self.progress.emit(update.format())
             )
-            action = "CALIBRATED" if self.model.algorithm == "nvidia_tao" else "TRAINED"
+            tao_production = (
+                self.model.production_algorithm != "patchcore_geometry"
+                and self.model.algorithm == "nvidia_tao"
+            )
+            action = "CALIBRATED" if tao_production else "TRAINED"
             self.finished_ok.emit(f"{action} {self.model.id}: {output}")
         except Exception as exc:
             self.failed.emit(f"TRAINING FAILED {self.model.id}: {exc}")
@@ -332,7 +336,7 @@ class InspectionWindow(QWidget):
             export.setObjectName("train")
             export.clicked.connect(self.export_selected)
             layout.addWidget(export)
-            train = QPushButton("◆   CALIBRATE TAO MODEL")
+            train = QPushButton("◆   TRAIN PATCHCORE MODEL")
             train.setObjectName("train")
             train.clicked.connect(self.train_selected)
             layout.addWidget(train)
@@ -966,7 +970,8 @@ class InspectionWindow(QWidget):
             QMessageBox.warning(self, "Permission denied", "Training is available to admin users only.")
             return
         model = self.selected_model()
-        if model.algorithm == "nvidia_tao" and not model.model_file.is_file():
+        tao_production = model.production_algorithm != "patchcore_geometry" and model.algorithm == "nvidia_tao"
+        if tao_production and not model.model_file.is_file():
             path, _ = QFileDialog.getOpenFileName(
                 self,
                 f"Select NVIDIA TAO ONNX export for {model.id}",
@@ -985,7 +990,8 @@ class InspectionWindow(QWidget):
             model = self.registry.update_model_settings(model.id, model_file=Path(path).resolve())
             self._refresh_models(selected_id=model.id)
             self.inspector = inspector_for_model(model)
-        self.log.addItem(f"TAO CALIBRATION STARTED {model.id}")
+        operation = "TAO CALIBRATION" if tao_production else "PATCHCORE TRAINING"
+        self.log.addItem(f"{operation} STARTED {model.id}")
         self.train_worker = TrainWorker(self.inspector, model)
         self.train_worker.finished_ok.connect(lambda message: self.log.addItem(message))
         self.train_worker.progress.connect(self._show_training_progress)
