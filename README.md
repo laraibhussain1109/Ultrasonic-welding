@@ -217,6 +217,23 @@ Daily totals are stored in `data/results/daily_statistics.json`; an operating da
 
 Flash `firmware/esp32_fail_output/esp32_fail_output.ino` and configure the serial bridge for the deployment port. The app asserts FAIL for a rejected completed part. It also asserts FAIL/inhibit after a live inference fault; production PLC logic must distinguish and latch equipment faults according to the line risk assessment.
 
+### Mobile decision page
+
+The same firmware creates the `NeuroIris-ESP32` hotspot (default password
+`neuroiris123`). Connect the inspection computer and phone to it, then open
+`http://192.168.4.1` on the phone. The page offers **PASS**, **FAIL**, and
+**RECHECK**. Choosing **FAIL** opens numbered sectors 1–14; the desktop polls
+the ESP32, shades that sector red inside the current part ROI, and writes
+`FAIL SECTOR n` over the camera image. The buzzer/reject output is active for
+FAIL and inactive for PASS or RECHECK.
+
+The phone choice always takes precedence over an inspection result already in
+progress. The screen and camera image show only **PASS**, **FAIL**, or
+**RECHECK** (plus the sector number for FAIL). Each button press has a
+monotonically increasing sequence number, so the desktop counts a choice once
+rather than on every poll. Change the default hotspot password before
+deployment and apply the site's quality and traceability procedures.
+
 ## Tests
 
 ```bash
