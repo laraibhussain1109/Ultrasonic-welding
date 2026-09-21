@@ -306,6 +306,17 @@ editable install from the correct repository root.
 - **Persistent edge detections**: verify that the accepted ROI contains the full
   blower and tune `patchcore_edge_ignore_ratio` only with a labeled validation
   set.
+- **Known-good part latches `PATCHCORE_ANOMALY`**: retrain after updating. Older
+  builds calibrated against the complete memory bank but silently reduced that
+  bank to 1,024 patches during live inference, raising live nearest-neighbor
+  distances above their calibrated limits. They also failed to seed the ROI
+  border before the distance transform, which gave silhouette pixels full
+  anomaly authority. Current builds use the identical configured memory bank in
+  calibration and inference, explicitly suppress the border, and require a
+  PatchCore candidate to recur in the same longitudinal section before temporal
+  latching. Do not solve this by increasing the threshold or normalizing each
+  live score map; both can hide real defects. Retrain and validate with an
+  independent known-good set.
 - **System fault after model/settings change**: read the event log and retrain so
   the checkpoint and calibration hashes/settings agree.
 

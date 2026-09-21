@@ -42,7 +42,12 @@ class PatchCoreEvidence:
 
 def edge_authority_mask(shape: tuple[int, int], ratio: float, object_mask: np.ndarray | None = None) -> np.ndarray:
     """Continuous authority from zero at an object/ROI edge to one inside."""
-    base = np.ones(shape, np.uint8) if object_mask is None else object_mask.astype(np.uint8)
+    base = np.ones(shape, np.uint8) if object_mask is None else object_mask.astype(np.uint8).copy()
+    # distanceTransform measures distance to an existing zero. An all-ones ROI
+    # has no zero and OpenCV returns a large constant, which previously gave the
+    # outer silhouette full authority. Seed the geometric border explicitly.
+    base[[0, -1], :] = 0
+    base[:, [0, -1]] = 0
     distance = cv2.distanceTransform(base, cv2.DIST_L2, 3)
     ramp = max(1.0, min(shape) * max(0.0, ratio))
     return np.clip(distance / ramp, 0, 1).astype(np.float32)
@@ -96,7 +101,11 @@ class PatchCoreInspector(HybridPatchcorePadimInspector):
         self.settings = replace(self.settings, image_size=config.image_size,
                                 embedding_layers=config.patchcore_embedding_layers,
                                 coreset_ratio=config.patchcore_coreset_ratio,
-                                max_coreset_patches=config.patchcore_memory_bank_size)
+                                max_coreset_patches=config.patchcore_memory_bank_size,
+                                # Calibration and production must query the exact
+                                # same bank. The legacy 1,024-patch runtime cap
+                                # raised live distances above calibrated limits.
+                                runtime_memory_bank_limit=config.patchcore_memory_bank_size)
         self._roi = ROIStabilizer((config.image_size, max(128, config.image_size // 3)),
                                   mode=config.roi_mode, smoothing_frames=config.roi_smoothing_frames,
                                   padding_ratio=config.roi_padding_ratio)
@@ -279,6 +288,7 @@ class PatchCoreInspector(HybridPatchcorePadimInspector):
         image_score = float(np.quantile(weighted[valid], .995)) if np.any(valid) else 0.0
         section_scores = tuple(float(np.quantile(part[part > 0], .995)) if np.any(part > 0) else 0.0
                                for part in np.array_split(weighted, config.patchcore_section_count, axis=1))
+        candidate_sections = tuple(index for index, score in enumerate(section_scores) if score >= candidate)
         geometry_started = time.perf_counter()
         geometry = FinGeometryInspector(band_top=config.inspection_band_top_ratio,
                                         band_bottom=config.inspection_band_bottom_ratio).inspect(roi)
@@ -296,6 +306,7 @@ class PatchCoreInspector(HybridPatchcorePadimInspector):
                                 periodicity_score=geometry.periodicity_score, glare_score=glare.score,
                                 hybrid_score=max(image_score / max(fail, 1e-6), geometry.score),
                                 reason_codes=decision.reason_codes, view_valid=True,
+                                candidate_sections=candidate_sections,
                                 view_quality_score=quality.sharpness,
                                 latencies_ms={"frame_quality": quality_ms,
                                               "patchcore": (geometry_started - patch_started) * 1000,

@@ -809,6 +809,7 @@ class InspectionWindow(QWidget):
                 provisional_candidate=result.status == "CANDIDATE",
                 geometry_score=result.geometry_score or 0.0,
                 tao_score=result.tao_score, reason_codes=result.reason_codes,
+                candidate_sections=result.candidate_sections,
             )
             latched_failure = self.rotating_parts.latched_failure(track_id) or latched_failure
             view_progress = ((completed_part.frames_inspected, completed_part.valid_views,

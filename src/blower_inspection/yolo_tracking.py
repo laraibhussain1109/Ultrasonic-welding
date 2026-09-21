@@ -124,6 +124,7 @@ class RotatingPartSession:
     patchcore_candidate_views: int = 0
     geometry_candidate_views: int = 0
     confirmed_defect_views: int = 0
+    last_candidate_sections: set[int] = field(default_factory=set)
     reason_codes: set[str] = field(default_factory=set)
 
 
@@ -224,6 +225,7 @@ class RotatingPartInspector:
         view_valid: bool = True, immediate_failure: bool | None = None,
         provisional_candidate: bool = False, geometry_score: float = 0.0,
         tao_score: float | None = None, reason_codes: tuple[str, ...] | list[str] = (),
+        candidate_sections: tuple[int, ...] | list[int] = (),
     ) -> CompletedPart | None:
         session = self._session_for_track(track_id)
         if session is None:
@@ -239,9 +241,18 @@ class RotatingPartInspector:
             session.geometry_strong_views += 1
         if provisional_candidate:
             session.patchcore_candidate_views += 1
-            session.persistent_candidate_count += 1
+            sections = set(candidate_sections)
+            # A repeated scalar spike is not persistence. Require the anomaly
+            # to recur in at least one longitudinal section. Legacy callers
+            # without section evidence retain their former behavior.
+            if not sections or not session.last_candidate_sections or sections & session.last_candidate_sections:
+                session.persistent_candidate_count += 1
+            else:
+                session.persistent_candidate_count = 1
+            session.last_candidate_sections = sections
         else:
             session.persistent_candidate_count = 0
+            session.last_candidate_sections.clear()
         # Old callers preserve fail-latching. Hybrid callers explicitly label
         # severe versus provisional evidence.
         severe = (not is_pass) if immediate_failure is None else immediate_failure

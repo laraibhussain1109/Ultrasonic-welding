@@ -189,3 +189,28 @@ def test_horizontal_counting_line_uses_vertical_part_motion():
 
     assert completed is not None
     assert completed.status == "PASS"
+
+
+def test_patchcore_persistence_requires_same_longitudinal_section():
+    inspector = RotatingPartInspector(
+        minimum_rotation_views=3, weak_candidate_required_views=2,
+        completion_mode="minimum_views",
+    )
+    inspector.observe_tracks([tracked(21, 50)], frame_width=100)
+
+    assert inspector.record_inspection(
+        21, is_pass=False, anomaly_score=.8, immediate_failure=False,
+        provisional_candidate=True, candidate_sections=(0,),
+    ) is None
+    assert inspector.record_inspection(
+        21, is_pass=False, anomaly_score=.8, immediate_failure=False,
+        provisional_candidate=True, candidate_sections=(4,),
+    ) is None
+    assert not inspector.latched_failure(21)
+    completed = inspector.record_inspection(
+        21, is_pass=False, anomaly_score=.8, immediate_failure=False,
+        provisional_candidate=True, candidate_sections=(4,),
+    )
+
+    assert completed is not None
+    assert completed.status == "FAIL"
