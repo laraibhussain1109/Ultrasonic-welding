@@ -6,7 +6,7 @@ cv2 = pytest.importorskip("cv2", exc_type=ImportError)
 from blower_inspection.frame_quality import FrameQualityAnalyzer
 from blower_inspection.geometry_inspector import GeometryEvidence
 from blower_inspection.inspection_fusion import fuse_patchcore_geometry
-from blower_inspection.patchcore_inspector import edge_authority_mask, filter_duplicate_images
+from blower_inspection.patchcore_inspector import edge_authority_mask, evenly_limit_indices, filter_duplicate_images
 from blower_inspection.roi_stabilizer import ROIStabilizer
 
 
@@ -29,6 +29,16 @@ def test_blur_is_invalid_and_duplicate_frames_are_reduced():
     assert "MOTION_BLUR" in FrameQualityAnalyzer(10).analyze(blurry).reasons
     detailed = blurry.copy(); detailed[:, ::4] = 255
     assert filter_duplicate_images([detailed, detailed.copy()]) == [0]
+
+
+def test_similar_repetitive_rotation_is_not_mistaken_for_duplicate():
+    first = np.full((80, 200, 3), 90, np.uint8)
+    first[:, ::6] = 180
+    rotated = np.roll(first, 2, axis=1)
+
+    assert filter_duplicate_images([first, rotated]) == [0, 1]
+    assert evenly_limit_indices(1000, 300)[0] == 0
+    assert evenly_limit_indices(1000, 300)[-1] == 999
 
 
 def test_letterbox_pixels_do_not_trigger_underexposure():

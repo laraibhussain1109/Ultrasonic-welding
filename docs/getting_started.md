@@ -285,6 +285,15 @@ editable install from the correct repository root.
   `EXCESSIVE_GLARE`, and `BAD_CROP`, even when training stops. Wide-blower
   letterbox padding is excluded from these measurements. Do not guess which
   threshold failed; use the report, correct the camera/YOLO input, and rerun.
+- **Most images reported as duplicates**: older builds used a loose cosine-only
+  thumbnail comparison that was unsuitable for highly repetitive blower fins.
+  Current builds remove a frame only when both the normalized descriptor and
+  actual thumbnail pixels are nearly identical. If more than the configured
+  training limit remain, frames are selected evenly across the capture instead
+  of taking one contiguous block. Training and inference already share the same
+  canonical ROI and ImageNet feature normalization; per-image score-map
+  normalization is intentionally not used because it would manufacture an
+  anomaly peak in every normal image.
 - **Stale PatchCore calibration**: retrain after changing the memory bank,
   backbone layers, or relevant settings. Never copy an older calibration over a
   new model.

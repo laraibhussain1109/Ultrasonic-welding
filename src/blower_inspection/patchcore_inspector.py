@@ -48,17 +48,39 @@ def edge_authority_mask(shape: tuple[int, int], ratio: float, object_mask: np.nd
     return np.clip(distance / ramp, 0, 1).astype(np.float32)
 
 
-def filter_duplicate_images(images: list[np.ndarray], threshold: float = .985) -> list[int]:
-    """Return diverse indices using compact gradient/thumbnail descriptors."""
-    kept, descriptors = [], []
+def filter_duplicate_images(images: list[np.ndarray], threshold: float = .99995,
+                            pixel_mae_threshold: float = .002) -> list[int]:
+    """Return indices after removing only genuinely redundant photographs.
+
+    A repetitive blower legitimately produces descriptors with cosine similarity
+    above .98 at different rotational phases. Cosine similarity alone therefore
+    collapsed entire captures to one or two images. A frame is now redundant
+    only when both its illumination-normalized descriptor *and* its actual
+    thumbnail pixels are nearly identical.
+    """
+    kept, descriptors, thumbnails = [], [], []
     for index, image in enumerate(images):
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
-        small = cv2.resize(gray, (32, 16), interpolation=cv2.INTER_AREA).astype(np.float32)
+        small = cv2.resize(gray, (64, 24), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
         descriptor = (small - small.mean()).ravel()
         descriptor /= np.linalg.norm(descriptor) + 1e-6
-        if not descriptors or max(float(descriptor @ old) for old in descriptors) < threshold:
-            kept.append(index); descriptors.append(descriptor)
+        duplicate = any(
+            float(descriptor @ old_descriptor) >= threshold
+            and float(np.mean(np.abs(small - old_thumbnail))) <= pixel_mae_threshold
+            for old_descriptor, old_thumbnail in zip(descriptors, thumbnails)
+        )
+        if not duplicate:
+            kept.append(index)
+            descriptors.append(descriptor)
+            thumbnails.append(small)
     return kept
+
+
+def evenly_limit_indices(count: int, limit: int) -> list[int]:
+    """Deterministically retain coverage across a long rotating capture."""
+    if count <= limit:
+        return list(range(count))
+    return sorted(set(int(round(value)) for value in np.linspace(0, count - 1, limit)))
 
 
 class PatchCoreInspector(HybridPatchcorePadimInspector):
@@ -134,11 +156,16 @@ class PatchCoreInspector(HybridPatchcorePadimInspector):
         qualified_count = len(accepted)
         keep = filter_duplicate_images(accepted)
         accepted = [accepted[i] for i in keep]; accepted_paths = [accepted_paths[i] for i in keep]
+        nonduplicate_count = len(accepted)
+        limited = evenly_limit_indices(nonduplicate_count, self.settings.max_training_images)
+        accepted = [accepted[i] for i in limited]; accepted_paths = [accepted_paths[i] for i in limited]
         if len(accepted) < 10:
             report = {"status": "FAILED", "total_source_images": len(paths),
                       "quality_accepted_images": qualified_count,
+                      "nonduplicate_images": nonduplicate_count,
                       "diverse_accepted_images": len(accepted),
-                      "duplicates_removed": qualified_count - len(accepted),
+                      "duplicates_removed": qualified_count - nonduplicate_count,
+                      "training_limit_removed": nonduplicate_count - len(accepted),
                       "rejected": rejection_counts, "rejected_examples": rejected_examples,
                       "quality_settings": {"minimum_sharpness": config.training_min_sharpness,
                                            "max_glare_ratio": config.max_glare_ratio,
@@ -148,7 +175,8 @@ class PatchCoreInspector(HybridPatchcorePadimInspector):
             raise ValueError(
                 f"Only {len(accepted)} diverse, qualified images remain; at least 10 are required. "
                 f"Quality accepted {qualified_count}/{len(paths)}; duplicate filter removed "
-                f"{qualified_count - len(accepted)}. Rejections: {reason_summary}. "
+                f"{qualified_count - nonduplicate_count}; training limit removed "
+                f"{nonduplicate_count - len(accepted)}. Rejections: {reason_summary}. "
                 f"Details: {report_path}"
             )
         # Calibration is disjoint and never enters the memory bank.
@@ -177,7 +205,10 @@ class PatchCoreInspector(HybridPatchcorePadimInspector):
         calibration_path.write_text(json.dumps(calibration, indent=2) + "\n", encoding="utf-8")
         report = {"total_source_images": len(paths), "accepted_images": len(accepted),
                   "training_images": len(training_images), "calibration_images": len(calibration_images),
-                  "duplicates_removed": qualified_count - len(accepted), "rejected": rejection_counts,
+                  "nonduplicate_images": nonduplicate_count,
+                  "duplicates_removed": qualified_count - nonduplicate_count,
+                  "training_limit_removed": nonduplicate_count - len(accepted),
+                  "rejected": rejection_counts,
                   "rejected_examples": rejected_examples}
         self._write_training_report(config, report)
         self._checkpoint_cache.clear()
