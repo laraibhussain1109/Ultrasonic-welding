@@ -279,6 +279,12 @@ editable install from the correct repository root.
 - **`No yolo_model_path is configured`**: select/save the correct YOLO `best.pt`.
 - **Too few qualified training images**: inspect the training report, correct
   blur/exposure/glare/crop problems, and add diverse known-good views.
+- **`Only 0 diverse, qualified images remain`**: open the generated
+  `patchcore_primary.training_report.json`. It now records counts and example
+  filenames for `MOTION_BLUR`, `LOW_SHARPNESS`, `OVEREXPOSED`, `UNDEREXPOSED`,
+  `EXCESSIVE_GLARE`, and `BAD_CROP`, even when training stops. Wide-blower
+  letterbox padding is excluded from these measurements. Do not guess which
+  threshold failed; use the report, correct the camera/YOLO input, and rerun.
 - **Stale PatchCore calibration**: retrain after changing the memory bank,
   backbone layers, or relevant settings. Never copy an older calibration over a
   new model.

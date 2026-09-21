@@ -31,6 +31,19 @@ def test_blur_is_invalid_and_duplicate_frames_are_reduced():
     assert filter_duplicate_images([detailed, detailed.copy()]) == [0]
 
 
+def test_letterbox_pixels_do_not_trigger_underexposure():
+    image = np.zeros((100, 200, 3), np.uint8)
+    image[25:75] = 90
+    image[25:75, ::4] = 180
+    valid = np.zeros((100, 200), bool)
+    valid[25:75] = True
+
+    quality = FrameQualityAnalyzer(minimum_sharpness=0, max_dark_ratio=.20).analyze(image, valid)
+
+    assert quality.dark_ratio == 0
+    assert "UNDEREXPOSED" not in quality.reasons
+
+
 def _geometry(score=0):
     mask = np.zeros((20, 20), bool)
     return GeometryEvidence(score, score, score, score, score, score, .8, mask,
