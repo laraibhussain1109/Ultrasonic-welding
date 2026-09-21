@@ -9,6 +9,10 @@ does not control PASS/FAIL by default.
 > **New installation?** Follow the complete [step-by-step operating guide](docs/getting_started.md)
 > for PatchCore model training and starting a live inspection.
 
+The supplied model IDs contain hyphens (`BF-001` through `BF-004`). For example,
+BF-002 training images belong in `data/training/BF-002/normal`; a similarly
+named `BF002` directory is not read by that model.
+
 ## Safety and quality boundary
 
 No machine-learning detector is literally foolproof. This implementation is intended to be fail-closed, traceable, and suitable for formal line qualification. A model must still pass a documented gauge R&R and locked golden-set validation before it controls a reject mechanism. Use a safety-rated PLC/interlock where the risk assessment requires one.

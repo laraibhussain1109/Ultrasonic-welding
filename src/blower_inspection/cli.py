@@ -198,8 +198,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command in {"tao-train", "tao-export"}:
         model = registry.get(args.model_id) if args.model_id else registry.active()
-        if model.algorithm != "nvidia_tao":
-            raise SystemExit(f"{model.id} is not configured for NVIDIA TAO")
         task = "train" if args.command == "tao-train" else "export"
         print(f"Starting TAO VisualChangeNet {task} with {args.spec} in {args.image}...")
         kwargs = {
@@ -215,11 +213,11 @@ def main(argv: list[str] | None = None) -> int:
                 restore_last_session=args.restore_last_session,
             )
         else:
-            kwargs["export_file"] = args.output or model.model_file
+            kwargs["export_file"] = args.output or model.tao_model_file or model.model_file
         run_visual_changenet_task(task, args.spec, progress_callback=_print_progress, **kwargs)
         print(f"TAO VisualChangeNet {task} completed")
         if task == "export":
-            print(f"ONNX export ready for calibration: {Path(args.output or model.model_file).resolve()}")
+            print(f"ONNX export ready for engineering comparison: {Path(args.output or model.tao_model_file or model.model_file).resolve()}")
             print(f"Next: python -m src.blower_inspection.cli train {model.id}")
         return 0
 

@@ -54,6 +54,10 @@ the default production detector.
 Each blower type has one entry in `config/models.json`. Before collecting data,
 verify at least:
 
+> Model IDs include the hyphen. For the second supplied model the directory is
+> `data/training/BF-002/normal`, **not** `data/training/BF002/normal`. Files put
+> in the latter directory are not part of BF-002 training.
+
 1. `normal_image_dir` points to the known-good full-camera training images.
 2. `patchcore_model_file` and `patchcore_calibration_file` point to writable
    artifact locations unique to that blower model.
@@ -61,7 +65,10 @@ verify at least:
    blower. It must not point to a PatchCore or TAO file.
 4. Camera width, height, FPS, and `yolo_confidence` match the production setup.
 5. Keep `production_algorithm` set to `patchcore_geometry` and
-   `engineering_compare_tao` set to `false` for production.
+   `algorithm` set to `hybrid_patchcore_geometry`. Keep
+   `engineering_compare_tao` set to `false` for production. `model_file` must
+   name the PatchCore `.pt` checkpoint; the optional TAO `.onnx` belongs only in
+   `tao_model_file`.
 6. For a fixed fixture, use `roi_mode: fixed_after_detection` and
    `lock_roi_after_confirmation: true`. Use `yolo_stabilized` only when the part
    position genuinely moves.
@@ -134,6 +141,22 @@ quality rejection, and duplicate reduction; source images are not modified.
    duplicate, and rejection counts. If too few images survive, correct image
    quality or YOLO localization and capture more data; do not lower all quality
    limits merely to force training to finish.
+
+For BF-002 specifically, the expected command and production artifact are:
+
+```bash
+blower-inspection train BF-002
+```
+
+```text
+input:  data/training/BF-002/normal/*
+model:  data/models/BF-002/patchcore_primary.pt
+calibration: data/models/BF-002/patchcore_calibration.json
+```
+
+If an `.onnx` file appears, that is the separately configured optional TAO
+engineering export. It is not the result of the PatchCore `train BF-002`
+command and does not control production PASS/FAIL.
 
 ### Desktop UI method
 
@@ -246,4 +269,3 @@ multiple qualified rotational views.
 2. Click **STOP CAMERA** before changing the model, camera, ROI, or lighting.
 3. Confirm the reject/inhibit output returns to the plant-defined safe idle state.
 4. Close the application only after the camera and output have stopped.
-

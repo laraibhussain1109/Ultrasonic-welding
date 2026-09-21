@@ -171,12 +171,13 @@ class TaoExportWorker(QThread):
     def run(self) -> None:
         spec = Path(f"specs/visual_changenet/{self.model.id.lower()}_segmentation.yaml")
         results = Path(f"data/results/{self.model.id}/tao")
+        output = self.model.tao_model_file or self.model.model_file
         try:
             run_visual_changenet_task(
-                "export", spec, results_dir=results, export_file=self.model.model_file,
+                "export", spec, results_dir=results, export_file=output,
                 progress_callback=lambda update: self.progress.emit(update.format()),
             )
-            self.finished_ok.emit(f"EXPORTED {self.model.id}: {self.model.model_file}")
+            self.finished_ok.emit(f"EXPORTED {self.model.id}: {output}")
         except Exception as exc:
             self.failed.emit(f"EXPORT FAILED {self.model.id}: {exc}")
 
@@ -332,7 +333,7 @@ class InspectionWindow(QWidget):
         layout.addWidget(QLabel("FIXED LINE RATE — OPTIMISED @ 30 FPS"))
         layout.addStretch(1)
         if self.user.is_admin:
-            export = QPushButton("⬡   EXPORT TAO MODEL")
+            export = QPushButton("⬡   EXPORT TAO MODEL (ENGINEERING)")
             export.setObjectName("train")
             export.clicked.connect(self.export_selected)
             layout.addWidget(export)
@@ -1003,9 +1004,6 @@ class InspectionWindow(QWidget):
             QMessageBox.warning(self, "Permission denied", "TAO export is available to admin users only.")
             return
         model = self.selected_model()
-        if model.algorithm != "nvidia_tao":
-            QMessageBox.warning(self, "Wrong model type", f"{model.id} is not a TAO model.")
-            return
         self.log.addItem(f"TAO EXPORT STARTED {model.id}")
         self.export_worker = TaoExportWorker(model)
         self.export_worker.progress.connect(self._show_training_progress)

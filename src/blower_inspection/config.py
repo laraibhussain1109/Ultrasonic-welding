@@ -46,6 +46,9 @@ class PartModelConfig:
     # TAO Deploy exports an ONNX model.  Calibration is deliberately stored
     # separately so replacing an engine cannot silently retain stale limits.
     tao_calibration_file: Path | None = None
+    # Optional VisualChangeNet artifact for engineering comparison only.  The
+    # production ``model_file`` is the PatchCore checkpoint.
+    tao_model_file: Path | None = None
     tao_input_name: str | None = None
     tao_reference_input_name: str | None = None
     tao_test_input_name: str | None = None
@@ -208,6 +211,7 @@ class ModelRegistry:
             counting_direction=str(entry.get("counting_direction", "left_to_right")),
             algorithm=str(entry.get("algorithm", "nvidia_tao")),
             tao_calibration_file=Path(entry["tao_calibration_file"]) if entry.get("tao_calibration_file") else None,
+            tao_model_file=Path(entry["tao_model_file"]) if entry.get("tao_model_file") else None,
             tao_input_name=entry.get("tao_input_name"),
             tao_reference_input_name=entry.get("tao_reference_input_name"),
             tao_test_input_name=entry.get("tao_test_input_name"),
