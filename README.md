@@ -13,6 +13,11 @@ The supplied model IDs contain hyphens (`BF-001` through `BF-004`). For example,
 BF-002 training images belong in `data/training/BF-002/normal`; a similarly
 named `BF002` directory is not read by that model.
 
+If Python reports `Unsupported inspection algorithm: hybrid_patchcore_geometry`,
+run `blower-inspection doctor`. A traceback pointing at a different repository
+directory means an older editable installation is active; reinstall from this
+checkout with `python -m pip install -e ".[industrial,dev]"`.
+
 ## Safety and quality boundary
 
 No machine-learning detector is literally foolproof. This implementation is intended to be fail-closed, traceable, and suitable for formal line qualification. A model must still pass a documented gauge R&R and locked golden-set validation before it controls a reject mechanism. Use a safety-rated PLC/interlock where the risk assessment requires one.

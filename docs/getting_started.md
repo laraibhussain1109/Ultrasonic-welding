@@ -244,6 +244,38 @@ multiple qualified rotational views.
 
 ## 8. Common startup failures
 
+### `Unsupported inspection algorithm: hybrid_patchcore_geometry`
+
+This almost always means Python is importing an older editable installation from
+a different clone of the repository. The PowerShell prompt may show the new
+checkout while the traceback names another directory. From the **new checkout's
+repository root**, run:
+
+```powershell
+python -m pip uninstall blower-inspection -y
+python -m pip install -e ".[industrial,dev]"
+blower-inspection doctor
+```
+
+The `Imported CLI` line must point to the checkout you are currently editing,
+and BF-002 must report:
+
+```text
+algorithm=hybrid_patchcore_geometry
+production_algorithm=patchcore_geometry
+backend=PatchCoreInspector
+```
+
+You can also verify the import directly:
+
+```powershell
+python -c "import blower_inspection.cli; print(blower_inspection.cli.__file__)"
+```
+
+Do not continue training if that path names an older `Ultrasonic-welding-main`
+or another clone. Activate the intended virtual environment and repeat the
+editable install from the correct repository root.
+
 - **`No yolo_model_path is configured`**: select/save the correct YOLO `best.pt`.
 - **Too few qualified training images**: inspect the training report, correct
   blur/exposure/glare/crop problems, and add diverse known-good views.

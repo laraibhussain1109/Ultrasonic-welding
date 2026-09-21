@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import sys
 from pathlib import Path
 
 import cv2
@@ -60,6 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("list-models", help="Show configured part models")
+    sub.add_parser("doctor", help="Show the imported checkout and production model routing")
 
     train = sub.add_parser(
         "train",
@@ -133,6 +135,27 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     registry = ModelRegistry(args.models)
     ensure_model_folders(registry)
+    if args.command == "doctor":
+        package_file = Path(__file__).resolve()
+        print(f"Python executable: {Path(sys.executable).resolve()}")
+        print(f"Imported CLI: {package_file}")
+        print(f"Model registry: {Path(args.models).resolve()}")
+        print("Supported PatchCore algorithms: hybrid_patchcore_geometry, patchcore_geometry, patchcore_primary")
+        failed = False
+        for model in registry.all():
+            try:
+                backend = type(inspector_for_model(model)).__name__
+            except Exception as exc:
+                backend = f"ERROR: {exc}"
+                failed = True
+            print(
+                f"{model.id}: algorithm={model.algorithm}, "
+                f"production_algorithm={model.production_algorithm}, backend={backend}, "
+                f"model={model.patchcore_model_file or model.model_file}"
+            )
+        if "site-packages" in str(package_file).casefold():
+            print("WARNING: package is imported from site-packages; confirm it is the intended editable checkout.")
+        return 1 if failed else 0
     if args.command == "list-models":
         for model in registry.all():
             trained = "trained" if model.model_file.exists() else "not trained"
