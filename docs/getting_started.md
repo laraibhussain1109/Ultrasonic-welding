@@ -325,6 +325,14 @@ editable install from the correct repository root.
   checkpoints are rejected and must be retrained. A severe calibrated geometry
   defect can fail immediately even when PatchCore is below its candidate limit;
   glare never suppresses that geometry evidence.
+- **A fresh good part reports `BROKEN_FIN` with many small red boxes**: older
+  geometry treated the raw area from an isolated-gap heuristic as reject-level
+  evidence. Repetitive normal fins, reflections, and compression can naturally
+  produce those small gaps. PatchCore model version 3 learns the normal
+  broken-gap coverage independently for every longitudinal section and scores
+  only the excess above the 99.5th-percentile known-good baseline. Below-candidate
+  gap masks are not drawn or allowed to vote. Retraining is mandatory; do not
+  reuse a version 2 checkpoint or manually raise the global geometry threshold.
 - **System fault after model/settings change**: read the event log and retrain so
   the checkpoint and calibration hashes/settings agree.
 

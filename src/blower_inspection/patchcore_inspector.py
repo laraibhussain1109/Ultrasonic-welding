@@ -25,7 +25,7 @@ from .roi_stabilizer import CanonicalROI, ROIStabilizer
 from .trainer import InspectionResult, inspection_overlay, list_images
 from .yolo_tracking import YoloByteTrackDetector
 
-PATCHCORE_MODEL_VERSION = 2
+PATCHCORE_MODEL_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -158,6 +158,7 @@ class PatchCoreInspector(HybridPatchcorePadimInspector):
             current = FinGeometryInspector(
                 calibration, band_top=config.inspection_band_top_ratio,
                 band_bottom=config.inspection_band_bottom_ratio,
+                candidate_threshold=config.geometry_candidate_threshold,
             ).inspect(image[:, x0:x1])
             evidence.append(current)
             full_mask[:, x0:x1] |= current.defect_mask
@@ -322,7 +323,7 @@ class PatchCoreInspector(HybridPatchcorePadimInspector):
         if checkpoint.get("algorithm") != "patchcore_primary":
             raise ValueError("Model is not a PatchCore-primary checkpoint; retrain it")
         if int(checkpoint.get("version", 0)) != PATCHCORE_MODEL_VERSION:
-            raise RuntimeError("PatchCore model predates local fin-geometry calibration; retrain it")
+            raise RuntimeError("PatchCore model predates calibrated broken-fin geometry; retrain it")
         geometry_calibrations = checkpoint.get("geometry_calibrations")
         if not isinstance(geometry_calibrations, list) or not geometry_calibrations:
             raise RuntimeError("PatchCore model has no fin-geometry calibration; retrain it")
