@@ -7,6 +7,7 @@ from blower_inspection.frame_quality import FrameQualityAnalyzer
 from blower_inspection.geometry_inspector import GeometryEvidence
 from blower_inspection.inspection_fusion import fuse_patchcore_geometry
 from blower_inspection.patchcore_inspector import edge_authority_mask, evenly_limit_indices, filter_duplicate_images
+from blower_inspection.patchcore_inspector import PatchCoreInspector
 from blower_inspection.roi_stabilizer import ROIStabilizer
 
 
@@ -68,3 +69,32 @@ def test_glare_spike_does_not_fail_but_catastrophic_geometry_does():
     catastrophic = fuse_patchcore_geometry(.1, mask, _geometry(1.2), glare_score=1,
                                            candidate_threshold=.7, fail_threshold=1)
     assert catastrophic.status == "FAIL" and catastrophic.immediate_failure
+
+
+def test_local_geometry_is_not_averaged_over_full_blower(monkeypatch):
+    class FakeInspector:
+        def __init__(self, calibration, **_kwargs):
+            self.calibration = calibration
+
+        def inspect(self, section):
+            score = 1.2 if float(section.mean()) > 100 else 0.0
+            mask = np.zeros(section.shape[:2], bool)
+            return GeometryEvidence(score, score, 0, score, 0, 0, .8, mask,
+                                    missing_fin_score=0, tilted_fin_score=score)
+
+    monkeypatch.setattr("blower_inspection.patchcore_inspector.FinGeometryInspector", FakeInspector)
+    image = np.zeros((30, 100, 3), np.uint8)
+    image[:, :50] = 255
+    config = type("Config", (), {
+        "patchcore_section_count": 2,
+        "inspection_band_top_ratio": .2,
+        "inspection_band_bottom_ratio": .8,
+        "geometry_candidate_threshold": .55,
+    })()
+
+    evidence = PatchCoreInspector()._inspect_geometry(image, config, [{}, {}])
+
+    assert evidence.score == 1.2
+    assert evidence.tilted_fin_score == 1.2
+    assert np.any(evidence.defect_mask[:, :50])
+    assert not np.any(evidence.defect_mask[:, 50:])

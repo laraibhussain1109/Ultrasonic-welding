@@ -19,13 +19,13 @@ import numpy as np
 from .anomaly_models import HybridPatchcorePadimInspector, HybridTrainingSettings, require_module
 from .config import PartModelConfig
 from .frame_quality import FrameQualityAnalyzer
-from .geometry_inspector import FinGeometryInspector, glare_evidence, inspection_band_mask, support_rib_mask
+from .geometry_inspector import GeometryEvidence, FinGeometryInspector, glare_evidence, inspection_band_mask, support_rib_mask
 from .inspection_fusion import fuse_patchcore_geometry
 from .roi_stabilizer import CanonicalROI, ROIStabilizer
 from .trainer import InspectionResult, inspection_overlay, list_images
 from .yolo_tracking import YoloByteTrackDetector
 
-PATCHCORE_MODEL_VERSION = 1
+PATCHCORE_MODEL_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -130,6 +130,57 @@ class PatchCoreInspector(HybridPatchcorePadimInspector):
         path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         return path
 
+    @staticmethod
+    def _section_bounds(width: int, count: int) -> list[tuple[int, int]]:
+        edges = np.linspace(0, width, max(1, count) + 1).round().astype(int)
+        return [(int(edges[index]), int(edges[index + 1])) for index in range(len(edges) - 1)]
+
+    def _calibrate_geometry(self, images: list[np.ndarray], config: PartModelConfig) -> list[dict]:
+        """Calibrate each longitudinal section so one bent fin is not averaged away."""
+        calibrations = []
+        for x0, x1 in self._section_bounds(images[0].shape[1], config.patchcore_section_count):
+            sections = [image[:, x0:x1] for image in images if x1 > x0]
+            calibrations.append(FinGeometryInspector.calibrate(
+                sections, band_top=config.inspection_band_top_ratio,
+                band_bottom=config.inspection_band_bottom_ratio,
+            ))
+        return calibrations
+
+    def _inspect_geometry(self, image: np.ndarray, config: PartModelConfig,
+                          calibrations: list[dict]) -> GeometryEvidence:
+        bounds = self._section_bounds(image.shape[1], config.patchcore_section_count)
+        if len(calibrations) != len(bounds):
+            raise RuntimeError("Stale PatchCore model: geometry section calibration count changed; retrain")
+        evidence = []
+        full_mask = np.zeros(image.shape[:2], dtype=bool)
+        regions: list[tuple[int, int, int, int]] = []
+        for (x0, x1), calibration in zip(bounds, calibrations):
+            current = FinGeometryInspector(
+                calibration, band_top=config.inspection_band_top_ratio,
+                band_bottom=config.inspection_band_bottom_ratio,
+            ).inspect(image[:, x0:x1])
+            evidence.append(current)
+            full_mask[:, x0:x1] |= current.defect_mask
+            regions.extend((x + x0, y, width, height) for x, y, width, height in current.candidate_regions)
+            if current.score >= config.geometry_candidate_threshold and not np.any(current.defect_mask):
+                y0 = int(round(image.shape[0] * config.inspection_band_top_ratio))
+                y1 = int(round(image.shape[0] * config.inspection_band_bottom_ratio))
+                full_mask[y0:y1, x0:x1] = True
+                regions.append((x0, y0, x1 - x0, max(1, y1 - y0)))
+        return GeometryEvidence(
+            score=max(item.score for item in evidence),
+            orientation_score=max(item.orientation_score for item in evidence),
+            pitch_score=max(item.pitch_score for item in evidence),
+            continuity_score=max(item.continuity_score for item in evidence),
+            broken_fin_score=max(item.broken_fin_score for item in evidence),
+            periodicity_score=max(item.periodicity_score for item in evidence),
+            support_rib_confidence=max(item.support_rib_confidence for item in evidence),
+            defect_mask=full_mask, candidate_regions=regions,
+            valid=all(item.valid for item in evidence),
+            missing_fin_score=max(item.missing_fin_score for item in evidence),
+            tilted_fin_score=max(item.tilted_fin_score for item in evidence),
+        )
+
     def train(self, config: PartModelConfig, progress_callback=None) -> Path:
         self._configure(config)
         paths = list_images(config.normal_image_dir)
@@ -201,12 +252,15 @@ class PatchCoreInspector(HybridPatchcorePadimInspector):
         all_embeddings = torch.cat(embeddings)
         memory, candidates = self._build_patchcore_memory(all_embeddings, torch)
         bank_hash = hashlib.sha256(memory.numpy().tobytes()).hexdigest()
+        geometry_calibrations = self._calibrate_geometry(training_images, config)
         model_path = self._model_path(config)
         model_path.parent.mkdir(parents=True, exist_ok=True)
         checkpoint = {"version": PATCHCORE_MODEL_VERSION, "algorithm": "patchcore_primary",
                       "settings": asdict(self.settings), "memory_bank": memory,
                       "memory_bank_hash": bank_hash, "memory_candidate_count": candidates,
-                      "training_manifest_hash": self._manifest_hash(training_paths)}
+                      "training_manifest_hash": self._manifest_hash(training_paths),
+                      "geometry_calibrations": geometry_calibrations,
+                      "geometry_section_count": config.patchcore_section_count}
         torch.save(checkpoint, model_path)
         raw = [self._raw_map(image, checkpoint, torch) for image in calibration_images]
         calibration = self._calibration(raw, config, bank_hash, checkpoint["training_manifest_hash"], calibration_paths)
@@ -267,6 +321,11 @@ class PatchCoreInspector(HybridPatchcorePadimInspector):
         checkpoint = self._load_runtime_checkpoint(torch, model_path)
         if checkpoint.get("algorithm") != "patchcore_primary":
             raise ValueError("Model is not a PatchCore-primary checkpoint; retrain it")
+        if int(checkpoint.get("version", 0)) != PATCHCORE_MODEL_VERSION:
+            raise RuntimeError("PatchCore model predates local fin-geometry calibration; retrain it")
+        geometry_calibrations = checkpoint.get("geometry_calibrations")
+        if not isinstance(geometry_calibrations, list) or not geometry_calibrations:
+            raise RuntimeError("PatchCore model has no fin-geometry calibration; retrain it")
         calibration_path = config.patchcore_calibration_file or model_path.with_suffix(".calibration.json")
         calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
         if calibration.get("memory_bank_hash") != checkpoint.get("memory_bank_hash") or calibration.get("embedding_layers") != list(self.settings.embedding_layers):
@@ -290,8 +349,7 @@ class PatchCoreInspector(HybridPatchcorePadimInspector):
                                for part in np.array_split(weighted, config.patchcore_section_count, axis=1))
         candidate_sections = tuple(index for index, score in enumerate(section_scores) if score >= candidate)
         geometry_started = time.perf_counter()
-        geometry = FinGeometryInspector(band_top=config.inspection_band_top_ratio,
-                                        band_bottom=config.inspection_band_bottom_ratio).inspect(roi)
+        geometry = self._inspect_geometry(roi, config, geometry_calibrations)
         decision = fuse_patchcore_geometry(image_score, mask, geometry, glare_score=glare.score,
                                            candidate_threshold=candidate, fail_threshold=fail,
                                            geometry_candidate_threshold=config.geometry_candidate_threshold,

@@ -317,6 +317,14 @@ editable install from the correct repository root.
   latching. Do not solve this by increasing the threshold or normalizing each
   live score map; both can hide real defects. Retrain and validate with an
   independent known-good set.
+- **A visibly bent fin still passes with `GEOMETRY: 0.00`**: models created before
+  PatchCore model version 2 did not save geometry calibration, so orientation,
+  pitch, continuity, missing-fin, and tilted-fin deviations all defaulted to
+  zero. Version 2 calibrates geometry independently in each longitudinal
+  section so a local defect is not averaged across the full blower width. Old
+  checkpoints are rejected and must be retrained. A severe calibrated geometry
+  defect can fail immediately even when PatchCore is below its candidate limit;
+  glare never suppresses that geometry evidence.
 - **System fault after model/settings change**: read the event log and retrain so
   the checkpoint and calibration hashes/settings agree.
 
