@@ -214,3 +214,21 @@ def test_patchcore_persistence_requires_same_longitudinal_section():
 
     assert completed is not None
     assert completed.status == "FAIL"
+
+
+def test_part_departure_checks_later_views_and_keeps_failure_latched():
+    inspector = RotatingPartInspector(
+        lost_timeout_s=.5, minimum_rotation_views=2, completion_mode="part_departure"
+    )
+    inspector.observe_tracks([tracked(31, 50)], frame_width=100, now=0)
+    assert inspector.record_inspection(31, is_pass=True, anomaly_score=.1) is None
+    assert inspector.record_inspection(31, is_pass=True, anomaly_score=.1) is None
+    assert inspector.accepts_inspection(31)
+    assert inspector.record_inspection(31, is_pass=False, anomaly_score=1.2) is None
+    assert inspector.latched_failure(31)
+    assert inspector.observe_tracks([], frame_width=100, now=.4) == []
+    completed = inspector.observe_tracks([], frame_width=100, now=.6)
+
+    assert len(completed) == 1
+    assert completed[0].status == "FAIL"
+    assert completed[0].frames_inspected == 3

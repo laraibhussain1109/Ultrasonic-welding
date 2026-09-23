@@ -204,6 +204,8 @@ class InspectionWindow(QWidget):
         self.locked_track_id = 1
         self.locked_part_present = False
         self.locked_missing_frames = 0
+        self.locked_presence_poll = 0
+        self.locked_last_yolo_present = False
         self.raw_frame = None
         self.fps_frame_count = 0
         self.fps_started_at = time.perf_counter()
@@ -211,7 +213,8 @@ class InspectionWindow(QWidget):
         self.frame_sampler: SharpFrameSampler | None = None
         self.rotation_phase_gate: RotationPhaseGate | None = None
         self.pending_sharp_frames = {}
-        self.daily_statistics = DailyStatistics()
+        self.active_fail_asserted = False
+        self.daily_statistics = DailyStatistics(memory_only=active_model.runtime_storage_mode == "memory")
         self.stats = self.daily_statistics.counts()
         self.part_detector: YoloByteTrackDetector | None = None
         self.rotating_parts: RotatingPartInspector | None = None
@@ -620,6 +623,7 @@ class InspectionWindow(QWidget):
             # API of the legacy serial driver. Queue a safe PASS state without
             # blocking camera startup.
             self.fail_output.reset()
+            self.active_fail_asserted = False
             esp32_status = f"ESP32 CONFIGURED {self.fail_output.config.base_url}"
         else:
             esp32_status = "ESP32 DISABLED"
@@ -676,6 +680,7 @@ class InspectionWindow(QWidget):
             self.locked_roi_confidence = detected.confidence
             self.locked_track_id = 1
             self.locked_part_present = True
+            self.locked_last_yolo_present = True
             self.locked_missing_frames = 0
             self.log.addItem(
                 f"LOCKED ROI {model.id} | x={x} y={y} w={w} h={h} | YOLO={detected.confidence:.0%}"
@@ -683,11 +688,23 @@ class InspectionWindow(QWidget):
             return True
 
     def _locked_roi_tracks(self, raw_frame) -> list[TrackedPart]:
-        """Return the approved immutable ROI, with debounced part presence."""
+        """Return the immutable ROI, with debounced YOLO-confirmed presence."""
         if self.live_roi_bounds is None:
             return []
-        roi = crop_bounds(raw_frame, self.live_roi_bounds)
-        if is_part_present(roi):
+        model = self.selected_model()
+        self.locked_presence_poll += 1
+        # Keep the crop immutable but periodically ask YOLO whether a blower is
+        # still present. Polling once per burst avoids adding detector latency to
+        # every camera frame.
+        if self.locked_presence_poll == 1 or self.locked_presence_poll % model.capture_burst_frames == 0:
+            try:
+                assert self.part_detector is not None
+                self.part_detector.detect_best(raw_frame)
+                self.locked_last_yolo_present = True
+            except ValueError:
+                self.locked_last_yolo_present = False
+        yolo_present = self.locked_last_yolo_present
+        if yolo_present:
             if not self.locked_part_present:
                 self.locked_track_id += 1
             self.locked_part_present = True
@@ -697,7 +714,6 @@ class InspectionWindow(QWidget):
             # A rotating, manually focused blower may look texture-poor for a
             # few consecutive blurred frames. Require roughly half a second of
             # absence before ending the fixed-nest part session.
-            model = self.selected_model()
             missing_limit = max(model.capture_burst_frames, model.camera_fps // 2)
             if self.locked_missing_frames >= missing_limit:
                 self.locked_part_present = False
@@ -718,6 +734,11 @@ class InspectionWindow(QWidget):
             )
             for completed_part in removed_parts:
                 self._handle_completed_part(completed_part)
+            if removed_parts:
+                # A latched reject remains asserted while YOLO sees the part;
+                # confirmed departure is the reset boundary.
+                self.fail_output.reset()
+                self.active_fail_asserted = False
             frame = self._draw_tracks(
                 raw_frame,
                 tracks,
@@ -812,6 +833,9 @@ class InspectionWindow(QWidget):
                 candidate_sections=result.candidate_sections,
             )
             latched_failure = self.rotating_parts.latched_failure(track_id) or latched_failure
+            if latched_failure and not self.active_fail_asserted:
+                self.fail_output.send_result(True)
+                self.active_fail_asserted = True
             view_progress = ((completed_part.frames_inspected, completed_part.valid_views,
                               self.rotating_parts.minimum_rotation_views) if completed_part is not None
                              else self.rotating_parts.view_progress(track_id))
@@ -820,7 +844,9 @@ class InspectionWindow(QWidget):
         if latched_failure:
             badge_object, badge_text = "statusFail", "FAIL LATCHED"
         elif result.status == "PASS":
-            badge_object, badge_text = "statusPass", "VIEW PASS"
+            # A good view is provisional until YOLO confirms part departure.
+            # Do not show the final green PASS treatment while the part remains.
+            badge_object, badge_text = "statusStandby", "VIEW OK — CHECKING"
         elif result.status == "VIEW INVALID":
             badge_object, badge_text = "statusStandby", "VIEW INVALID"
         else:
@@ -964,6 +990,7 @@ class InspectionWindow(QWidget):
 
     def closeEvent(self, event) -> None:
         self.fail_output.reset()
+        self.active_fail_asserted = False
         self.fail_output.close()
         super().closeEvent(event)
 
@@ -1027,12 +1054,15 @@ class InspectionWindow(QWidget):
         self.live_timer.stop()
         self.camera.close()
         self.fail_output.reset()
+        self.active_fail_asserted = False
         self.latest_annotated_frame = None
         self.current_display_frame = None
         self.live_roi_bounds = None
         self.locked_roi_confidence = 0.0
         self.locked_part_present = False
         self.locked_missing_frames = 0
+        self.locked_presence_poll = 0
+        self.locked_last_yolo_present = False
         self.raw_frame = None
         self.pending_sharp_frames = {}
         if self.frame_sampler is not None:
@@ -1051,9 +1081,12 @@ class InspectionWindow(QWidget):
         self.status_badge.style().polish(self.status_badge)
 
     def reset_stats(self) -> None:
+        if self.daily_statistics.memory_only:
+            self.daily_statistics.clear()
         self.stats = self.daily_statistics.counts()
         self.update_stats()
-        self.log.addItem(f"DAILY COUNTERS RETAINED ({operating_day()} 07:00–07:00)")
+        message = "TEMPORARY COUNTERS RESET" if self.daily_statistics.memory_only else f"DAILY COUNTERS RETAINED ({operating_day()} 07:00–07:00)"
+        self.log.addItem(message)
 
     def update_stats(self) -> None:
         inspected = self.stats["inspected"]

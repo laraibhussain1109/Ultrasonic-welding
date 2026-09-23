@@ -52,7 +52,7 @@
       "registration_calibration_min_valid_ratio": 0.7,
       "tao_candidate_min_area_ratio": 0.001,
       "tao_candidate_max_area_ratio": 0.12,
-      "inspection_completion_mode": "minimum_views",
+      "inspection_completion_mode": "part_departure",
       "crop_aspect_ratio_tolerance": 0.35,
       "yolo_confidence": 0.7,
       "counting_axis": "y",
@@ -86,7 +86,8 @@
       "minimum_qualified_views": 8,
       "required_persistent_views": 2,
       "patchcore_model_file": "data/models/BF-001/patchcore_primary.pt",
-      "tao_model_file": "data/models/BF-001/visual_changenet.onnx"
+      "tao_model_file": "data/models/BF-001/visual_changenet.onnx",
+      "runtime_storage_mode": "memory"
     },
     {
       "id": "BF-002",
@@ -139,7 +140,7 @@
       "registration_calibration_min_valid_ratio": 0.7,
       "tao_candidate_min_area_ratio": 0.001,
       "tao_candidate_max_area_ratio": 0.12,
-      "inspection_completion_mode": "minimum_views",
+      "inspection_completion_mode": "part_departure",
       "crop_aspect_ratio_tolerance": 0.35,
       "yolo_confidence": 0.7,
       "counting_axis": "y",
@@ -173,7 +174,8 @@
       "minimum_qualified_views": 8,
       "required_persistent_views": 2,
       "patchcore_model_file": "data/models/BF-002/patchcore_primary.pt",
-      "tao_model_file": "data/models/BF-002/visual_changenet.onnx"
+      "tao_model_file": "data/models/BF-002/visual_changenet.onnx",
+      "runtime_storage_mode": "memory"
     },
     {
       "id": "BF-003",
@@ -226,7 +228,7 @@
       "registration_calibration_min_valid_ratio": 0.7,
       "tao_candidate_min_area_ratio": 0.001,
       "tao_candidate_max_area_ratio": 0.12,
-      "inspection_completion_mode": "minimum_views",
+      "inspection_completion_mode": "part_departure",
       "crop_aspect_ratio_tolerance": 0.35,
       "yolo_confidence": 0.7,
       "counting_axis": "y",
@@ -260,7 +262,8 @@
       "minimum_qualified_views": 8,
       "required_persistent_views": 2,
       "patchcore_model_file": "data/models/BF-003/patchcore_primary.pt",
-      "tao_model_file": "data/models/BF-003/visual_changenet.onnx"
+      "tao_model_file": "data/models/BF-003/visual_changenet.onnx",
+      "runtime_storage_mode": "memory"
     },
     {
       "id": "BF-004",
@@ -313,7 +316,7 @@
       "registration_calibration_min_valid_ratio": 0.7,
       "tao_candidate_min_area_ratio": 0.001,
       "tao_candidate_max_area_ratio": 0.12,
-      "inspection_completion_mode": "minimum_views",
+      "inspection_completion_mode": "part_departure",
       "crop_aspect_ratio_tolerance": 0.35,
       "yolo_confidence": 0.7,
       "counting_axis": "y",
@@ -347,7 +350,8 @@
       "minimum_qualified_views": 8,
       "required_persistent_views": 2,
       "patchcore_model_file": "data/models/BF-004/patchcore_primary.pt",
-      "tao_model_file": "data/models/BF-004/visual_changenet.onnx"
+      "tao_model_file": "data/models/BF-004/visual_changenet.onnx",
+      "runtime_storage_mode": "memory"
     }
   ]
 }

@@ -39,7 +39,7 @@ def test_app_does_not_replace_the_inspector_after_readiness_validation():
 def test_app_distinguishes_view_pass_from_final_part_pass():
     source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
 
-    assert 'badge_object, badge_text = "statusPass", "VIEW PASS"' in source
+    assert 'badge_object, badge_text = "statusStandby", "VIEW OK — CHECKING"' in source
     assert "VIEW SCORE:" in source
     assert "VIEWS:" in source
 

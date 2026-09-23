@@ -110,6 +110,7 @@ class PartModelConfig:
     patchcore_calibration_file: Path | None = None
     hard_good_dir: Path | None = None
     patchcore_model_file: Path | None = None
+    runtime_storage_mode: str = "memory"
 
 
 class ModelRegistry:
@@ -273,6 +274,7 @@ class ModelRegistry:
             patchcore_calibration_file=Path(entry["patchcore_calibration_file"]) if entry.get("patchcore_calibration_file") else None,
             hard_good_dir=Path(entry["hard_good_dir"]) if entry.get("hard_good_dir") else None,
             patchcore_model_file=Path(entry["patchcore_model_file"]) if entry.get("patchcore_model_file") else None,
+            runtime_storage_mode=str(entry.get("runtime_storage_mode", "memory")),
         )
 
 

@@ -165,8 +165,8 @@ class RotatingPartInspector:
                             else {"top_to_bottom", "bottom_to_top"})
         if counting_direction not in valid_directions:
             raise ValueError(f"counting_direction {counting_direction!r} is invalid for axis {counting_axis!r}")
-        if completion_mode not in {"counting_line", "minimum_views"}:
-            raise ValueError("completion_mode must be 'counting_line' or 'minimum_views'")
+        if completion_mode not in {"counting_line", "minimum_views", "part_departure"}:
+            raise ValueError("completion_mode must be counting_line, minimum_views or part_departure")
         self.lost_timeout_s = lost_timeout_s
         self.counting_line_ratio = counting_line_ratio
         self.counting_direction = counting_direction
@@ -210,7 +210,7 @@ class RotatingPartInspector:
         # This is deliberately fail-closed: an incompletely inspected part is
         # reported as failed, never silently discarded as a pass.
         completed: list[CompletedPart] = []
-        if self.completion_mode == "minimum_views":
+        if self.completion_mode in {"minimum_views", "part_departure"}:
             lost = [
                 session for session in self.sessions.values()
                 if not (session.tracker_ids & active_ids)
@@ -267,8 +267,8 @@ class RotatingPartInspector:
         session.worst_geometry_score = max(session.worst_geometry_score, geometry_score)
         session.worst_tao_score = max(session.worst_tao_score, tao_score if tao_score is not None else anomaly_score)
         session.reason_codes.update(reason_codes)
-        completion_triggered = (
-            self.completion_mode == "minimum_views" or session.crossed_counting_line
+        completion_triggered = self.completion_mode == "minimum_views" or (
+            self.completion_mode == "counting_line" and session.crossed_counting_line
         )
         enough_valid = session.valid_views >= self.minimum_rotation_views
         quality_exhausted = session.frames_inspected >= self.minimum_rotation_views * 2
@@ -289,7 +289,7 @@ class RotatingPartInspector:
         session = self._session_for_track(track_id)
         return bool(
             session
-            and (self.completion_mode == "minimum_views" or session.crossed_counting_line)
+            and (self.completion_mode in {"minimum_views", "part_departure"} or session.crossed_counting_line)
             and session.valid_views < self.minimum_rotation_views
             and session.frames_inspected < self.minimum_rotation_views * 2
         )
@@ -310,7 +310,7 @@ class RotatingPartInspector:
         completed = [
             self._complete(session)
             for session in self.sessions.values()
-            if (self.completion_mode == "minimum_views" or session.crossed_counting_line)
+            if (self.completion_mode in {"minimum_views", "part_departure"} or session.crossed_counting_line)
             and (session.valid_views >= self.minimum_rotation_views
                  or session.frames_inspected >= self.minimum_rotation_views * 2)
         ]

@@ -219,16 +219,32 @@ command and does not control production PASS/FAIL.
 8. Keep the part in place until the required qualified-view count is reached.
    Blurry/invalid views do not count. If no qualified views are obtained, the
    result is a quality fault/recheck, never a silent PASS.
+   The supplied fixed-station profiles continue inspecting after that minimum;
+   they finalize only after YOLO confirms that the part has left. A PASS view is
+   provisional and cannot prevent a later view from rejecting the same part.
 9. Interpret operator states:
-   - **VIEW PASS**: the current qualified view is normal; the part is not final yet.
+   - **VIEW OK — CHECKING**: the current qualified view is normal; inspection
+     continues and the part is not final yet.
    - **INSPECTING**: more rotational confirmation is required.
    - **VIEW INVALID**: correct blur, exposure, crop, or obstruction and retry.
    - **FAIL LATCHED**: confirmed evidence has rejected the current physical part.
-   - **PASS / FAIL**: final result after the required qualified views.
+   - **PASS / FAIL**: final result only after the required qualified views and
+     YOLO-confirmed part departure.
    - **SYSTEM FAULT**: inspection stopped fail-closed; resolve the logged model,
      calibration, camera, or runtime fault before restarting.
 10. Remove the completed part only after final PASS/FAIL. The daily statistics,
-    result record, and configured ESP32 output update at part completion.
+    and configured ESP32 output update at part completion. By default counters
+    are temporary in-memory data (`runtime_storage_mode: memory`) and no runtime
+    JSON/image result is written. This removes per-part disk I/O; counters reset
+    when the application closes.
+
+### Fail-output lifetime
+
+The first confirmed failing view immediately asserts the ESP32 fail output. It
+remains asserted while YOLO continues to report that physical part, regardless
+of later passing views. The result is finalized—and the output reset—only after
+the debounced YOLO `NO PART` transition. A part that never reaches the minimum
+qualified views is finalized as an insufficient-view failure when it leaves.
 
 ## 7. Inspect one saved image for setup checks
 
