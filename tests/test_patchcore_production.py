@@ -71,6 +71,30 @@ def test_glare_spike_does_not_fail_but_catastrophic_geometry_does():
     assert catastrophic.status == "FAIL" and catastrophic.immediate_failure
 
 
+def test_patchcore_candidate_below_fail_line_is_forwarded_for_multi_view_confirmation():
+    mask = np.zeros((20, 20), bool)
+    mask[8:12, 8:12] = True
+
+    decision = fuse_patchcore_geometry(.8, mask, _geometry(), glare_score=0,
+                                       candidate_threshold=.7, fail_threshold=1)
+
+    assert decision.status == "CANDIDATE"
+    assert decision.provisional_candidate
+    assert decision.reason_codes == ("PATCHCORE_ANOMALY",)
+    assert np.array_equal(decision.confirmed_mask, mask)
+
+
+def test_patchcore_candidate_is_still_rejected_as_likely_glare():
+    mask = np.ones((20, 20), bool)
+
+    decision = fuse_patchcore_geometry(.8, mask, _geometry(), glare_score=.8,
+                                       candidate_threshold=.7, fail_threshold=1,
+                                       glare_threshold=.55)
+
+    assert decision.status == "PASS"
+    assert decision.reason_codes == ("LIKELY_GLARE",)
+
+
 def test_local_geometry_is_not_averaged_over_full_blower(monkeypatch):
     class FakeInspector:
         def __init__(self, calibration, **_kwargs):
