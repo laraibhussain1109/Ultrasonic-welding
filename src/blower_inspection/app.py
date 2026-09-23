@@ -747,9 +747,11 @@ class InspectionWindow(QWidget):
             )
             for completed_part in removed_parts:
                 self._handle_completed_part(completed_part)
-            if removed_parts:
+            if removed_parts and self.active_fail_asserted:
                 # A latched reject remains asserted while YOLO sees the part;
-                # confirmed departure is the reset boundary.
+                # confirmed departure is the reset boundary. Do not queue this
+                # reset after a PASS: it would immediately follow the dedicated
+                # pass-pulse request and can hide the pulse on some controllers.
                 self.fail_output.reset()
                 self.active_fail_asserted = False
             elif not tracks and self.active_fail_asserted:
@@ -918,7 +920,12 @@ class InspectionWindow(QWidget):
         self.status_badge.setText(part.status)
         self.status_badge.style().unpolish(self.status_badge)
         self.status_badge.style().polish(self.status_badge)
-        self.fail_output.send_result(part.status == "FAIL")
+        if part.status == "PASS":
+            # This is the first point at which a good view becomes a final part
+            # verdict. Generate exactly one 0.5-second ESP32 output pulse now.
+            self.fail_output.signal_pass()
+        else:
+            self.fail_output.send_result(True)
         self.log.addItem(f"FINAL {part.status} | track={part.track_id} | views={part.frames_inspected} | worst={part.worst_score:.3f}")
 
     @staticmethod

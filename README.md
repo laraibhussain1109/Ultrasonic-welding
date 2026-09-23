@@ -235,9 +235,17 @@ blower-inspection add-user admin --role admin --password 'new-strong-password'
 
 Daily totals are stored in `data/results/daily_statistics.json`; an operating day runs from local 07:00 through the following 07:00. Failed overlays and JSON reports are written below each configured `result_dir`.
 
-## ESP32 reject output
+## ESP32 PASS and reject outputs
 
-Flash `firmware/esp32_fail_output/esp32_fail_output.ino` and configure the serial bridge for the deployment port. The app asserts FAIL for a rejected completed part. It also asserts FAIL/inhibit after a live inference fault; production PLC logic must distinguish and latch equipment faults according to the line risk assessment.
+Flash `firmware/esp32_fail_output/esp32_fail_output.ino`. On every final PASS verdict,
+the app immediately pulses the ESP32 pin labelled **D5** HIGH for 0.5 seconds; connect that output to
+your PLC input through suitable isolation/level conditioning. Override
+`PASS_OUTPUT_PIN` or `PASS_ACTIVE_LEVEL` in the sketch if required. The firmware uses
+the board package's `D5` mapping when available and otherwise falls back to GPIO 5.
+GPIO 4 remains
+the reject output: the app asserts it for a rejected completed part and also after
+a live inference fault. Production PLC logic must distinguish and latch equipment
+faults according to the line risk assessment.
 
 ## Tests
 

@@ -1,7 +1,8 @@
 """ESP32 fail-output bridge.
 
 The production ESP32 sketch exposes simple HTTP endpoints:
-``/fail`` energizes the buzzer/relay output and ``/pass`` clears it.  This
+``/fail`` energizes the reject output, ``/pass`` clears it, and
+``/pass-pulse`` clears reject while pulsing the pass output for 0.5 seconds. This
 module keeps those calls off the UI/inference thread so a missing WiFi link does
 not stall inspection.
 """
@@ -55,6 +56,17 @@ class ESP32FailOutputBridge:
         """Clear the output and force the next result to be sent."""
         self._last_state = None
         return self.send_result(False)
+
+    def signal_pass(self) -> Future[str] | None:
+        """Clear reject and queue one 0.5-second PASS pulse.
+
+        Unlike :meth:`send_result`, completed PASS verdicts are not deduplicated:
+        every completed part must produce its own output pulse.
+        """
+        if not self.config.enabled:
+            return None
+        self._last_state = False
+        return self._executor.submit(self._call_endpoint, "pass-pulse")
 
     def close(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)
