@@ -275,6 +275,17 @@ turns the configured rotation-view count into the physical-part completion
 trigger. Conveyor installations can retain `"counting_line"`. The UI labels a
 passing sample as `VIEW PASS` and reserves final `PASS` for completed sessions.
 
+The supplied profiles are commissioned for a **60-degree usable surface arc per
+view** (`visible_surface_arc_degrees: 60`) and six distinct qualified views per
+revolution. This value records the optical coverage; it does not digitally
+expand the camera image. Moving the camera farther from the part, selecting a
+wider field-of-view lens, and arranging diffuse lighting so the additional
+curved surface remains sharp and glare-free are required before changing a
+40-degree installation to 60 degrees. After that mechanical/optical change,
+capture new normal images across all six rotation phases and retrain/recalibrate
+the selected model. Validate that adjacent views overlap—the structural phase
+gate rejects duplicate views but does not measure absolute shaft angle.
+
 Production YOLO crops require confidence strictly above 70%. Supplied blower
 profiles use `counting_axis: "y"`, so the displayed counting line runs horizontally
 along the image x-axis and crossing is measured from vertical part motion.

@@ -110,6 +110,7 @@ def test_supplied_models_are_patchcore_production_with_separate_tao_artifacts():
     assert all(model.tao_require_gpu is False for model in models)
     assert all(model.inspection_completion_mode == "minimum_views" for model in models)
     assert all(model.minimum_rotation_views == 6 for model in models)
+    assert all(model.visible_surface_arc_degrees == 60.0 for model in models)
     assert all(model.minimum_qualified_views == 6 for model in models)
     assert all(model.yolo_presence_confidence == 0.95 for model in models)
     assert all(model.runtime_storage_mode == "memory" for model in models)

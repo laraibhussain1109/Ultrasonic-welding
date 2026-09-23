@@ -36,6 +36,10 @@ class PartModelConfig:
     # the box, then retain those full-frame coordinates for every view.
     lock_roi_after_confirmation: bool = True
     minimum_rotation_views: int = 8
+    # Nominal circumferential arc that is optically usable in one camera view.
+    # This documents the commissioned camera/lighting geometry; software cannot
+    # recover an arc that is not actually visible in the image.
+    visible_surface_arc_degrees: float = 40.0
     minimum_rotation_descriptor_distance: float = 0.06
     inspection_completion_mode: str = "counting_line"
     # Slightly left of frame center so the part reaches the count line within
@@ -207,6 +211,9 @@ class ModelRegistry:
             crop_aspect_ratio_tolerance=max(0.05, float(entry.get("crop_aspect_ratio_tolerance", 0.35))),
             lock_roi_after_confirmation=bool(entry.get("lock_roi_after_confirmation", True)),
             minimum_rotation_views=max(1, int(entry.get("minimum_rotation_views", 8))),
+            visible_surface_arc_degrees=min(180.0, max(1.0, float(
+                entry.get("visible_surface_arc_degrees", 40.0)
+            ))),
             minimum_rotation_descriptor_distance=max(0.0, float(
                 entry.get("minimum_rotation_descriptor_distance", 0.06)
             )),
