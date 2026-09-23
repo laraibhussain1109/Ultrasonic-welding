@@ -11,6 +11,8 @@ from typing import Any
 
 import numpy as np
 
+SUPPORTED_COMPLETION_MODES = frozenset({"counting_line", "minimum_views", "part_departure"})
+
 
 @dataclass(frozen=True)
 class TrackedPart:
@@ -119,6 +121,12 @@ class RotatingPartSession:
     persistent_candidate_count: int = 0
     worst_geometry_score: float = 0.0
     worst_tao_score: float = 0.0
+    blurry_views: int = 0
+    glare_rejected_views: int = 0
+    patchcore_candidate_views: int = 0
+    geometry_candidate_views: int = 0
+    confirmed_defect_views: int = 0
+    last_candidate_sections: set[int] = field(default_factory=set)
     reason_codes: set[str] = field(default_factory=set)
 
 
@@ -159,8 +167,8 @@ class RotatingPartInspector:
                             else {"top_to_bottom", "bottom_to_top"})
         if counting_direction not in valid_directions:
             raise ValueError(f"counting_direction {counting_direction!r} is invalid for axis {counting_axis!r}")
-        if completion_mode not in {"counting_line", "minimum_views"}:
-            raise ValueError("completion_mode must be 'counting_line' or 'minimum_views'")
+        if completion_mode not in SUPPORTED_COMPLETION_MODES:
+            raise ValueError("completion_mode must be counting_line, minimum_views or part_departure")
         self.lost_timeout_s = lost_timeout_s
         self.counting_line_ratio = counting_line_ratio
         self.counting_direction = counting_direction
@@ -204,7 +212,7 @@ class RotatingPartInspector:
         # This is deliberately fail-closed: an incompletely inspected part is
         # reported as failed, never silently discarded as a pass.
         completed: list[CompletedPart] = []
-        if self.completion_mode == "minimum_views":
+        if self.completion_mode in {"minimum_views", "part_departure"}:
             lost = [
                 session for session in self.sessions.values()
                 if not (session.tracker_ids & active_ids)
@@ -219,6 +227,7 @@ class RotatingPartInspector:
         view_valid: bool = True, immediate_failure: bool | None = None,
         provisional_candidate: bool = False, geometry_score: float = 0.0,
         tao_score: float | None = None, reason_codes: tuple[str, ...] | list[str] = (),
+        candidate_sections: tuple[int, ...] | list[int] = (),
     ) -> CompletedPart | None:
         session = self._session_for_track(track_id)
         if session is None:
@@ -226,25 +235,42 @@ class RotatingPartInspector:
         session.frames_inspected += 1
         if not view_valid:
             session.invalid_registration_views += 1
+            if "MOTION_BLUR" in reason_codes or "LOW_SHARPNESS" in reason_codes:
+                session.blurry_views += 1
         else:
             session.valid_views += 1
         if geometry_score >= 1.0:
             session.geometry_strong_views += 1
         if provisional_candidate:
-            session.tao_only_candidate_views += 1
-            session.persistent_candidate_count += 1
+            session.patchcore_candidate_views += 1
+            sections = set(candidate_sections)
+            # A repeated scalar spike is not persistence. Require the anomaly
+            # to recur in at least one longitudinal section. Legacy callers
+            # without section evidence retain their former behavior.
+            if not sections or not session.last_candidate_sections or sections & session.last_candidate_sections:
+                session.persistent_candidate_count += 1
+            else:
+                session.persistent_candidate_count = 1
+            session.last_candidate_sections = sections
         else:
             session.persistent_candidate_count = 0
+            session.last_candidate_sections.clear()
         # Old callers preserve fail-latching. Hybrid callers explicitly label
         # severe versus provisional evidence.
         severe = (not is_pass) if immediate_failure is None else immediate_failure
+        if geometry_score >= 0.55:
+            session.geometry_candidate_views += 1
+        if "LIKELY_GLARE" in reason_codes:
+            session.glare_rejected_views += 1
+        if severe:
+            session.confirmed_defect_views += 1
         session.has_failure |= severe or session.persistent_candidate_count >= self.weak_candidate_required_views
         session.worst_score = max(session.worst_score, anomaly_score)
         session.worst_geometry_score = max(session.worst_geometry_score, geometry_score)
         session.worst_tao_score = max(session.worst_tao_score, tao_score if tao_score is not None else anomaly_score)
         session.reason_codes.update(reason_codes)
-        completion_triggered = (
-            self.completion_mode == "minimum_views" or session.crossed_counting_line
+        completion_triggered = self.completion_mode == "minimum_views" or (
+            self.completion_mode == "counting_line" and session.crossed_counting_line
         )
         enough_valid = session.valid_views >= self.minimum_rotation_views
         quality_exhausted = session.frames_inspected >= self.minimum_rotation_views * 2
@@ -265,7 +291,7 @@ class RotatingPartInspector:
         session = self._session_for_track(track_id)
         return bool(
             session
-            and (self.completion_mode == "minimum_views" or session.crossed_counting_line)
+            and (self.completion_mode in {"minimum_views", "part_departure"} or session.crossed_counting_line)
             and session.valid_views < self.minimum_rotation_views
             and session.frames_inspected < self.minimum_rotation_views * 2
         )
@@ -286,7 +312,7 @@ class RotatingPartInspector:
         completed = [
             self._complete(session)
             for session in self.sessions.values()
-            if (self.completion_mode == "minimum_views" or session.crossed_counting_line)
+            if (self.completion_mode in {"minimum_views", "part_departure"} or session.crossed_counting_line)
             and (session.valid_views >= self.minimum_rotation_views
                  or session.frames_inspected >= self.minimum_rotation_views * 2)
         ]
@@ -351,6 +377,7 @@ class RotatingPartInspector:
         insufficient = session.valid_views < self.minimum_rotation_views
         reasons = set(session.reason_codes)
         if insufficient:
-            reasons.add("INSUFFICIENT_VIEW_QUALITY")
+            reasons.add("INSUFFICIENT_VALID_VIEWS")
+            reasons.add("INSUFFICIENT_VIEW_QUALITY")  # legacy storage/API compatibility
         return CompletedPart(session.part_id, "FAIL" if session.has_failure or insufficient else "PASS",
                              session.frames_inspected, session.worst_score, session.valid_views, tuple(sorted(reasons)))

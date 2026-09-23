@@ -98,12 +98,20 @@ def test_model_registry_persists_tao_artifact_path(tmp_path):
     assert str(ModelRegistry(path).get("BF-001").model_file) == "models/export.onnx"
 
 
-def test_supplied_tao_models_allow_gpu_first_cpu_fallback():
+def test_supplied_models_are_patchcore_production_with_separate_tao_artifacts():
     models = ModelRegistry("config/models.json").all()
 
     assert models
-    assert all(model.algorithm == "nvidia_tao" for model in models)
+    assert all(model.algorithm == "hybrid_patchcore_geometry" for model in models)
+    assert all(model.production_algorithm == "patchcore_geometry" for model in models)
+    assert all(model.model_file.suffix == ".pt" for model in models)
+    assert all(model.patchcore_model_file == model.model_file for model in models)
+    assert all(model.tao_model_file is not None and model.tao_model_file.suffix == ".onnx" for model in models)
     assert all(model.tao_require_gpu is False for model in models)
     assert all(model.inspection_completion_mode == "minimum_views" for model in models)
+    assert all(model.minimum_rotation_views == 6 for model in models)
+    assert all(model.minimum_qualified_views == 6 for model in models)
+    assert all(model.yolo_presence_confidence == 0.95 for model in models)
+    assert all(model.runtime_storage_mode == "memory" for model in models)
     assert all(model.yolo_confidence >= 0.70 for model in models)
     assert all(model.counting_axis == "y" for model in models)

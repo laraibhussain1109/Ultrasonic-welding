@@ -15,8 +15,10 @@ def operating_day(now: datetime | None = None) -> str:
 
 
 class DailyStatistics:
-    def __init__(self, path: str | Path = "data/results/daily_statistics.json") -> None:
+    def __init__(self, path: str | Path = "data/results/daily_statistics.json", *, memory_only: bool = False) -> None:
         self.path = Path(path)
+        self.memory_only = memory_only
+        self._memory: dict = {}
 
     def counts(self, now: datetime | None = None) -> dict[str, int]:
         key = operating_day(now)
@@ -31,14 +33,21 @@ class DailyStatistics:
         counts = data.setdefault(key, {"inspected": 0, "passed": 0, "failed": 0})
         counts["inspected"] += 1
         counts["passed" if status == "PASS" else "failed"] += 1
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        if not self.memory_only:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         return {name: int(counts[name]) for name in ("inspected", "passed", "failed")}
 
     def _load(self) -> dict:
+        if self.memory_only:
+            return self._memory
         if not self.path.exists():
             return {}
         try:
             return json.loads(self.path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return {}
+
+    def clear(self) -> None:
+        """Clear temporary counters without performing disk I/O."""
+        self._memory.clear()

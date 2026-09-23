@@ -50,7 +50,7 @@ from .frame_selection import RotationPhaseGate, SharpFrameSampler
 from .inspector_factory import inspector_for_model
 from .trainer import InspectionResult
 from .tao_training import run_visual_changenet_task
-from .yolo_tracking import RotatingPartInspector, TrackedPart, YoloByteTrackDetector
+from .yolo_tracking import SUPPORTED_COMPLETION_MODES, RotatingPartInspector, TrackedPart, YoloByteTrackDetector
 
 
 QSS = """
@@ -128,7 +128,11 @@ class TrainWorker(QThread):
             output = self.inspector.train(
                 self.model, progress_callback=lambda update: self.progress.emit(update.format())
             )
-            action = "CALIBRATED" if self.model.algorithm == "nvidia_tao" else "TRAINED"
+            tao_production = (
+                self.model.production_algorithm != "patchcore_geometry"
+                and self.model.algorithm == "nvidia_tao"
+            )
+            action = "CALIBRATED" if tao_production else "TRAINED"
             self.finished_ok.emit(f"{action} {self.model.id}: {output}")
         except Exception as exc:
             self.failed.emit(f"TRAINING FAILED {self.model.id}: {exc}")
@@ -167,12 +171,13 @@ class TaoExportWorker(QThread):
     def run(self) -> None:
         spec = Path(f"specs/visual_changenet/{self.model.id.lower()}_segmentation.yaml")
         results = Path(f"data/results/{self.model.id}/tao")
+        output = self.model.tao_model_file or self.model.model_file
         try:
             run_visual_changenet_task(
-                "export", spec, results_dir=results, export_file=self.model.model_file,
+                "export", spec, results_dir=results, export_file=output,
                 progress_callback=lambda update: self.progress.emit(update.format()),
             )
-            self.finished_ok.emit(f"EXPORTED {self.model.id}: {self.model.model_file}")
+            self.finished_ok.emit(f"EXPORTED {self.model.id}: {output}")
         except Exception as exc:
             self.failed.emit(f"EXPORT FAILED {self.model.id}: {exc}")
 
@@ -199,6 +204,8 @@ class InspectionWindow(QWidget):
         self.locked_track_id = 1
         self.locked_part_present = False
         self.locked_missing_frames = 0
+        self.locked_presence_poll = 0
+        self.locked_last_yolo_present = False
         self.raw_frame = None
         self.fps_frame_count = 0
         self.fps_started_at = time.perf_counter()
@@ -206,7 +213,8 @@ class InspectionWindow(QWidget):
         self.frame_sampler: SharpFrameSampler | None = None
         self.rotation_phase_gate: RotationPhaseGate | None = None
         self.pending_sharp_frames = {}
-        self.daily_statistics = DailyStatistics()
+        self.active_fail_asserted = False
+        self.daily_statistics = DailyStatistics(memory_only=active_model.runtime_storage_mode == "memory")
         self.stats = self.daily_statistics.counts()
         self.part_detector: YoloByteTrackDetector | None = None
         self.rotating_parts: RotatingPartInspector | None = None
@@ -328,11 +336,11 @@ class InspectionWindow(QWidget):
         layout.addWidget(QLabel("FIXED LINE RATE — OPTIMISED @ 30 FPS"))
         layout.addStretch(1)
         if self.user.is_admin:
-            export = QPushButton("⬡   EXPORT TAO MODEL")
+            export = QPushButton("⬡   EXPORT TAO MODEL (ENGINEERING)")
             export.setObjectName("train")
             export.clicked.connect(self.export_selected)
             layout.addWidget(export)
-            train = QPushButton("◆   CALIBRATE TAO MODEL")
+            train = QPushButton("◆   TRAIN PATCHCORE MODEL")
             train.setObjectName("train")
             train.clicked.connect(self.train_selected)
             layout.addWidget(train)
@@ -547,6 +555,19 @@ class InspectionWindow(QWidget):
         if model.yolo_model_path is None:
             QMessageBox.critical(self, "YOLO model required", "Select your trained YOLO best.pt with YOLO PART MODEL before starting live inspection.")
             return
+        if model.inspection_completion_mode not in SUPPORTED_COMPLETION_MODES:
+            module = sys.modules.get(RotatingPartInspector.__module__)
+            loaded_from = Path(getattr(module, "__file__", "unknown")).resolve()
+            QMessageBox.critical(
+                self,
+                "Inspection runtime is out of date",
+                f"The configured completion mode {model.inspection_completion_mode!r} is not supported by "
+                f"the loaded runtime:\n{loaded_from}\n\nClose every running NeuroIris/Python process, "
+                "activate the intended virtual environment, then reinstall this checkout with:\n"
+                'python -m pip install -e ".[industrial,dev]"\n\n'
+                "Verify it with: blower-inspection doctor",
+            )
+            return
         # Applying camera settings also rebuilds the model-specific inspector.
         # Do this before readiness validation so the validated TAO session is
         # the same instance used for logging and inference.
@@ -555,7 +576,7 @@ class InspectionWindow(QWidget):
         except Exception as exc:
             QMessageBox.critical(self, "Camera settings error", str(exc))
             return
-        if model.algorithm == "nvidia_tao":
+        if model.production_algorithm != "patchcore_geometry" and model.algorithm == "nvidia_tao":
             try:
                 self.inspector.validate_ready(model)
             except Exception as exc:
@@ -615,6 +636,7 @@ class InspectionWindow(QWidget):
             # API of the legacy serial driver. Queue a safe PASS state without
             # blocking camera startup.
             self.fail_output.reset()
+            self.active_fail_asserted = False
             esp32_status = f"ESP32 CONFIGURED {self.fail_output.config.base_url}"
         else:
             esp32_status = "ESP32 DISABLED"
@@ -671,6 +693,7 @@ class InspectionWindow(QWidget):
             self.locked_roi_confidence = detected.confidence
             self.locked_track_id = 1
             self.locked_part_present = True
+            self.locked_last_yolo_present = True
             self.locked_missing_frames = 0
             self.log.addItem(
                 f"LOCKED ROI {model.id} | x={x} y={y} w={w} h={h} | YOLO={detected.confidence:.0%}"
@@ -678,11 +701,23 @@ class InspectionWindow(QWidget):
             return True
 
     def _locked_roi_tracks(self, raw_frame) -> list[TrackedPart]:
-        """Return the approved immutable ROI, with debounced part presence."""
+        """Return the immutable ROI, with debounced YOLO-confirmed presence."""
         if self.live_roi_bounds is None:
             return []
-        roi = crop_bounds(raw_frame, self.live_roi_bounds)
-        if is_part_present(roi):
+        model = self.selected_model()
+        self.locked_presence_poll += 1
+        # Keep the crop immutable but periodically ask YOLO whether a blower is
+        # still present. Polling once per burst avoids adding detector latency to
+        # every camera frame.
+        if self.locked_presence_poll == 1 or self.locked_presence_poll % model.capture_burst_frames == 0:
+            try:
+                assert self.part_detector is not None
+                detection = self.part_detector.detect_best(raw_frame)
+                self.locked_last_yolo_present = detection.confidence >= model.yolo_presence_confidence
+            except ValueError:
+                self.locked_last_yolo_present = False
+        yolo_present = self.locked_last_yolo_present
+        if yolo_present:
             if not self.locked_part_present:
                 self.locked_track_id += 1
             self.locked_part_present = True
@@ -692,7 +727,6 @@ class InspectionWindow(QWidget):
             # A rotating, manually focused blower may look texture-poor for a
             # few consecutive blurred frames. Require roughly half a second of
             # absence before ending the fixed-nest part session.
-            model = self.selected_model()
             missing_limit = max(model.capture_burst_frames, model.camera_fps // 2)
             if self.locked_missing_frames >= missing_limit:
                 self.locked_part_present = False
@@ -713,6 +747,16 @@ class InspectionWindow(QWidget):
             )
             for completed_part in removed_parts:
                 self._handle_completed_part(completed_part)
+            if removed_parts:
+                # A latched reject remains asserted while YOLO sees the part;
+                # confirmed departure is the reset boundary.
+                self.fail_output.reset()
+                self.active_fail_asserted = False
+            elif not tracks and self.active_fail_asserted:
+                # minimum_views may already have finalized and removed its
+                # session. A qualified YOLO NO PART still releases the latch.
+                self.fail_output.reset()
+                self.active_fail_asserted = False
             frame = self._draw_tracks(
                 raw_frame,
                 tracks,
@@ -804,8 +848,12 @@ class InspectionWindow(QWidget):
                 provisional_candidate=result.status == "CANDIDATE",
                 geometry_score=result.geometry_score or 0.0,
                 tao_score=result.tao_score, reason_codes=result.reason_codes,
+                candidate_sections=result.candidate_sections,
             )
             latched_failure = self.rotating_parts.latched_failure(track_id) or latched_failure
+            if latched_failure and not self.active_fail_asserted:
+                self.fail_output.send_result(True)
+                self.active_fail_asserted = True
             view_progress = ((completed_part.frames_inspected, completed_part.valid_views,
                               self.rotating_parts.minimum_rotation_views) if completed_part is not None
                              else self.rotating_parts.view_progress(track_id))
@@ -814,7 +862,9 @@ class InspectionWindow(QWidget):
         if latched_failure:
             badge_object, badge_text = "statusFail", "FAIL LATCHED"
         elif result.status == "PASS":
-            badge_object, badge_text = "statusPass", "VIEW PASS"
+            # A good view is provisional until YOLO confirms part departure.
+            # Do not show the final green PASS treatment while the part remains.
+            badge_object, badge_text = "statusStandby", "VIEW OK — CHECKING"
         elif result.status == "VIEW INVALID":
             badge_object, badge_text = "statusStandby", "VIEW INVALID"
         else:
@@ -833,7 +883,7 @@ class InspectionWindow(QWidget):
                            f"BROKEN: {geometry_components.get('broken', 0):.2f}")
         self.last_result.setText(
             f"TRACK: {track_id}   VIEW SCORE: {result.anomaly_score:.2f}\n"
-            f"TAO: {result.tao_score or 0:.2f}   GEOMETRY: {result.geometry_score or 0:.2f}\n"
+            f"PATCHCORE: {result.anomaly_score:.2f}   GEOMETRY: {result.geometry_score or 0:.2f}\n"
             f"GLARE: {result.glare_score or 0:.2f}   REGISTRATION: {result.registration_score or 0:.2f}\n"
             f"VIEW QUALITY: {result.view_quality_score if result.view_quality_score is not None else 1.0:.2f}\n"
             f"{geometry_detail}\n"
@@ -958,6 +1008,7 @@ class InspectionWindow(QWidget):
 
     def closeEvent(self, event) -> None:
         self.fail_output.reset()
+        self.active_fail_asserted = False
         self.fail_output.close()
         super().closeEvent(event)
 
@@ -966,7 +1017,8 @@ class InspectionWindow(QWidget):
             QMessageBox.warning(self, "Permission denied", "Training is available to admin users only.")
             return
         model = self.selected_model()
-        if model.algorithm == "nvidia_tao" and not model.model_file.is_file():
+        tao_production = model.production_algorithm != "patchcore_geometry" and model.algorithm == "nvidia_tao"
+        if tao_production and not model.model_file.is_file():
             path, _ = QFileDialog.getOpenFileName(
                 self,
                 f"Select NVIDIA TAO ONNX export for {model.id}",
@@ -985,7 +1037,8 @@ class InspectionWindow(QWidget):
             model = self.registry.update_model_settings(model.id, model_file=Path(path).resolve())
             self._refresh_models(selected_id=model.id)
             self.inspector = inspector_for_model(model)
-        self.log.addItem(f"TAO CALIBRATION STARTED {model.id}")
+        operation = "TAO CALIBRATION" if tao_production else "PATCHCORE TRAINING"
+        self.log.addItem(f"{operation} STARTED {model.id}")
         self.train_worker = TrainWorker(self.inspector, model)
         self.train_worker.finished_ok.connect(lambda message: self.log.addItem(message))
         self.train_worker.progress.connect(self._show_training_progress)
@@ -997,9 +1050,6 @@ class InspectionWindow(QWidget):
             QMessageBox.warning(self, "Permission denied", "TAO export is available to admin users only.")
             return
         model = self.selected_model()
-        if model.algorithm != "nvidia_tao":
-            QMessageBox.warning(self, "Wrong model type", f"{model.id} is not a TAO model.")
-            return
         self.log.addItem(f"TAO EXPORT STARTED {model.id}")
         self.export_worker = TaoExportWorker(model)
         self.export_worker.progress.connect(self._show_training_progress)
@@ -1022,12 +1072,15 @@ class InspectionWindow(QWidget):
         self.live_timer.stop()
         self.camera.close()
         self.fail_output.reset()
+        self.active_fail_asserted = False
         self.latest_annotated_frame = None
         self.current_display_frame = None
         self.live_roi_bounds = None
         self.locked_roi_confidence = 0.0
         self.locked_part_present = False
         self.locked_missing_frames = 0
+        self.locked_presence_poll = 0
+        self.locked_last_yolo_present = False
         self.raw_frame = None
         self.pending_sharp_frames = {}
         if self.frame_sampler is not None:
@@ -1046,9 +1099,12 @@ class InspectionWindow(QWidget):
         self.status_badge.style().polish(self.status_badge)
 
     def reset_stats(self) -> None:
+        if self.daily_statistics.memory_only:
+            self.daily_statistics.clear()
         self.stats = self.daily_statistics.counts()
         self.update_stats()
-        self.log.addItem(f"DAILY COUNTERS RETAINED ({operating_day()} 07:00–07:00)")
+        message = "TEMPORARY COUNTERS RESET" if self.daily_statistics.memory_only else f"DAILY COUNTERS RETAINED ({operating_day()} 07:00–07:00)"
+        self.log.addItem(message)
 
     def update_stats(self) -> None:
         inspected = self.stats["inspected"]

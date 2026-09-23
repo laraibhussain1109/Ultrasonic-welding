@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import sys
 from pathlib import Path
 
 import cv2
@@ -21,6 +22,7 @@ from .tao_training import (
     run_visual_changenet_task,
 )
 from .training_progress import TrainingProgress
+from .yolo_tracking import SUPPORTED_COMPLETION_MODES
 
 
 def _print_progress(progress: TrainingProgress) -> None:
@@ -60,10 +62,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("list-models", help="Show configured part models")
+    sub.add_parser("doctor", help="Show the imported checkout and production model routing")
 
     train = sub.add_parser(
         "train",
-        help="Train legacy models or calibrate a NVIDIA TAO ONNX export from normal images",
+        help="Train/calibrate the configured production detector from known-good images",
     )
     train.add_argument("model_id")
     train.add_argument("--model-file", help="TAO Deploy ONNX export to import before calibration")
@@ -133,6 +136,31 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     registry = ModelRegistry(args.models)
     ensure_model_folders(registry)
+    if args.command == "doctor":
+        package_file = Path(__file__).resolve()
+        print(f"Python executable: {Path(sys.executable).resolve()}")
+        print(f"Imported CLI: {package_file}")
+        print(f"Model registry: {Path(args.models).resolve()}")
+        print("Supported PatchCore algorithms: hybrid_patchcore_geometry, patchcore_geometry, patchcore_primary")
+        print(f"Supported completion modes: {', '.join(sorted(SUPPORTED_COMPLETION_MODES))}")
+        failed = False
+        for model in registry.all():
+            try:
+                backend = type(inspector_for_model(model)).__name__
+            except Exception as exc:
+                backend = f"ERROR: {exc}"
+                failed = True
+            print(
+                f"{model.id}: algorithm={model.algorithm}, "
+                f"production_algorithm={model.production_algorithm}, backend={backend}, "
+                f"model={model.patchcore_model_file or model.model_file}"
+            )
+            if model.inspection_completion_mode not in SUPPORTED_COMPLETION_MODES:
+                print(f"  ERROR: unsupported completion mode {model.inspection_completion_mode!r}")
+                failed = True
+        if "site-packages" in str(package_file).casefold():
+            print("WARNING: package is imported from site-packages; confirm it is the intended editable checkout.")
+        return 1 if failed else 0
     if args.command == "list-models":
         for model in registry.all():
             trained = "trained" if model.model_file.exists() else "not trained"
@@ -148,9 +176,10 @@ def main(argv: list[str] | None = None) -> int:
                 raise SystemExit(str(exc)) from exc
             model = registry.update_model_settings(model.id, model_file=candidate)
         inspector = inspector_for_model(model)
-        if model.algorithm == "hybrid_patchcore_padim" and model.yolo_model_path is None:
+        patchcore_production = model.production_algorithm == "patchcore_geometry"
+        if patchcore_production and model.yolo_model_path is None:
             raise SystemExit(f"No yolo_model_path is configured for {model.id}")
-        if model.algorithm == "nvidia_tao":
+        if not patchcore_production and model.algorithm == "nvidia_tao":
             if not model.model_file.is_file():
                 raise SystemExit(
                     f"VisualChangeNet export not found: {model.model_file}. The `train` command calibrates an "
@@ -164,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
                 "before training (source images will not be modified)..."
             )
         output = inspector.train(model, progress_callback=_print_progress)
-        action = "Calibrated" if model.algorithm == "nvidia_tao" else "Trained"
+        action = "Calibrated" if not patchcore_production and model.algorithm == "nvidia_tao" else "Trained"
         print(f"{action} {model.id}: {output}")
         return 0
 
@@ -197,8 +226,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command in {"tao-train", "tao-export"}:
         model = registry.get(args.model_id) if args.model_id else registry.active()
-        if model.algorithm != "nvidia_tao":
-            raise SystemExit(f"{model.id} is not configured for NVIDIA TAO")
         task = "train" if args.command == "tao-train" else "export"
         print(f"Starting TAO VisualChangeNet {task} with {args.spec} in {args.image}...")
         kwargs = {
@@ -214,11 +241,11 @@ def main(argv: list[str] | None = None) -> int:
                 restore_last_session=args.restore_last_session,
             )
         else:
-            kwargs["export_file"] = args.output or model.model_file
+            kwargs["export_file"] = args.output or model.tao_model_file or model.model_file
         run_visual_changenet_task(task, args.spec, progress_callback=_print_progress, **kwargs)
         print(f"TAO VisualChangeNet {task} completed")
         if task == "export":
-            print(f"ONNX export ready for calibration: {Path(args.output or model.model_file).resolve()}")
+            print(f"ONNX export ready for engineering comparison: {Path(args.output or model.tao_model_file or model.model_file).resolve()}")
             print(f"Next: python -m src.blower_inspection.cli train {model.id}")
         return 0
 

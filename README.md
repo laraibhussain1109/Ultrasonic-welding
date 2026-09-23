@@ -1,6 +1,22 @@
 # NeuroIris Blower Fan Industrial Vision Inspection
 
-Python/PyQt6 inspection software for ultrasonic-welded blower fan parts. The production anomaly path consumes an **NVIDIA TAO Deploy ONNX export**; PatchCore and SuperSimpleNet are not used for production decisions.
+Python/PyQt6 inspection software for ultrasonic-welded blower fan parts. The
+default production decision uses **PatchCore + structural fin geometry +
+multi-view confirmation**. NVIDIA TAO VisualChangeNet remains available for
+engineering comparison, training, export, and ONNX runtime experiments, but it
+does not control PASS/FAIL by default.
+
+> **New installation?** Follow the complete [step-by-step operating guide](docs/getting_started.md)
+> for PatchCore model training and starting a live inspection.
+
+The supplied model IDs contain hyphens (`BF-001` through `BF-004`). For example,
+BF-002 training images belong in `data/training/BF-002/normal`; a similarly
+named `BF002` directory is not read by that model.
+
+If Python reports `Unsupported inspection algorithm: hybrid_patchcore_geometry`,
+run `blower-inspection doctor`. A traceback pointing at a different repository
+directory means an older editable installation is active; reinstall from this
+checkout with `python -m pip install -e ".[industrial,dev]"`.
 
 ## Safety and quality boundary
 
@@ -16,7 +32,9 @@ The TAO runtime adds these production gates:
 - A failed view is latched across the rotating physical part, and a runtime fault stops inspection and asserts the reject/inhibit output.
 - Reports record the algorithm, model digest, thresholds, score, affected area, and sectors.
 
-See [the TAO deployment and validation gate](docs/tao_deployment.md) before commissioning.
+See [the step-by-step operating guide](docs/getting_started.md) and qualification
+notes before commissioning. See [the TAO deployment guide](docs/tao_deployment.md)
+only when using the optional TAO engineering workflow.
 
 ## Installation
 
@@ -38,7 +56,11 @@ pip install -e ".[industrial,tao]"
 
 Start the UI with `python -m blower_inspection.app`.
 
-## Model and dataset workflow
+## Optional TAO engineering workflow (not default production training)
+
+The section below is retained for teams that deliberately train/export TAO for
+research comparison. For normal PatchCore production setup, skip this section
+and use [the step-by-step operating guide](docs/getting_started.md).
 
 Each part in `config/models.json` points to its own TAO ONNX export, calibration file, normal-image directory, output directory, camera mode, ROI, and YOLO locator. Export a fixed-spatial-shape TAO visual-anomaly model as, for example, `data/models/BF-001/tao_anomaly.onnx`.
 
@@ -187,7 +209,7 @@ for a production line.
 
 ## YOLO localization and rotating-part decisions
 
-The live path uses the configured Ultralytics detector and ByteTrack track ID to crop the current component. For every tracked part it collects five camera frames, measures Laplacian sharpness, discards motion-blurred bursts, and sends only the sharpest photograph to inference. At least eight accepted photographs are required so that the rotating cylinder is sampled around its surface before a result can be finalized. The burst size, sharpness floor, and minimum accepted-view count can be set per model with `capture_burst_frames`, `minimum_sharpness`, and `minimum_rotation_views`.
+The live path uses the configured Ultralytics detector and ByteTrack track ID to crop the current component. For every tracked part it collects five camera frames, measures Laplacian sharpness, discards motion-blurred bursts, and sends only the sharpest photograph to inference. The supplied fixed-station profiles require six accepted, structurally distinct photographs before finalizing; any failed view among those six latches the whole part, including failures that occur after an earlier passing view. The burst size, sharpness floor, and minimum accepted-view count can be set per model with `capture_burst_frames`, `minimum_sharpness`, and `minimum_rotation_views`.
 
 All accepted views during rotation belong to one physical-part session. Any failed sharp view is latched; later good views cannot erase it. Production totals and the ESP32 signal update only after the tracked center crosses the configured count line and the minimum view count has been reached, not when a part merely disappears. The displayed TAO anomaly score is calibrated: `1.000` is the fail threshold, rather than an easily misread raw probability such as `0.002`.
 
@@ -224,9 +246,9 @@ pip install -e '.[dev]'
 pytest -q
 ```
 
-## Hybrid rotating-blower inspection
+## Legacy TAO hybrid rotating-blower inspection
 
-Production inspection retains NVIDIA TAO VisualChangeNet but no longer treats a
+The optional TAO comparison path retains NVIDIA TAO VisualChangeNet but does not treat a
 single change-map pixel as a physical defect. `CALIBRATE` builds a diverse,
 structural reference bank from reviewed normal images, qualifies conservative
 Euclidean registration, and learns robust fin geometry. Live views use only the

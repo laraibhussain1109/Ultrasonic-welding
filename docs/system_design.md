@@ -117,3 +117,57 @@ then reused for sharp-frame selection, registration, TAO, and geometry throughou
 the session. YOLO is not allowed to resize the crop from one rotation frame to
 the next. Part-presence loss is debounced before a new fixed-nest part session is
 created; it never changes the accepted rectangle.
+# PatchCore-primary production inspection
+
+The production path is now **YOLO presence/localization → canonical ROI → frame
+quality → central band → PatchCore plus fin geometry → glare/edge filtering →
+rotational confirmation**. TAO VisualChangeNet remains installed and its
+training, resume, export, calibration and ONNX/CUDA code is retained, but it has
+no production voting authority when `production_algorithm` is
+`patchcore_geometry`. `engineering_compare_tao` is reserved for comparison
+logging and must never alter the production result.
+
+Training and inference both use `ROIStabilizer`: either a median of recent YOLO
+boxes (`yolo_stabilized`) or one calibrated box after YOLO confirms presence
+(`fixed_after_detection`). Crops are padded and letterboxed without changing
+aspect ratio. A continuous distance-to-edge authority map, central viewing band,
+and dilated support-rib mask prevent silhouette and normal rib boundaries from
+rejecting a part. The long ROI is reported in longitudinal section scores rather
+than treated as one undifferentiated location.
+
+Only qualified, diverse good crops enter the memory bank. Blurry, clipped or
+glare-dominated crops are rejected; correlated thumbnails are deduplicated; and
+a disjoint 20% good-image subset calibrates fixed raw-distance thresholds. The
+calibration records the memory-bank hash, training/calibration manifests,
+backbone, layers, timestamp and quality settings. A mismatch fails closed as a
+stale calibration. Optional `hard_good_dir` images are validation data and are
+not automatically admitted into the memory bank.
+
+At runtime, severe blur produces `VIEW INVALID`; it is never a PASS and never
+counts as a qualified rotational view. Short camera exposure with stronger,
+diffuse illumination is preferred to neural deblurring. A broad moving highlight
+can suppress PatchCore authority and require another view, but cannot suppress
+catastrophic geometry. One uncorroborated PatchCore spike is a candidate;
+persistent candidate views reject through `RotatingPartInspector`; catastrophic
+geometry rejects immediately. Operator output leaves normal pixels unchanged
+and draws only confirmed red defect regions.
+
+Typical commands:
+
+```bash
+python -m blower_inspection.cli train BF-001
+python -m blower_inspection.cli inspect BF-001 path/to/full_camera_image.png
+pytest -q
+```
+
+Training writes `patchcore_primary.pt`, `patchcore_calibration.json`, and a
+quality/rejection report beside the model. Each inference result exposes
+`frame_quality`, `patchcore`, `geometry`, and `total` milliseconds in
+`latencies_ms`; actual values are hardware- and dataset-dependent and should be
+collected on the deployment GPU rather than inferred from unit tests.
+
+Known limitations: support-rib discovery is gradient based and should be checked
+against each fixture; calibrated geometry baselines require representative good
+parts; the optional segmentation-mask edge path is not required by the current
+box-only YOLO; and thresholds cannot be claimed production-ready until measured
+against independent GOOD, hard-good and labelled NG physical parts.

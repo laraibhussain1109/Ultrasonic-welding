@@ -87,10 +87,23 @@ def _features(image: np.ndarray, top: float, bottom: float) -> tuple[dict[str, f
             "continuity": continuity, "rib_confidence": rib_confidence}, edges, ribs
 
 
+def _broken_fin_measurement(image: np.ndarray, top: float, bottom: float) -> tuple[np.ndarray, float]:
+    """Return isolated-gap candidates and their unbounded qualified-area ratio."""
+    ribs, _confidence = support_rib_mask(image)
+    reflection = smooth_reflection_mask(image, image.shape[:2])
+    band = inspection_band_mask(image.shape[:2], top, bottom)
+    qualified = band & ~ribs & ~reflection
+    mask = broken_fin_mask(image, image.shape[:2]) & qualified
+    ratio = float(np.count_nonzero(mask) / max(np.count_nonzero(qualified), 1))
+    return mask, ratio
+
+
 class FinGeometryInspector:
-    def __init__(self, calibration: dict | None = None, *, band_top: float = 0.18, band_bottom: float = 0.82) -> None:
+    def __init__(self, calibration: dict | None = None, *, band_top: float = 0.18, band_bottom: float = 0.82,
+                 candidate_threshold: float = .55) -> None:
         self.calibration = calibration or {}
         self.band_top, self.band_bottom = band_top, band_bottom
+        self.candidate_threshold = candidate_threshold
 
     @staticmethod
     def calibrate(images: list[np.ndarray], *, band_top: float = 0.18, band_bottom: float = 0.82) -> dict:
@@ -111,6 +124,21 @@ class FinGeometryInspector:
                                                 6 * 1.4826 * output["pitch"]["mad"])
         output["periodicity"]["reject_delta"] = max(.15, 6 * 1.4826 * output["periodicity"]["mad"])
         output["continuity"]["reject_delta"] = max(.12, 6 * 1.4826 * output["continuity"]["mad"])
+        broken_values = np.asarray([
+            _broken_fin_measurement(image, band_top, band_bottom)[1] for image in images
+        ], dtype=np.float32)
+        broken_median = float(np.median(broken_values))
+        broken_mad = float(max(np.median(np.abs(broken_values - broken_median)), 1e-6))
+        broken_upper = float(np.quantile(broken_values, .995))
+        output["broken_fin"] = {
+            "median": broken_median,
+            "mad": broken_mad,
+            "p995": broken_upper,
+            # Require a material increase beyond all known-good isolated-gap
+            # texture. This detector is supporting geometry evidence, not an
+            # absolute pixel-area rule.
+            "reject_delta": max(.001, 8 * 1.4826 * broken_mad, broken_upper * .5),
+        }
         return output
 
     def inspect(self, image: np.ndarray) -> GeometryEvidence:
@@ -123,13 +151,20 @@ class FinGeometryInspector:
         pitch = high("pitch", features["pitch"])
         periodicity = high("periodicity", features["periodicity"])
         continuity = high("continuity", features["continuity"])
-        broken = broken_fin_mask(image, image.shape[:2])
-        reflection = smooth_reflection_mask(image, image.shape[:2])
-        # Reflection may reduce geometry authority but cannot erase surrounding
-        # strong geometry scores. Only pixels directly identified as smooth
-        # glare are excluded from the isolated-gap mask.
-        broken &= ~ribs & ~reflection & inspection_band_mask(image.shape[:2], self.band_top, self.band_bottom)
-        broken_score = float(np.clip(np.count_nonzero(broken) / max(image.size / 3 * .001, 1), 0, 2))
+        broken, broken_ratio = _broken_fin_measurement(image, self.band_top, self.band_bottom)
+        broken_calibration = self.calibration.get("broken_fin")
+        if broken_calibration:
+            excess = max(0.0, broken_ratio - float(broken_calibration["p995"]))
+            broken_score = float(np.clip(
+                excess / max(float(broken_calibration["reject_delta"]), 1e-6), 0, 2
+            ))
+        else:
+            # Missing calibration must not turn normal repetitive gaps into an
+            # immediate BROKEN_FIN. Versioned production checkpoints reject this
+            # state before inspection; zero keeps standalone engineering use safe.
+            broken_score = 0.0
+        if broken_score < self.candidate_threshold:
+            broken[:] = False
         # Pitch and periodicity come from the same autocorrelation signal, so
         # they cannot corroborate one another. A normal phase can move the
         # strongest peak to a harmonic and make both values look abnormal.

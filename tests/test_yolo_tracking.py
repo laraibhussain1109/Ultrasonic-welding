@@ -142,6 +142,20 @@ def test_fixed_station_part_completes_after_minimum_rotation_views_once():
     assert inspector.accepts_inspection(9)
 
 
+def test_six_view_mode_latches_failure_after_earlier_passes():
+    inspector = RotatingPartInspector(minimum_rotation_views=6, completion_mode="minimum_views")
+    inspector.observe_tracks([tracked(19, 50)], frame_width=100)
+
+    for _ in range(4):
+        assert inspector.record_inspection(19, is_pass=True, anomaly_score=.1) is None
+    assert inspector.record_inspection(19, is_pass=False, anomaly_score=1.1) is None
+    completed = inspector.record_inspection(19, is_pass=True, anomaly_score=.1)
+
+    assert completed is not None
+    assert completed.frames_inspected == 6
+    assert completed.status == "FAIL"
+
+
 def test_fixed_station_fails_closed_after_too_many_invalid_views():
     inspector = RotatingPartInspector(minimum_rotation_views=2, completion_mode="minimum_views")
     inspector.observe_tracks([tracked(4, 50)], frame_width=100)
@@ -189,3 +203,46 @@ def test_horizontal_counting_line_uses_vertical_part_motion():
 
     assert completed is not None
     assert completed.status == "PASS"
+
+
+def test_patchcore_persistence_requires_same_longitudinal_section():
+    inspector = RotatingPartInspector(
+        minimum_rotation_views=3, weak_candidate_required_views=2,
+        completion_mode="minimum_views",
+    )
+    inspector.observe_tracks([tracked(21, 50)], frame_width=100)
+
+    assert inspector.record_inspection(
+        21, is_pass=False, anomaly_score=.8, immediate_failure=False,
+        provisional_candidate=True, candidate_sections=(0,),
+    ) is None
+    assert inspector.record_inspection(
+        21, is_pass=False, anomaly_score=.8, immediate_failure=False,
+        provisional_candidate=True, candidate_sections=(4,),
+    ) is None
+    assert not inspector.latched_failure(21)
+    completed = inspector.record_inspection(
+        21, is_pass=False, anomaly_score=.8, immediate_failure=False,
+        provisional_candidate=True, candidate_sections=(4,),
+    )
+
+    assert completed is not None
+    assert completed.status == "FAIL"
+
+
+def test_part_departure_checks_later_views_and_keeps_failure_latched():
+    inspector = RotatingPartInspector(
+        lost_timeout_s=.5, minimum_rotation_views=2, completion_mode="part_departure"
+    )
+    inspector.observe_tracks([tracked(31, 50)], frame_width=100, now=0)
+    assert inspector.record_inspection(31, is_pass=True, anomaly_score=.1) is None
+    assert inspector.record_inspection(31, is_pass=True, anomaly_score=.1) is None
+    assert inspector.accepts_inspection(31)
+    assert inspector.record_inspection(31, is_pass=False, anomaly_score=1.2) is None
+    assert inspector.latched_failure(31)
+    assert inspector.observe_tracks([], frame_width=100, now=.4) == []
+    completed = inspector.observe_tracks([], frame_width=100, now=.6)
+
+    assert len(completed) == 1
+    assert completed[0].status == "FAIL"
+    assert completed[0].frames_inspected == 3
