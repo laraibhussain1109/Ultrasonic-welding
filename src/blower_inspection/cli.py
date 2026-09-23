@@ -22,6 +22,7 @@ from .tao_training import (
     run_visual_changenet_task,
 )
 from .training_progress import TrainingProgress
+from .yolo_tracking import SUPPORTED_COMPLETION_MODES
 
 
 def _print_progress(progress: TrainingProgress) -> None:
@@ -141,6 +142,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Imported CLI: {package_file}")
         print(f"Model registry: {Path(args.models).resolve()}")
         print("Supported PatchCore algorithms: hybrid_patchcore_geometry, patchcore_geometry, patchcore_primary")
+        print(f"Supported completion modes: {', '.join(sorted(SUPPORTED_COMPLETION_MODES))}")
         failed = False
         for model in registry.all():
             try:
@@ -153,6 +155,9 @@ def main(argv: list[str] | None = None) -> int:
                 f"production_algorithm={model.production_algorithm}, backend={backend}, "
                 f"model={model.patchcore_model_file or model.model_file}"
             )
+            if model.inspection_completion_mode not in SUPPORTED_COMPLETION_MODES:
+                print(f"  ERROR: unsupported completion mode {model.inspection_completion_mode!r}")
+                failed = True
         if "site-packages" in str(package_file).casefold():
             print("WARNING: package is imported from site-packages; confirm it is the intended editable checkout.")
         return 1 if failed else 0

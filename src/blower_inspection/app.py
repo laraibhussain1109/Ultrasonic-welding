@@ -50,7 +50,7 @@ from .frame_selection import RotationPhaseGate, SharpFrameSampler
 from .inspector_factory import inspector_for_model
 from .trainer import InspectionResult
 from .tao_training import run_visual_changenet_task
-from .yolo_tracking import RotatingPartInspector, TrackedPart, YoloByteTrackDetector
+from .yolo_tracking import SUPPORTED_COMPLETION_MODES, RotatingPartInspector, TrackedPart, YoloByteTrackDetector
 
 
 QSS = """
@@ -554,6 +554,19 @@ class InspectionWindow(QWidget):
         model = self.selected_model()
         if model.yolo_model_path is None:
             QMessageBox.critical(self, "YOLO model required", "Select your trained YOLO best.pt with YOLO PART MODEL before starting live inspection.")
+            return
+        if model.inspection_completion_mode not in SUPPORTED_COMPLETION_MODES:
+            module = sys.modules.get(RotatingPartInspector.__module__)
+            loaded_from = Path(getattr(module, "__file__", "unknown")).resolve()
+            QMessageBox.critical(
+                self,
+                "Inspection runtime is out of date",
+                f"The configured completion mode {model.inspection_completion_mode!r} is not supported by "
+                f"the loaded runtime:\n{loaded_from}\n\nClose every running NeuroIris/Python process, "
+                "activate the intended virtual environment, then reinstall this checkout with:\n"
+                'python -m pip install -e ".[industrial,dev]"\n\n'
+                "Verify it with: blower-inspection doctor",
+            )
             return
         # Applying camera settings also rebuilds the model-specific inspector.
         # Do this before readiness validation so the validated TAO session is

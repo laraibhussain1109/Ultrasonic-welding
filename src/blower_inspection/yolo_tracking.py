@@ -11,6 +11,8 @@ from typing import Any
 
 import numpy as np
 
+SUPPORTED_COMPLETION_MODES = frozenset({"counting_line", "minimum_views", "part_departure"})
+
 
 @dataclass(frozen=True)
 class TrackedPart:
@@ -165,7 +167,7 @@ class RotatingPartInspector:
                             else {"top_to_bottom", "bottom_to_top"})
         if counting_direction not in valid_directions:
             raise ValueError(f"counting_direction {counting_direction!r} is invalid for axis {counting_axis!r}")
-        if completion_mode not in {"counting_line", "minimum_views", "part_departure"}:
+        if completion_mode not in SUPPORTED_COMPLETION_MODES:
             raise ValueError("completion_mode must be counting_line, minimum_views or part_departure")
         self.lost_timeout_s = lost_timeout_s
         self.counting_line_ratio = counting_line_ratio

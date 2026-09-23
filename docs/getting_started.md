@@ -260,6 +260,25 @@ multiple qualified rotational views.
 
 ## 8. Common startup failures
 
+### `completion_mode must be 'counting_line' or 'minimum_views'`
+
+That exact message comes from a pre-`part_departure` runtime. The configuration
+is new but the running Python process or editable installation is old. Do **not**
+change `part_departure` back to `minimum_views`: the old behavior can finalize a
+part after early passing views and miss a later failing view. Instead, fully
+close the UI and every Python process, then run from the current checkout:
+
+```powershell
+python -m pip uninstall blower-inspection -y
+python -m pip install -e ".[industrial,dev]"
+blower-inspection doctor
+```
+
+`doctor` must list `part_departure` under supported completion modes and report
+`backend=PatchCoreInspector` for BF-002. Restart the UI only after both checks
+pass. The application now performs the same capability preflight before opening
+the camera and displays the loaded runtime path if it is stale.
+
 ### `Unsupported inspection algorithm: hybrid_patchcore_geometry`
 
 This almost always means Python is importing an older editable installation from

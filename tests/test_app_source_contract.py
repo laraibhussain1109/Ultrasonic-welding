@@ -44,6 +44,14 @@ def test_app_distinguishes_view_pass_from_final_part_pass():
     assert "VIEWS:" in source
 
 
+def test_app_preflights_part_departure_runtime_support():
+    source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
+
+    assert "SUPPORTED_COMPLETION_MODES" in source
+    assert "Inspection runtime is out of date" in source
+    assert "blower-inspection doctor" in source
+
+
 def test_app_can_draw_a_horizontal_x_axis_counting_line():
     source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
 
