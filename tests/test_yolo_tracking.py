@@ -156,6 +156,43 @@ def test_six_view_mode_latches_failure_after_earlier_passes():
     assert completed.status == "FAIL"
 
 
+def test_defect_section_remains_available_after_surface_rotates_and_session_completes():
+    inspector = RotatingPartInspector(minimum_rotation_views=2, completion_mode="minimum_views")
+    inspector.observe_tracks([tracked(19, 50)], frame_width=100)
+
+    assert inspector.record_inspection(
+        19, is_pass=False, anomaly_score=1.1, candidate_sections=(2,),
+    ) is None
+    assert inspector.defect_sections(19) == (2,)
+
+    completed = inspector.record_inspection(19, is_pass=True, anomaly_score=.1)
+
+    assert completed is not None
+    assert inspector.defect_sections(19) == (2,)
+    inspector.observe_tracks([], frame_width=100)
+    assert inspector.defect_sections(19) == ()
+
+
+def test_persistent_candidate_section_is_latched_only_when_confirmed():
+    inspector = RotatingPartInspector(
+        minimum_rotation_views=3, weak_candidate_required_views=2,
+        completion_mode="minimum_views",
+    )
+    inspector.observe_tracks([tracked(20, 50)], frame_width=100)
+
+    inspector.record_inspection(
+        20, is_pass=False, anomaly_score=.8, immediate_failure=False,
+        provisional_candidate=True, candidate_sections=(4,),
+    )
+    assert inspector.defect_sections(20) == ()
+    inspector.record_inspection(
+        20, is_pass=False, anomaly_score=.8, immediate_failure=False,
+        provisional_candidate=True, candidate_sections=(4,),
+    )
+
+    assert inspector.defect_sections(20) == (4,)
+
+
 def test_fixed_station_fails_closed_after_too_many_invalid_views():
     inspector = RotatingPartInspector(minimum_rotation_views=2, completion_mode="minimum_views")
     inspector.observe_tracks([tracked(4, 50)], frame_width=100)

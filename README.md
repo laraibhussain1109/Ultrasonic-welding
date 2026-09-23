@@ -286,6 +286,13 @@ capture new normal images across all six rotation phases and retrain/recalibrate
 the selected model. Validate that adjacent views overlap—the structural phase
 gate rejects duplicate views but does not measure absolute shaft angle.
 
+When a defect is confirmed, its longitudinal section is latched for the entire
+part session. The live camera continues to shade that axial band red and labels
+it `ROTATE TO VERIFY` even after the defective circumferential surface has
+rotated out of view. The marker clears only after YOLO confirms that the part
+has left the station; it identifies the axial region to inspect, while the
+operator rotates the table to bring the exact surface defect back into view.
+
 Production YOLO crops require confidence strictly above 70%. Supplied blower
 profiles use `counting_axis: "y"`, so the displayed counting line runs horizontally
 along the image x-axis and crossing is measured from vertical part motion.

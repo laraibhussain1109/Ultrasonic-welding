@@ -763,6 +763,8 @@ class InspectionWindow(QWidget):
                 self.rotating_parts.counting_line_ratio,
                 self.rotating_parts.counting_direction,
                 self.rotating_parts.counting_axis,
+                {part.track_id: self.rotating_parts.defect_sections(part.track_id) for part in tracks},
+                self.selected_model().patchcore_section_count,
             )
         except Exception as exc:
             self._handle_live_error(f"Camera frame error: {exc}")
@@ -842,13 +844,27 @@ class InspectionWindow(QWidget):
         latched_failure = result.status == "FAIL"
         view_progress = (0, 0, self.selected_model().minimum_rotation_views)
         if self.rotating_parts is not None:
+            section_count = self.selected_model().patchcore_section_count
+            defect_sections = tuple(result.candidate_sections)
+            if result.status == "FAIL" and not defect_sections:
+                image_width = result.display_image.shape[1] if result.display_image is not None else 0
+                if image_width and result.defect_boxes:
+                    defect_sections = tuple(sorted({
+                        min(section_count - 1, max(0, int((x + width / 2) * section_count / image_width)))
+                        for x, _y, width, _height in result.defect_boxes
+                    }))
+                else:
+                    # A scalar-only legacy failure has no safe localization.
+                    # Highlight the full component rather than lose the latched
+                    # warning while it rotates.
+                    defect_sections = tuple(range(section_count))
             completed_part = self.rotating_parts.record_inspection(
                 track_id, is_pass=result.is_pass, anomaly_score=result.anomaly_score,
                 view_valid=result.view_valid, immediate_failure=result.status == "FAIL",
                 provisional_candidate=result.status == "CANDIDATE",
                 geometry_score=result.geometry_score or 0.0,
                 tao_score=result.tao_score, reason_codes=result.reason_codes,
-                candidate_sections=result.candidate_sections,
+                candidate_sections=defect_sections,
             )
             latched_failure = self.rotating_parts.latched_failure(track_id) or latched_failure
             if latched_failure and not self.active_fail_asserted:
@@ -908,7 +924,8 @@ class InspectionWindow(QWidget):
     @staticmethod
     def _draw_tracks(
         frame, tracks: list[TrackedPart], counting_line_ratio: float, counting_direction: str,
-        counting_axis: str = "x",
+        counting_axis: str = "x", defect_sections: dict[int, tuple[int, ...]] | None = None,
+        section_count: int = 1,
     ):
         display = frame.copy()
         if counting_axis == "y":
@@ -925,8 +942,19 @@ class InspectionWindow(QWidget):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
         for track in tracks:
             x, y, w, h = track.bounds
+            sections = (defect_sections or {}).get(track.track_id, ())
+            for section in sections:
+                sx0 = x + round(w * section / max(section_count, 1))
+                sx1 = x + round(w * (section + 1) / max(section_count, 1))
+                overlay = display.copy()
+                cv2.rectangle(overlay, (sx0, y), (sx1, y + h), (0, 0, 255), -1)
+                cv2.addWeighted(overlay, 0.28, display, 0.72, 0, display)
+                cv2.rectangle(display, (sx0, y), (sx1, y + h), (0, 0, 255), 3)
             cv2.rectangle(display, (x, y), (x + w, y + h), (0, 217, 255), 2)
-            cv2.putText(display, f"PART {track.track_id} {track.confidence:.0%}", (x, max(18, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 217, 255), 2)
+            label = (f"DEFECT SECTION {','.join(str(value + 1) for value in sections)} - ROTATE TO VERIFY"
+                     if sections else f"PART {track.track_id} {track.confidence:.0%}")
+            colour = (0, 0, 255) if sections else (0, 217, 255)
+            cv2.putText(display, label, (x, max(18, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, colour, 2)
         return display
 
     def _handle_no_part_frame(self, frame) -> None:
