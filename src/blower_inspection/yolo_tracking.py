@@ -127,6 +127,7 @@ class RotatingPartSession:
     geometry_candidate_views: int = 0
     confirmed_defect_views: int = 0
     last_candidate_sections: set[int] = field(default_factory=set)
+    confirmed_defect_sections: set[int] = field(default_factory=set)
     reason_codes: set[str] = field(default_factory=set)
 
 
@@ -179,6 +180,10 @@ class RotatingPartInspector:
         self.sessions: dict[int, RotatingPartSession] = {}
         self.track_to_part: dict[int, int] = {}
         self.completed_tracker_ids: set[int] = set()
+        # Fixed-nest sessions can complete while the rejected part is still on
+        # the table. Retain its longitudinal locations until YOLO confirms that
+        # tracker has left so the operator can rotate back to the defect.
+        self.completed_defect_sections: dict[int, frozenset[int]] = {}
 
     def observe_tracks(
         self, tracks: list[TrackedPart], frame_width: int, now: float | None = None,
@@ -187,6 +192,10 @@ class RotatingPartInspector:
         now = time.monotonic() if now is None else now
         active_ids = {track.track_id for track in tracks}
         self.completed_tracker_ids.intersection_update(active_ids)
+        self.completed_defect_sections = {
+            track_id: sections for track_id, sections in self.completed_defect_sections.items()
+            if track_id in active_ids
+        }
         for track in tracks:
             if track.track_id in self.completed_tracker_ids:
                 continue
@@ -265,6 +274,11 @@ class RotatingPartInspector:
         if severe:
             session.confirmed_defect_views += 1
         session.has_failure |= severe or session.persistent_candidate_count >= self.weak_candidate_required_views
+        if severe or session.persistent_candidate_count >= self.weak_candidate_required_views:
+            # Sections run along the cylinder axis, so their screen x-position
+            # remains useful even after the defective circumference rotates out
+            # of sight. Preserve every confirmed location for the whole part.
+            session.confirmed_defect_sections.update(candidate_sections)
         session.worst_score = max(session.worst_score, anomaly_score)
         session.worst_geometry_score = max(session.worst_geometry_score, geometry_score)
         session.worst_tao_score = max(session.worst_tao_score, tao_score if tao_score is not None else anomaly_score)
@@ -281,6 +295,13 @@ class RotatingPartInspector:
     def latched_failure(self, track_id: int) -> bool:
         session = self._session_for_track(track_id)
         return bool(session and session.has_failure)
+
+    def defect_sections(self, track_id: int) -> tuple[int, ...]:
+        """Return latched longitudinal defect locations for operator guidance."""
+        session = self._session_for_track(track_id)
+        if session is not None:
+            return tuple(sorted(session.confirmed_defect_sections))
+        return tuple(sorted(self.completed_defect_sections.get(track_id, ())))
 
     def needs_initial_inspection(self, track_id: int) -> bool:
         session = self._session_for_track(track_id)
@@ -319,6 +340,7 @@ class RotatingPartInspector:
         self.sessions.clear()
         self.track_to_part.clear()
         self.completed_tracker_ids.clear()
+        self.completed_defect_sections.clear()
         return completed
 
     def _reattach_or_start(self, track: TrackedPart, center_ratio: float, now: float) -> int | None:
@@ -342,6 +364,8 @@ class RotatingPartInspector:
         for tracker_id in session.tracker_ids:
             self.track_to_part.pop(tracker_id, None)
             self.completed_tracker_ids.add(tracker_id)
+            if session.confirmed_defect_sections:
+                self.completed_defect_sections[tracker_id] = frozenset(session.confirmed_defect_sections)
         return completed
 
     def _session_for_track(self, track_id: int) -> RotatingPartSession | None:

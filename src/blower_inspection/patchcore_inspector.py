@@ -356,6 +356,13 @@ class PatchCoreInspector(HybridPatchcorePadimInspector):
                                            geometry_candidate_threshold=config.geometry_candidate_threshold,
                                            geometry_fail_threshold=config.geometry_fail_threshold,
                                            glare_threshold=config.glare_threshold)
+        # Geometry can be the sole reason for a failure. Include every
+        # longitudinal section touched by the final confirmed mask rather than
+        # reporting PatchCore-only candidate locations.
+        for index, section in enumerate(np.array_split(decision.confirmed_mask, config.patchcore_section_count, axis=1)):
+            if np.any(section):
+                candidate_sections += (index,)
+        candidate_sections = tuple(sorted(set(candidate_sections)))
         display, boxes = inspection_overlay(roi, weighted, decision.confirmed_mask, status=decision.status,
                                              anomaly_score=image_score, min_box_area_px=config.min_defect_area_px,
                                              score_normalizer=max(fail, 1e-6))
