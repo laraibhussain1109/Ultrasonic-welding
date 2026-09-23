@@ -27,6 +27,7 @@ class PartModelConfig:
     image_size: int = 640
     yolo_model_path: Path | None = None
     yolo_confidence: float = 0.70
+    yolo_presence_confidence: float = 0.90
     inspection_lost_timeout_s: float = 1.0
     capture_burst_frames: int = 5
     minimum_sharpness: float = 60.0
@@ -197,6 +198,9 @@ class ModelRegistry:
             image_size=int(entry.get("image_size", 640)),
             yolo_model_path=Path(entry["yolo_model_path"]) if entry.get("yolo_model_path") else None,
             yolo_confidence=max(0.70, float(entry.get("yolo_confidence", 0.70))),
+            yolo_presence_confidence=min(1.0, max(0.70, float(
+                entry.get("yolo_presence_confidence", entry.get("yolo_confidence", 0.90))
+            ))),
             inspection_lost_timeout_s=float(entry.get("inspection_lost_timeout_s", 1.0)),
             capture_burst_frames=max(2, int(entry.get("capture_burst_frames", 5))),
             minimum_sharpness=max(0.0, float(entry.get("minimum_sharpness", 60.0))),

@@ -142,6 +142,20 @@ def test_fixed_station_part_completes_after_minimum_rotation_views_once():
     assert inspector.accepts_inspection(9)
 
 
+def test_six_view_mode_latches_failure_after_earlier_passes():
+    inspector = RotatingPartInspector(minimum_rotation_views=6, completion_mode="minimum_views")
+    inspector.observe_tracks([tracked(19, 50)], frame_width=100)
+
+    for _ in range(4):
+        assert inspector.record_inspection(19, is_pass=True, anomaly_score=.1) is None
+    assert inspector.record_inspection(19, is_pass=False, anomaly_score=1.1) is None
+    completed = inspector.record_inspection(19, is_pass=True, anomaly_score=.1)
+
+    assert completed is not None
+    assert completed.frames_inspected == 6
+    assert completed.status == "FAIL"
+
+
 def test_fixed_station_fails_closed_after_too_many_invalid_views():
     inspector = RotatingPartInspector(minimum_rotation_views=2, completion_mode="minimum_views")
     inspector.observe_tracks([tracked(4, 50)], frame_width=100)

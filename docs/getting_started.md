@@ -216,20 +216,19 @@ command and does not control production PASS/FAIL.
    the sharpest qualified frame, and waits for structurally distinct rotational
    phases. `WAITING FOR ROTATION` means the blower must rotate farther; it is not
    an error.
-8. Keep the part in place until the required qualified-view count is reached.
+8. Keep the part in place until six qualified, structurally distinct views are reached.
    Blurry/invalid views do not count. If no qualified views are obtained, the
    result is a quality fault/recheck, never a silent PASS.
-   The supplied fixed-station profiles continue inspecting after that minimum;
-   they finalize only after YOLO confirms that the part has left. A PASS view is
-   provisional and cannot prevent a later view from rejecting the same part.
+   The supplied fixed-station profiles finalize after view six. Views one through
+   five are provisional: a passing early view cannot prevent a later failing
+   view from latching the complete part.
 9. Interpret operator states:
    - **VIEW OK — CHECKING**: the current qualified view is normal; inspection
      continues and the part is not final yet.
    - **INSPECTING**: more rotational confirmation is required.
    - **VIEW INVALID**: correct blur, exposure, crop, or obstruction and retry.
    - **FAIL LATCHED**: confirmed evidence has rejected the current physical part.
-   - **PASS / FAIL**: final result only after the required qualified views and
-     YOLO-confirmed part departure.
+   - **PASS / FAIL**: final result after all six qualified views.
    - **SYSTEM FAULT**: inspection stopped fail-closed; resolve the logged model,
      calibration, camera, or runtime fault before restarting.
 10. Remove the completed part only after final PASS/FAIL. The daily statistics,
@@ -240,11 +239,12 @@ command and does not control production PASS/FAIL.
 
 ### Fail-output lifetime
 
-The first confirmed failing view immediately asserts the ESP32 fail output. It
-remains asserted while YOLO continues to report that physical part, regardless
-of later passing views. The result is finalized—and the output reset—only after
-the debounced YOLO `NO PART` transition. A part that never reaches the minimum
-qualified views is finalized as an insufficient-view failure when it leaves.
+The first confirmed failing view immediately asserts the ESP32 fail output and
+later passing views cannot clear it. The six-view result is final, but a FAIL
+signal stays asserted until YOLO falls below the separate configured presence
+confidence and produces the debounced `NO PART` transition. The supplied
+profiles use `yolo_presence_confidence: 0.95`, separating the observed empty
+fixture confidence (~0.91) from the actual-part confidence (~0.97).
 
 ## 7. Inspect one saved image for setup checks
 

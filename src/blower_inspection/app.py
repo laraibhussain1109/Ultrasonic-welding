@@ -712,8 +712,8 @@ class InspectionWindow(QWidget):
         if self.locked_presence_poll == 1 or self.locked_presence_poll % model.capture_burst_frames == 0:
             try:
                 assert self.part_detector is not None
-                self.part_detector.detect_best(raw_frame)
-                self.locked_last_yolo_present = True
+                detection = self.part_detector.detect_best(raw_frame)
+                self.locked_last_yolo_present = detection.confidence >= model.yolo_presence_confidence
             except ValueError:
                 self.locked_last_yolo_present = False
         yolo_present = self.locked_last_yolo_present
@@ -750,6 +750,11 @@ class InspectionWindow(QWidget):
             if removed_parts:
                 # A latched reject remains asserted while YOLO sees the part;
                 # confirmed departure is the reset boundary.
+                self.fail_output.reset()
+                self.active_fail_asserted = False
+            elif not tracks and self.active_fail_asserted:
+                # minimum_views may already have finalized and removed its
+                # session. A qualified YOLO NO PART still releases the latch.
                 self.fail_output.reset()
                 self.active_fail_asserted = False
             frame = self._draw_tracks(
