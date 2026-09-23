@@ -321,6 +321,10 @@ class RotatingPartInspector:
         """Return false after a physical part is finalized until its track leaves."""
         return track_id not in self.completed_tracker_ids and self._session_for_track(track_id) is not None
 
+    def awaiting_departure(self, track_id: int) -> bool:
+        """Return whether a finalized part only needs removal confirmation."""
+        return track_id in self.completed_tracker_ids
+
     def view_progress(self, track_id: int) -> tuple[int, int, int]:
         """Return inspected, valid and required view counts for operator status."""
         session = self._session_for_track(track_id)

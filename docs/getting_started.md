@@ -235,7 +235,10 @@ command and does not control production PASS/FAIL.
     and configured ESP32 output update at part completion. By default counters
     are temporary in-memory data (`runtime_storage_mode: memory`) and no runtime
     JSON/image result is written. This removes per-part disk I/O; counters reset
-    when the application closes.
+    when the application closes. After view 6/6, presence detection temporarily
+    runs on every camera frame and two consecutive empty-fixture detections move
+    the station to **NO PART**, so the next part can be loaded without the normal
+    in-inspection absence debounce.
 
 ### Fail-output lifetime
 

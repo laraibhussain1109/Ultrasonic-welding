@@ -226,6 +226,19 @@ def test_fixed_station_part_removal_finishes_incomplete_session_fail_closed():
     assert not inspector.sessions
 
 
+def test_fixed_station_exposes_completed_part_waiting_only_for_departure():
+    inspector = RotatingPartInspector(minimum_rotation_views=1, completion_mode="minimum_views")
+    inspector.observe_tracks([tracked(4, 50)], frame_width=100)
+
+    assert not inspector.awaiting_departure(4)
+    completed = inspector.record_inspection(4, is_pass=True, anomaly_score=.1)
+
+    assert completed is not None
+    assert inspector.awaiting_departure(4)
+    inspector.observe_tracks([], frame_width=100)
+    assert not inspector.awaiting_departure(4)
+
+
 def test_horizontal_counting_line_uses_vertical_part_motion():
     inspector = RotatingPartInspector(
         counting_line_ratio=.5, counting_axis="y", counting_direction="top_to_bottom"

@@ -706,10 +706,20 @@ class InspectionWindow(QWidget):
             return []
         model = self.selected_model()
         self.locked_presence_poll += 1
+        awaiting_departure = bool(
+            self.rotating_parts
+            and self.rotating_parts.awaiting_departure(self.locked_track_id)
+        )
         # Keep the crop immutable but periodically ask YOLO whether a blower is
-        # still present. Polling once per burst avoids adding detector latency to
-        # every camera frame.
-        if self.locked_presence_poll == 1 or self.locked_presence_poll % model.capture_burst_frames == 0:
+        # still present. Polling once per burst avoids adding detector latency
+        # during inspection. Once the required views are complete, poll every
+        # frame so removal can release the station for the next part promptly.
+        presence_polled = (
+            self.locked_presence_poll == 1
+            or awaiting_departure
+            or self.locked_presence_poll % model.capture_burst_frames == 0
+        )
+        if presence_polled:
             try:
                 assert self.part_detector is not None
                 detection = self.part_detector.detect_best(raw_frame)
@@ -722,12 +732,15 @@ class InspectionWindow(QWidget):
                 self.locked_track_id += 1
             self.locked_part_present = True
             self.locked_missing_frames = 0
-        else:
+        elif presence_polled:
             self.locked_missing_frames += 1
             # A rotating, manually focused blower may look texture-poor for a
-            # few consecutive blurred frames. Require roughly half a second of
-            # absence before ending the fixed-nest part session.
-            missing_limit = max(model.capture_burst_frames, model.camera_fps // 2)
+            # few consecutive blurred frames. During inspection retain the
+            # half-second debounce. After 6/6, two consecutive per-frame YOLO
+            # misses are enough because the verdict is already final.
+            missing_limit = (2 if awaiting_departure else max(
+                2, round(model.camera_fps / (2 * model.capture_burst_frames))
+            ))
             if self.locked_missing_frames >= missing_limit:
                 self.locked_part_present = False
                 return []
