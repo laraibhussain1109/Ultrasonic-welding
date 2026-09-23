@@ -77,6 +77,14 @@ def test_fixed_nest_uses_one_operator_approved_yolo_roi():
     assert "TrackedPart(self.locked_track_id, self.live_roi_bounds" in source
 
 
+def test_completed_fixed_nest_part_uses_fast_absence_confirmation():
+    source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
+
+    assert "awaiting_part_removal(self.locked_track_id)" in source
+    assert "missing_limit = 2 if awaiting_removal else normal_poll_limit" in source
+    assert "if not self.locked_part_present:" in source
+
+
 def test_app_imports_backend_factory_from_its_own_module():
     source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
     assert "from .inspector_factory import inspector_for_model" in source

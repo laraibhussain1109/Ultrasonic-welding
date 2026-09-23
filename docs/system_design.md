@@ -73,6 +73,10 @@ views. `minimum_views` supports a fixed inspection nest: it publishes one final
 result after the configured number of valid views and suppresses that
 ByteTrack ID until the physical part leaves. A passing individual view is shown
 as `VIEW PASS`; only session completion is shown and counted as final `PASS`.
+After completion, the fixed-nest presence check temporarily runs on every camera
+frame and confirms removal with two consecutive negative detections. Normal
+in-inspection polling retains its longer debounce against blur, so the station
+can report `NO PART` quickly without prematurely abandoning an active part.
 If twice the required view count is attempted without enough valid views, the
 fixed-nest session completes as a fail-closed `INSUFFICIENT_VIEW_QUALITY` fault.
 

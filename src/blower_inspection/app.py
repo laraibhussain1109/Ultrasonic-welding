@@ -706,10 +706,20 @@ class InspectionWindow(QWidget):
             return []
         model = self.selected_model()
         self.locked_presence_poll += 1
+        awaiting_removal = bool(
+            self.rotating_parts
+            and self.rotating_parts.awaiting_part_removal(self.locked_track_id)
+        )
         # Keep the crop immutable but periodically ask YOLO whether a blower is
-        # still present. Polling once per burst avoids adding detector latency to
-        # every camera frame.
-        if self.locked_presence_poll == 1 or self.locked_presence_poll % model.capture_burst_frames == 0:
+        # still present. During inspection, polling once per burst avoids adding
+        # detector latency to every camera frame. Once the required view count
+        # is complete, poll every frame so removal immediately readies the nest.
+        presence_polled = (
+            awaiting_removal
+            or self.locked_presence_poll == 1
+            or self.locked_presence_poll % model.capture_burst_frames == 0
+        )
+        if presence_polled:
             try:
                 assert self.part_detector is not None
                 detection = self.part_detector.detect_best(raw_frame)
@@ -722,15 +732,21 @@ class InspectionWindow(QWidget):
                 self.locked_track_id += 1
             self.locked_part_present = True
             self.locked_missing_frames = 0
-        else:
+        elif presence_polled:
             self.locked_missing_frames += 1
             # A rotating, manually focused blower may look texture-poor for a
-            # few consecutive blurred frames. Require roughly half a second of
-            # absence before ending the fixed-nest part session.
-            missing_limit = max(model.capture_burst_frames, model.camera_fps // 2)
+            # few consecutive blurred frames. Active inspections retain roughly
+            # half a second of debounce. A completed part needs only two fresh
+            # negative polls, which are made on consecutive frames above.
+            normal_poll_limit = max(
+                2, round(model.camera_fps / max(model.capture_burst_frames, 1) / 2)
+            )
+            missing_limit = 2 if awaiting_removal else normal_poll_limit
             if self.locked_missing_frames >= missing_limit:
                 self.locked_part_present = False
                 return []
+        if not self.locked_part_present:
+            return []
         return [TrackedPart(self.locked_track_id, self.live_roi_bounds, self.locked_roi_confidence)]
 
     def _process_live_frame(self) -> None:

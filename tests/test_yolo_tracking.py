@@ -133,11 +133,13 @@ def test_fixed_station_part_completes_after_minimum_rotation_views_once():
     assert completed.status == "PASS"
     assert completed.valid_views == 3
     assert not inspector.accepts_inspection(9)
+    assert inspector.awaiting_part_removal(9)
 
     # The same ByteTrack ID cannot be counted repeatedly while the part remains.
     inspector.observe_tracks([tracked(9, 50)], frame_width=100, now=1.0)
     assert not inspector.accepts_inspection(9)
     inspector.observe_tracks([], frame_width=100, now=2.0)
+    assert not inspector.awaiting_part_removal(9)
     inspector.observe_tracks([tracked(9, 50)], frame_width=100, now=3.0)
     assert inspector.accepts_inspection(9)
 
