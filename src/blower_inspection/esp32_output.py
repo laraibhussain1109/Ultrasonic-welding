@@ -111,7 +111,7 @@ class ESP32FailOutput:
     """Best-effort client for driving the ESP32 fail output.
 
     WiFi mode talks to the firmware HTTP endpoints (``/fail``, ``/pass``,
-    ``/ping``). Serial mode remains available by setting
+    ``/pass-pulse``, ``/ping``). Serial mode remains available by setting
     ``BLOWER_ESP32_TRANSPORT=serial``.
     """
 
@@ -243,6 +243,7 @@ class ESP32FailOutput:
                 "FAIL": "/fail",
                 "HIGH": "/fail",
                 "PASS": "/pass",
+                "PASS_PULSE": "/pass-pulse",
                 "LOW": "/pass",
                 "STANDBY": "/pass",
                 "RESET": "/pass",
@@ -267,6 +268,10 @@ class ESP32FailOutput:
 
     def set_fail(self, failed: bool) -> bool:
         return self.send("FAIL" if failed else "PASS")
+
+    def pulse_pass(self) -> bool:
+        """Request one 0.5-second pulse on the ESP32 PASS output."""
+        return self.send("PASS_PULSE")
 
     def close(self) -> None:
         if self._serial is not None:

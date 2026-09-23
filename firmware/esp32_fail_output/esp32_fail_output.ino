@@ -26,6 +26,16 @@
 #define FAIL_ACTIVE_LEVEL HIGH
 #endif
 
+#ifndef PASS_OUTPUT_PIN
+#define PASS_OUTPUT_PIN 5
+#endif
+
+#ifndef PASS_ACTIVE_LEVEL
+#define PASS_ACTIVE_LEVEL HIGH
+#endif
+
+#define PASS_PULSE_DURATION_MS 500UL
+
 #ifndef WIFI_AP_MODE
 #define WIFI_AP_MODE 1
 #endif
@@ -47,17 +57,44 @@
 #endif
 
 const int FAIL_INACTIVE_LEVEL = (FAIL_ACTIVE_LEVEL == HIGH) ? LOW : HIGH;
+const int PASS_INACTIVE_LEVEL = (PASS_ACTIVE_LEVEL == HIGH) ? LOW : HIGH;
 WebServer server(80);
 String commandBuffer;
 bool failActive = false;
+bool passPulseActive = false;
+unsigned long passPulseStartedAt = 0;
+
+String setFailOutput(bool failed);
 
 String statusText() {
   String status = "ESP32_FAIL_OUTPUT_READY";
   status += " GPIO=" + String(FAIL_OUTPUT_PIN);
   status += " ACTIVE_LEVEL=" + String(FAIL_ACTIVE_LEVEL == HIGH ? "HIGH" : "LOW");
   status += " STATE=" + String(failActive ? "FAIL" : "PASS");
+  status += " PASS_GPIO=" + String(PASS_OUTPUT_PIN);
+  status += " PASS_PULSE=" + String(passPulseActive ? "ACTIVE" : "INACTIVE");
   status += " IP=" + WiFi.localIP().toString();
   return status;
+}
+
+String startPassPulse() {
+  // A final PASS also releases a reject left active by the preceding part.
+  setFailOutput(false);
+  passPulseActive = true;
+  passPulseStartedAt = millis();
+  digitalWrite(PASS_OUTPUT_PIN, PASS_ACTIVE_LEVEL);
+  String response = "PASS_PULSE=ACTIVE DURATION_MS=" + String(PASS_PULSE_DURATION_MS);
+  response += " GPIO=" + String(PASS_OUTPUT_PIN);
+  Serial.println(response);
+  return response;
+}
+
+void updatePassPulse() {
+  if (passPulseActive && millis() - passPulseStartedAt >= PASS_PULSE_DURATION_MS) {
+    digitalWrite(PASS_OUTPUT_PIN, PASS_INACTIVE_LEVEL);
+    passPulseActive = false;
+    Serial.println("PASS_PULSE=INACTIVE");
+  }
 }
 
 String setFailOutput(bool failed) {
@@ -82,6 +119,7 @@ void handleHttpRoutes() {
   server.on("/status", HTTP_GET, []() { sendText(200, statusText()); });
   server.on("/fail", HTTP_GET, []() { sendText(200, setFailOutput(true)); });
   server.on("/pass", HTTP_GET, []() { sendText(200, setFailOutput(false)); });
+  server.on("/pass-pulse", HTTP_GET, []() { sendText(200, startPassPulse()); });
   server.on("/high", HTTP_GET, []() { sendText(200, setFailOutput(true)); });
   server.on("/low", HTTP_GET, []() { sendText(200, setFailOutput(false)); });
   server.onNotFound([]() { sendText(404, "UNKNOWN_ENDPOINT"); });
@@ -123,6 +161,8 @@ void handleCommand(String command) {
     setFailOutput(true);
   } else if (command == "PASS" || command == "LOW" || command == "STANDBY" || command == "RESET") {
     setFailOutput(false);
+  } else if (command == "PASS_PULSE") {
+    startPassPulse();
   } else if (command == "PING") {
     Serial.println("PONG");
   } else if (command == "STATUS") {
@@ -135,7 +175,9 @@ void handleCommand(String command) {
 
 void setup() {
   pinMode(FAIL_OUTPUT_PIN, OUTPUT);
+  pinMode(PASS_OUTPUT_PIN, OUTPUT);
   digitalWrite(FAIL_OUTPUT_PIN, FAIL_INACTIVE_LEVEL);
+  digitalWrite(PASS_OUTPUT_PIN, PASS_INACTIVE_LEVEL);
   Serial.begin(115200);
   delay(250);
   startWiFi();
@@ -145,6 +187,7 @@ void setup() {
 
 void loop() {
   server.handleClient();
+  updatePassPulse();
   while (Serial.available() > 0) {
     char c = static_cast<char>(Serial.read());
     if (c == '\n' || c == '\r') {

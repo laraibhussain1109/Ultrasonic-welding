@@ -918,7 +918,12 @@ class InspectionWindow(QWidget):
         self.status_badge.setText(part.status)
         self.status_badge.style().unpolish(self.status_badge)
         self.status_badge.style().polish(self.status_badge)
-        self.fail_output.send_result(part.status == "FAIL")
+        if part.status == "PASS":
+            # This is the first point at which a good view becomes a final part
+            # verdict. Generate exactly one 0.5-second ESP32 output pulse now.
+            self.fail_output.signal_pass()
+        else:
+            self.fail_output.send_result(True)
         self.log.addItem(f"FINAL {part.status} | track={part.track_id} | views={part.frames_inspected} | worst={part.worst_score:.3f}")
 
     @staticmethod

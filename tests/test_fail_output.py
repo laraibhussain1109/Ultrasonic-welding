@@ -58,3 +58,24 @@ def test_fail_output_retries_same_state_after_error(monkeypatch):
         output.close()
 
     assert calls == ["http://esp32.local/fail", "http://esp32.local/fail"]
+
+
+def test_each_final_pass_queues_a_pass_pulse(monkeypatch):
+    calls = []
+
+    def fake_urlopen(request, timeout):
+        calls.append((request.full_url, timeout))
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    output = bridge()
+    try:
+        assert output.signal_pass().result(timeout=1) == "OK"
+        assert output.signal_pass().result(timeout=1) == "OK"
+    finally:
+        output.close()
+
+    assert calls == [
+        ("http://esp32.local/pass-pulse", 0.01),
+        ("http://esp32.local/pass-pulse", 0.01),
+    ]

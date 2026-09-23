@@ -145,3 +145,13 @@ def test_wifi_rejects_failed_ping(monkeypatch):
 
     assert output.connect() is False
     assert "WiFi handshake failed" in output.last_error
+
+
+def test_wifi_pass_pulse_uses_dedicated_endpoint(monkeypatch):
+    calls = []
+    monkeypatch.setattr(ESP32FailOutput, "_http_get", lambda self, path: calls.append(path) or "OK")
+    output = ESP32FailOutput(ESP32OutputConfig(transport="wifi"))
+    output.connected_port = output.config.wifi_base_url
+
+    assert output.pulse_pass() is True
+    assert calls == ["/pass-pulse"]
