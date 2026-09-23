@@ -238,9 +238,11 @@ Daily totals are stored in `data/results/daily_statistics.json`; an operating da
 ## ESP32 PASS and reject outputs
 
 Flash `firmware/esp32_fail_output/esp32_fail_output.ino`. On every final PASS verdict,
-the app immediately pulses ESP32 GPIO 5 HIGH for 0.5 seconds; connect that output to
+the app immediately pulses the ESP32 pin labelled **D5** HIGH for 0.5 seconds; connect that output to
 your PLC input through suitable isolation/level conditioning. Override
-`PASS_OUTPUT_PIN` or `PASS_ACTIVE_LEVEL` in the sketch if required. GPIO 4 remains
+`PASS_OUTPUT_PIN` or `PASS_ACTIVE_LEVEL` in the sketch if required. The firmware uses
+the board package's `D5` mapping when available and otherwise falls back to GPIO 5.
+GPIO 4 remains
 the reject output: the app asserts it for a rejected completed part and also after
 a live inference fault. Production PLC logic must distinguish and latch equipment
 faults according to the line risk assessment.

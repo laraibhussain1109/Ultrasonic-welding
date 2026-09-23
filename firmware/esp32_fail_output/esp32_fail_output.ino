@@ -27,7 +27,13 @@
 #endif
 
 #ifndef PASS_OUTPUT_PIN
+// Use the board's D5 mapping when it provides one. This matters on ESP32
+// variants where the pin printed "D5" is not raw GPIO 5.
+#ifdef D5
+#define PASS_OUTPUT_PIN D5
+#else
 #define PASS_OUTPUT_PIN 5
+#endif
 #endif
 
 #ifndef PASS_ACTIVE_LEVEL

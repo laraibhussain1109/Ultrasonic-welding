@@ -747,9 +747,11 @@ class InspectionWindow(QWidget):
             )
             for completed_part in removed_parts:
                 self._handle_completed_part(completed_part)
-            if removed_parts:
+            if removed_parts and self.active_fail_asserted:
                 # A latched reject remains asserted while YOLO sees the part;
-                # confirmed departure is the reset boundary.
+                # confirmed departure is the reset boundary. Do not queue this
+                # reset after a PASS: it would immediately follow the dedicated
+                # pass-pulse request and can hide the pulse on some controllers.
                 self.fail_output.reset()
                 self.active_fail_asserted = False
             elif not tracks and self.active_fail_asserted:
