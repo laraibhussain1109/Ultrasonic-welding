@@ -6,6 +6,8 @@ from blower_inspection.fail_output import ESP32FailOutputBridge, FailOutputConfi
 
 
 class FakeResponse:
+    body = b"OK"
+
     def __enter__(self):
         return self
 
@@ -13,7 +15,7 @@ class FakeResponse:
         return False
 
     def read(self, _limit):
-        return b"OK"
+        return self.body
 
 
 def bridge():
@@ -79,3 +81,32 @@ def test_each_final_pass_queues_a_pass_pulse(monkeypatch):
         ("http://esp32.local/pass-pulse", 0.01),
         ("http://esp32.local/pass-pulse", 0.01),
     ]
+
+
+def test_poll_supervisor_decision_parses_sequenced_fail(monkeypatch):
+    class DecisionResponse(FakeResponse):
+        body = b'{"sequence":7,"result":"FAIL","sector":4}'
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: DecisionResponse())
+    output = bridge()
+    try:
+        decision = output.poll_supervisor_decision().result(timeout=1)
+    finally:
+        output.close()
+
+    assert decision.sequence == 7
+    assert decision.result == "FAIL"
+    assert decision.sector == 4
+
+
+def test_poll_supervisor_decision_rejects_invalid_fail_sector(monkeypatch):
+    class DecisionResponse(FakeResponse):
+        body = b'{"sequence":2,"result":"FAIL","sector":15}'
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: DecisionResponse())
+    output = bridge()
+    try:
+        with pytest.raises(RuntimeError, match="FAIL sector"):
+            output.poll_supervisor_decision().result(timeout=1)
+    finally:
+        output.close()

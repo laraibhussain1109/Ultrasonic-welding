@@ -45,7 +45,7 @@ from .camera import (
 )
 from .config import ModelRegistry, PartModelConfig, ensure_model_folders
 from .daily_stats import DailyStatistics, operating_day
-from .fail_output import ESP32FailOutputBridge
+from .fail_output import ESP32FailOutputBridge, SupervisorDecision
 from .frame_selection import RotationPhaseGate, SharpFrameSampler
 from .inspector_factory import inspector_for_model
 from .trainer import InspectionResult
@@ -214,6 +214,9 @@ class InspectionWindow(QWidget):
         self.rotation_phase_gate: RotationPhaseGate | None = None
         self.pending_sharp_frames = {}
         self.active_fail_asserted = False
+        self.supervisor_decision: SupervisorDecision | None = None
+        self.supervisor_future = None
+        self.last_supervisor_sequence = 0
         self.daily_statistics = DailyStatistics(memory_only=active_model.runtime_storage_mode == "memory")
         self.stats = self.daily_statistics.counts()
         self.part_detector: YoloByteTrackDetector | None = None
@@ -229,6 +232,9 @@ class InspectionWindow(QWidget):
         self.clock.start(500)
         self.live_timer = QTimer(self)
         self.live_timer.timeout.connect(self._process_live_frame)
+        self.supervisor_timer = QTimer(self)
+        self.supervisor_timer.timeout.connect(self._poll_supervisor)
+        self.supervisor_timer.start(100)
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -733,6 +739,67 @@ class InspectionWindow(QWidget):
                 return []
         return [TrackedPart(self.locked_track_id, self.live_roi_bounds, self.locked_roi_confidence)]
 
+    def _poll_supervisor(self) -> None:
+        """Poll the hotspot without ever blocking camera or inference work."""
+        if self.supervisor_future is not None:
+            if not self.supervisor_future.done():
+                return
+            try:
+                decision = self.supervisor_future.result()
+            except Exception:
+                # Output connectivity is already reported by the normal bridge;
+                # a transient poll failure must not stop visual inspection.
+                decision = None
+            self.supervisor_future = None
+            if decision is not None and decision.sequence > self.last_supervisor_sequence:
+                self.last_supervisor_sequence = decision.sequence
+                self._apply_supervisor_decision(decision)
+        self.supervisor_future = self.fail_output.poll_supervisor_decision()
+
+    def _apply_supervisor_decision(self, decision: SupervisorDecision) -> None:
+        """Immediately make a supervisor command authoritative for this part."""
+        if decision.result == "RECHECK":
+            self.supervisor_decision = None
+            auto_failed = bool(
+                self.rotating_parts
+                and any(session.has_failure for session in self.rotating_parts.sessions.values())
+            )
+            self.fail_output.send_result(auto_failed)
+            self.active_fail_asserted = auto_failed
+            self.log.addItem(f"SUPERVISOR RECHECK | sequence={decision.sequence} | automatic inspection resumed")
+            return
+
+        self.supervisor_decision = decision
+        failed = decision.result == "FAIL"
+        self.fail_output.send_result(failed)
+        self.active_fail_asserted = failed
+        self.status_badge.setObjectName("statusFail" if failed else "statusPass")
+        detail = f" — SECTOR {decision.sector}" if decision.sector is not None else ""
+        self.status_badge.setText(f"SUPERVISOR {decision.result}{detail}")
+        self.status_badge.style().unpolish(self.status_badge)
+        self.status_badge.style().polish(self.status_badge)
+        self.log.addItem(
+            f"SUPERVISOR OVERRIDE {decision.result} | sector={decision.sector or '-'} | sequence={decision.sequence}"
+        )
+
+    @staticmethod
+    def _draw_supervisor_override(frame, tracks: list[TrackedPart], decision: SupervisorDecision):
+        """Draw the supervisor's 1-based longitudinal sector on the live image."""
+        display = frame.copy()
+        colour = (0, 0, 255) if decision.result == "FAIL" else (0, 255, 0)
+        for track in tracks:
+            x, y, width, height = track.bounds
+            if decision.sector is not None:
+                x0 = x + round(width * (decision.sector - 1) / 14)
+                x1 = x + round(width * decision.sector / 14)
+                overlay = display.copy()
+                cv2.rectangle(overlay, (x0, y), (x1, y + height), colour, -1)
+                cv2.addWeighted(overlay, 0.35, display, 0.65, 0, display)
+                cv2.rectangle(display, (x0, y), (x1, y + height), colour, 3)
+            cv2.putText(display, f"SUPERVISOR {decision.result}", (x, max(24, y - 9)),
+                        cv2.FONT_HERSHEY_SIMPLEX, .7, colour, 2)
+        return display
+
     def _process_live_frame(self) -> None:
         if not self.inspection_running:
             return
@@ -746,7 +813,14 @@ class InspectionWindow(QWidget):
                 tracks, raw_frame.shape[1], frame_height=raw_frame.shape[0]
             )
             for completed_part in removed_parts:
+                if self.supervisor_decision is not None:
+                    completed_part = replace(completed_part, status=self.supervisor_decision.result)
                 self._handle_completed_part(completed_part)
+            if removed_parts and self.supervisor_decision is not None:
+                self.log.addItem(
+                    f"SUPERVISOR OVERRIDE FINALIZED | sequence={self.supervisor_decision.sequence}"
+                )
+                self.supervisor_decision = None
             if removed_parts and self.active_fail_asserted:
                 # A latched reject remains asserted while YOLO sees the part;
                 # confirmed departure is the reset boundary. Do not queue this
@@ -754,7 +828,7 @@ class InspectionWindow(QWidget):
                 # pass-pulse request and can hide the pulse on some controllers.
                 self.fail_output.reset()
                 self.active_fail_asserted = False
-            elif not tracks and self.active_fail_asserted:
+            elif not tracks and self.active_fail_asserted and self.supervisor_decision is None:
                 # minimum_views may already have finalized and removed its
                 # session. A qualified YOLO NO PART still releases the latch.
                 self.fail_output.reset()
@@ -768,6 +842,8 @@ class InspectionWindow(QWidget):
                 {part.track_id: self.rotating_parts.defect_sections(part.track_id) for part in tracks},
                 self.selected_model().patchcore_section_count,
             )
+            if self.supervisor_decision is not None:
+                frame = self._draw_supervisor_override(frame, tracks, self.supervisor_decision)
         except Exception as exc:
             self._handle_live_error(f"Camera frame error: {exc}")
             return
@@ -806,7 +882,8 @@ class InspectionWindow(QWidget):
                     self.status_badge.style().polish(self.status_badge)
         now = time.perf_counter()
         if (
-            self.inference_worker is None
+            self.supervisor_decision is None
+            and self.inference_worker is None
             and now - self.last_inference_at >= self.inference_interval_s
         ):
             self.last_inference_at = now
@@ -838,6 +915,11 @@ class InspectionWindow(QWidget):
 
     def _handle_inspection_result(self, track_id: int, result, latency_ms: float) -> None:
         if not self.inspection_running:
+            return
+        if self.supervisor_decision is not None:
+            self.log.addItem(
+                f"AUTOMATIC RESULT {result.status} IGNORED | supervisor sequence={self.supervisor_decision.sequence}"
+            )
             return
         if result.is_no_part:
             self._handle_no_part_result(result, latency_ms)
@@ -965,6 +1047,10 @@ class InspectionWindow(QWidget):
         return display
 
     def _handle_no_part_frame(self, frame) -> None:
+        if self.supervisor_decision is not None:
+            # A brief YOLO dropout must not visually erase an authoritative
+            # command before the normal departure debounce finalizes the part.
+            return
         result = InspectionResult(
             status="NO PART",
             anomaly_score=0.0,
@@ -1042,8 +1128,10 @@ class InspectionWindow(QWidget):
 
 
     def closeEvent(self, event) -> None:
+        self.supervisor_timer.stop()
         self.fail_output.reset()
         self.active_fail_asserted = False
+        self.supervisor_decision = None
         self.fail_output.close()
         super().closeEvent(event)
 
@@ -1108,6 +1196,7 @@ class InspectionWindow(QWidget):
         self.camera.close()
         self.fail_output.reset()
         self.active_fail_asserted = False
+        self.supervisor_decision = None
         self.latest_annotated_frame = None
         self.current_display_frame = None
         self.live_roi_bounds = None

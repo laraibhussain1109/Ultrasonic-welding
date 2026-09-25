@@ -247,6 +247,21 @@ the reject output: the app asserts it for a rejected completed part and also aft
 a live inference fault. Production PLC logic must distinguish and latch equipment
 faults according to the line risk assessment.
 
+The ESP32 also hosts a supervisor page at `http://192.168.4.1` while the phone
+and inspection PC are connected to its `NeuroIris-ESP32` hotspot. A supervisor
+can choose **PASS**, **FAIL** plus one of 14 longitudinal sectors, or **RECHECK**.
+The desktop app polls the sequenced `/api/decision` endpoint asynchronously every
+100 ms. A new PASS or FAIL immediately controls the reject output, replaces the
+automatic on-screen result, and remains authoritative for the current part;
+late automatic inference results are ignored. A selected failed sector is drawn
+on the live camera image. RECHECK explicitly releases the override and resumes
+automatic inspection. When the part leaves, its final counter uses the supervisor
+verdict and the next part returns to automatic inspection.
+
+Change the default hotspot password in the firmware before production use. The
+supervisor page has line-control authority, so access to that WiFi network must
+be restricted to authorized personnel.
+
 ## Tests
 
 ```bash
