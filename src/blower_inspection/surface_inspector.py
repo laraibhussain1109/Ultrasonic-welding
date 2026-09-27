@@ -22,8 +22,11 @@ import numpy as np
 from .camera import crop_component_roi
 from .config import PartModelConfig
 from .frame_quality import FrameQualityAnalyzer
-from .geometry_inspector import FinGeometryInspector, glare_evidence, support_rib_mask
-from .trainer import InspectionResult, list_images
+from .geometry_inspector import (
+    FinGeometryInspector, glare_evidence, inspection_band_mask, support_rib_mask,
+)
+from .trainer import InspectionResult, broken_fin_mask, list_images
+from .surface_decision import surface_decision_state
 from .vit_tokens import spatial_patch_tokens
 from .yolo_tracking import YoloByteTrackDetector
 
@@ -185,6 +188,12 @@ def robust_limit(values: list[float], multiplier: float) -> float:
     return max(float(np.quantile(array, .995)), median + multiplier * 1.4826 * max(mad, 1e-6))
 
 
+def largest_component_area(mask: np.ndarray) -> int:
+    """Return the largest localized region without averaging it over the ROI."""
+    count, _labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), 8)
+    return max((int(stats[index, cv2.CC_STAT_AREA]) for index in range(1, count)), default=0)
+
+
 class TiledViTSurfaceInspector:
     """DINOv2 memory + normal-subspace reconstruction + geometry backend."""
 
@@ -339,6 +348,10 @@ class TiledViTSurfaceInspector:
                 "backbone": config.vit_backbone, "tile_size": config.surface_tile_size,
                 "vit_input_size": config.vit_input_size,
                 "tile_overlap": config.surface_tile_overlap,
+                "surface_near_candidate_ratio": config.surface_near_candidate_ratio,
+                "geometry_surface_support_threshold": config.geometry_surface_support_threshold,
+                "fine_break_candidate_area_px": config.fine_break_candidate_area_px,
+                "fine_break_strong_area_px": config.fine_break_strong_area_px,
                 "normalization_mean": list(config.surface_normalization_mean),
                 "normalization_std": list(config.surface_normalization_std),
                 "camera_resolution": [config.camera_width, config.camera_height]}
@@ -409,7 +422,9 @@ class TiledViTSurfaceInspector:
             features = features[rng.choice(len(features), config.surface_memory_bank_size, replace=False)]
         mean, basis = self._fit_reconstructor(features, config.reconstruction_rank)
         provisional = {"memory_bank": features, "reconstruction_mean": mean, "reconstruction_basis": basis}
-        samples: dict[str, list[float]] = {key: [] for key in ("global", "local", "peak", "topk", "memory", "reconstruction")}
+        samples: dict[str, list[float]] = {key: [] for key in (
+            "global", "local", "peak", "topk", "memory", "reconstruction", "fine_break"
+        )}
         geometry_images = [item[1] for item in accepted]
         geometry = FinGeometryInspector.calibrate(geometry_images, band_top=config.inspection_band_top_ratio,
                                                   band_bottom=config.inspection_band_bottom_ratio)
@@ -421,8 +436,20 @@ class TiledViTSurfaceInspector:
             stats, _ = score_anomaly_map(combined, self._authority(roi, config), component_threshold=float(np.quantile(combined, .999)))
             for name in ("global", "local", "peak", "topk"):
                 samples[name].append(getattr(stats, f"{name}_score"))
+            fine_break = broken_fin_mask(roi, roi.shape[:2])
+            fine_break &= inspection_band_mask(roi.shape[:2], config.surface_band_top_ratio,
+                                                config.surface_band_bottom_ratio)
+            samples["fine_break"].append(float(largest_component_area(fine_break)))
         thresholds = {name: {"candidate": robust_limit(values, 6), "strong": robust_limit(values, 10)}
                       for name, values in samples.items()}
+        thresholds["fine_break"]["candidate"] = max(
+            thresholds["fine_break"]["candidate"], float(config.fine_break_candidate_area_px)
+        )
+        thresholds["fine_break"]["strong"] = max(
+            thresholds["fine_break"]["strong"],
+            thresholds["fine_break"]["candidate"] * 1.5,
+            float(config.fine_break_strong_area_px),
+        )
         checkpoint = {"memory_bank": self._torch.as_tensor(features),
                       "reconstruction_mean": self._torch.as_tensor(mean),
                       "reconstruction_basis": self._torch.as_tensor(basis),
@@ -508,9 +535,8 @@ class TiledViTSurfaceInspector:
         reconstruction_peak = float(np.quantile(reconstruction_map, .9995))
         memory_candidate = memory_peak >= thresholds["memory"]["candidate"] / sensitivity
         reconstruction_candidate = reconstruction_peak >= thresholds["reconstruction"]["candidate"] / sensitivity
-        local_candidate = max(stats.local_score, stats.peak_score, stats.topk_score,
-                              stats.components[0].score if stats.components else 0) >= candidate_line
-        strong = max(stats.peak_score, stats.components[0].score if stats.components else 0) >= strong_line
+        local_evidence = max(stats.local_score, stats.peak_score, stats.topk_score,
+                             stats.components[0].score if stats.components else 0)
         geometry_started = time.perf_counter()
         scale = min(1.0, config.geometry_max_width / max(roi.shape[1], 1))
         geometry_image = cv2.resize(roi, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale < 1 else roi
@@ -519,6 +545,25 @@ class TiledViTSurfaceInspector:
                                         candidate_threshold=config.geometry_candidate_threshold).inspect(geometry_image)
         geometry_mask = cv2.resize(geometry.defect_mask.astype(np.uint8), (roi.shape[1], roi.shape[0]),
                                    interpolation=cv2.INTER_NEAREST).astype(bool)
+        fine_break_mask = broken_fin_mask(roi, roi.shape[:2])
+        fine_break_mask &= inspection_band_mask(roi.shape[:2], config.surface_band_top_ratio,
+                                                config.surface_band_bottom_ratio)
+        fine_break_area = largest_component_area(fine_break_mask)
+        fine_thresholds = thresholds["fine_break"]
+        fine_break_candidate = fine_break_area >= fine_thresholds["candidate"] / sensitivity
+        fine_break_strong = fine_break_area >= fine_thresholds["strong"] / sensitivity
+        surface_candidate, strong, geometry_corroborated = surface_decision_state(
+            local_score=local_evidence,
+            candidate_line=candidate_line,
+            strong_line=strong_line,
+            memory_candidate=memory_candidate,
+            reconstruction_candidate=reconstruction_candidate,
+            geometry_score=geometry.score,
+            geometry_support_threshold=config.geometry_surface_support_threshold,
+            near_candidate_ratio=config.surface_near_candidate_ratio,
+            fine_break_candidate=fine_break_candidate,
+            fine_break_strong=fine_break_strong,
+        )
         geometry_ms = (time.perf_counter() - geometry_started) * 1000
         glare = glare_evidence(roi, roi.shape[:2], top=config.surface_band_top_ratio,
                                bottom=config.surface_band_bottom_ratio)
@@ -526,17 +571,23 @@ class TiledViTSurfaceInspector:
         if memory_candidate: reasons.append("SURFACE_MEMORY_ANOMALY")
         if reconstruction_candidate: reasons.append("SURFACE_RECONSTRUCTION_ANOMALY")
         if strong: reasons.append("STRONG_LOCAL_SURFACE_ANOMALY")
+        if geometry_corroborated: reasons.append("SURFACE_GEOMETRY_CORROBORATION")
+        if fine_break_candidate: reasons.append("BROKEN_FIN_CANDIDATE")
+        if fine_break_strong: reasons.append("BROKEN_FIN")
         if geometry.broken_fin_score >= config.geometry_fail_threshold: reasons.append("BROKEN_FIN")
         if geometry.missing_fin_score >= config.geometry_fail_threshold: reasons.append("MISSING_FIN")
         if geometry.tilted_fin_score >= config.geometry_fail_threshold: reasons.append("TILTED_FIN")
         geometry_fail = geometry.score >= config.geometry_fail_threshold
         if geometry_fail: reasons.append("GEOMETRY_DEFORMATION")
-        surface_candidate = local_candidate and (memory_candidate or reconstruction_candidate)
         # Glare is evidence for temporal confirmation, never a subtraction or PASS override.
         if surface_candidate and glare.score >= config.glare_threshold: reasons.append("LIKELY_GLARE")
-        immediate = geometry_fail or (strong and memory_candidate and reconstruction_candidate)
+        immediate = geometry_fail or strong
         status = "FAIL" if immediate else ("CANDIDATE" if surface_candidate else "PASS")
-        confirmed = (mask if status != "PASS" else np.zeros_like(mask)) | geometry_mask
+        near_mask = ((combined * authority) >= candidate_line * config.surface_near_candidate_ratio)
+        surface_mask = mask | (near_mask if geometry_corroborated else False)
+        if fine_break_candidate:
+            surface_mask |= fine_break_mask
+        confirmed = (surface_mask if status != "PASS" else np.zeros_like(mask)) | geometry_mask
         display = roi.copy() if roi.ndim == 3 else cv2.cvtColor(roi, cv2.COLOR_GRAY2BGR)
         contours, _ = cv2.findContours(confirmed.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         boxes = []
@@ -551,7 +602,8 @@ class TiledViTSurfaceInspector:
                                "broken": geometry.broken_fin_score,
                                "memory": memory_peak, "reconstruction": reconstruction_peak,
                                "global": stats.global_score, "local": stats.local_score,
-                               "peak": stats.peak_score, "topk": stats.topk_score}
+                               "peak": stats.peak_score, "topk": stats.topk_score,
+                               "fine_break_area": float(fine_break_area)}
         latencies = {"surface_tiles": surface_ms, "geometry": geometry_ms,
                      "total": (time.perf_counter() - started) * 1000, "tile_count": float(len(tiles))}
         if config.engineering_compare_legacy:
@@ -569,6 +621,7 @@ class TiledViTSurfaceInspector:
                 # unavailable baseline without hiding the production verdict.
                 latencies["legacy_patchcore"] = (time.perf_counter() - comparison_started) * 1000
                 reasons.append("COMPARE_LEGACY_UNAVAILABLE")
+        reasons = list(dict.fromkeys(reasons))
         report_path = overlay_path = None
         if save_outputs:
             config.result_dir.mkdir(parents=True, exist_ok=True)
@@ -581,7 +634,7 @@ class TiledViTSurfaceInspector:
                 "reconstruction_score": reconstruction_peak, "glare_score": glare.score,
                 "geometry_score": geometry.score, "latencies_ms": latencies,
                 "roi_dimensions": list(roi.shape[:2][::-1]), "tile_count": len(tiles)}, indent=2) + "\n")
-        return InspectionResult(status, max(stats.peak_score, stats.topk_score), int(confirmed.sum()), 0, [],
+        return InspectionResult(status, local_evidence, int(confirmed.sum()), 0, [],
                                 overlay_path, report_path, display, boxes,
                                 geometry_score=geometry.score, periodicity_score=geometry.periodicity_score,
                                 glare_score=glare.score, reason_codes=tuple(reasons), view_valid=True,

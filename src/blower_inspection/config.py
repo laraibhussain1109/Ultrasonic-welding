@@ -136,6 +136,12 @@ class PartModelConfig:
     surface_persistence_required: int = 2
     surface_persistence_window: int = 5
     surface_sensitivity: float = 1.0
+    # Near-threshold surface evidence is retained when an independent geometry
+    # response supports it, then confirmed across rotational views.
+    surface_near_candidate_ratio: float = 0.85
+    geometry_surface_support_threshold: float = 0.15
+    fine_break_candidate_area_px: int = 20
+    fine_break_strong_area_px: int = 60
     surface_normalization_mean: tuple[float, float, float] = (0.485, 0.456, 0.406)
     surface_normalization_std: tuple[float, float, float] = (0.229, 0.224, 0.225)
     geometry_max_width: int = 1280
@@ -328,6 +334,10 @@ class ModelRegistry:
             surface_persistence_required=max(1, int(entry.get("surface_persistence_required", 2))),
             surface_persistence_window=max(1, int(entry.get("surface_persistence_window", 5))),
             surface_sensitivity=min(1.5, max(.5, float(entry.get("surface_sensitivity", 1.0)))),
+            surface_near_candidate_ratio=min(1., max(.5, float(entry.get("surface_near_candidate_ratio", .85)))),
+            geometry_surface_support_threshold=min(1., max(0., float(entry.get("geometry_surface_support_threshold", .15)))),
+            fine_break_candidate_area_px=max(1, int(entry.get("fine_break_candidate_area_px", 20))),
+            fine_break_strong_area_px=max(1, int(entry.get("fine_break_strong_area_px", 60))),
             surface_normalization_mean=tuple(float(value) for value in entry.get("surface_normalization_mean", [.485, .456, .406])),
             surface_normalization_std=tuple(float(value) for value in entry.get("surface_normalization_std", [.229, .224, .225])),
             geometry_max_width=max(320, int(entry.get("geometry_max_width", 1280))),

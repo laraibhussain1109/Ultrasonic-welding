@@ -119,7 +119,11 @@
       "engineering_compare_legacy": false,
       "vit_auto_download": true,
       "surface_require_gpu": true,
-      "vit_input_size": 518
+      "vit_input_size": 518,
+      "surface_near_candidate_ratio": 0.85,
+      "geometry_surface_support_threshold": 0.15,
+      "fine_break_candidate_area_px": 20,
+      "fine_break_strong_area_px": 60
     },
     {
       "id": "BF-002",
@@ -239,7 +243,11 @@
       "engineering_compare_legacy": false,
       "vit_auto_download": true,
       "surface_require_gpu": true,
-      "vit_input_size": 518
+      "vit_input_size": 518,
+      "surface_near_candidate_ratio": 0.85,
+      "geometry_surface_support_threshold": 0.15,
+      "fine_break_candidate_area_px": 20,
+      "fine_break_strong_area_px": 60
     },
     {
       "id": "BF-003",
@@ -359,7 +367,11 @@
       "engineering_compare_legacy": false,
       "vit_auto_download": true,
       "surface_require_gpu": true,
-      "vit_input_size": 518
+      "vit_input_size": 518,
+      "surface_near_candidate_ratio": 0.85,
+      "geometry_surface_support_threshold": 0.15,
+      "fine_break_candidate_area_px": 20,
+      "fine_break_strong_area_px": 60
     },
     {
       "id": "BF-004",
@@ -479,7 +491,11 @@
       "engineering_compare_legacy": false,
       "vit_auto_download": true,
       "surface_require_gpu": true,
-      "vit_input_size": 518
+      "vit_input_size": 518,
+      "surface_near_candidate_ratio": 0.85,
+      "geometry_surface_support_threshold": 0.15,
+      "fine_break_candidate_area_px": 20,
+      "fine_break_strong_area_px": 60
     }
   ]
 }

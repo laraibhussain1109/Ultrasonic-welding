@@ -929,7 +929,8 @@ class InspectionWindow(QWidget):
         geometry_components = result.geometry_components
         geometry_detail = (f"PITCH: {geometry_components.get('pitch', 0):.2f}   "
                            f"CONT: {geometry_components.get('continuity', 0):.2f}   "
-                           f"BROKEN: {geometry_components.get('broken', 0):.2f}")
+                           f"BROKEN: {geometry_components.get('broken', 0):.2f}   "
+                           f"FINE BREAK: {geometry_components.get('fine_break_area', 0):.0f}px")
         surface_detail = (f"MEM: {geometry_components.get('memory', 0):.3f}   "
                           f"RECON: {geometry_components.get('reconstruction', 0):.3f}   "
                           f"PEAK: {geometry_components.get('peak', 0):.3f}   "
