@@ -6,7 +6,8 @@ from __future__ import annotations
 def surface_decision_state(*, local_score: float, candidate_line: float, strong_line: float,
                            memory_candidate: bool, reconstruction_candidate: bool,
                            geometry_score: float, geometry_support_threshold: float,
-                           near_candidate_ratio: float, fine_break_candidate: bool,
+                           near_candidate_ratio: float, localized_near_candidate: bool,
+                           fine_break_candidate: bool,
                            fine_break_strong: bool) -> tuple[bool, bool, bool]:
     """Return candidate, immediate-strong, and geometry-corroborated states.
 
@@ -18,7 +19,8 @@ def surface_decision_state(*, local_score: float, candidate_line: float, strong_
     # whole-tile branch percentile as an extra gate: that would recreate the
     # exact Q99.5 blind spot for a tiny but intense one-patch defect.
     direct = local_score >= candidate_line
-    corroborated = (local_score >= candidate_line * near_candidate_ratio
+    corroborated = (localized_near_candidate
+                    and local_score >= candidate_line * near_candidate_ratio
                     and geometry_score >= geometry_support_threshold)
     candidate = direct or corroborated or fine_break_candidate
     strong = ((local_score >= strong_line and memory_candidate and reconstruction_candidate)

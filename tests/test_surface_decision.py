@@ -11,6 +11,7 @@ def decide(**overrides):
         "geometry_score": 0.0,
         "geometry_support_threshold": 0.15,
         "near_candidate_ratio": 0.85,
+        "localized_near_candidate": False,
         "fine_break_candidate": False,
         "fine_break_strong": False,
     }
@@ -20,7 +21,8 @@ def decide(**overrides):
 
 def test_visible_near_threshold_surface_change_with_geometry_is_not_normal():
     candidate, strong, corroborated = decide(local_score=.912, candidate_line=.962,
-                                              geometry_score=.21)
+                                              geometry_score=.21,
+                                              localized_near_candidate=True)
 
     assert candidate
     assert corroborated
@@ -30,6 +32,16 @@ def test_visible_near_threshold_surface_change_with_geometry_is_not_normal():
 def test_low_surface_noise_with_same_geometry_remains_normal():
     candidate, strong, corroborated = decide(local_score=.40, candidate_line=.962,
                                               geometry_score=.21)
+
+    assert not candidate
+    assert not corroborated
+    assert not strong
+
+
+def test_broad_near_threshold_change_is_not_geometry_corroborated():
+    candidate, strong, corroborated = decide(local_score=.90, candidate_line=.962,
+                                              geometry_score=.16,
+                                              localized_near_candidate=False)
 
     assert not candidate
     assert not corroborated

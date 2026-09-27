@@ -140,6 +140,9 @@ class PartModelConfig:
     # response supports it, then confirmed across rotational views.
     surface_near_candidate_ratio: float = 0.85
     geometry_surface_support_threshold: float = 0.15
+    # Geometry can corroborate only a localized near-threshold surface region;
+    # broad illumination/registration changes must not fail the whole blower.
+    surface_corroboration_max_area_ratio: float = 0.02
     fine_break_candidate_area_px: int = 20
     fine_break_strong_area_px: int = 60
     surface_normalization_mean: tuple[float, float, float] = (0.485, 0.456, 0.406)
@@ -336,6 +339,9 @@ class ModelRegistry:
             surface_sensitivity=min(1.5, max(.5, float(entry.get("surface_sensitivity", 1.0)))),
             surface_near_candidate_ratio=min(1., max(.5, float(entry.get("surface_near_candidate_ratio", .85)))),
             geometry_surface_support_threshold=min(1., max(0., float(entry.get("geometry_surface_support_threshold", .15)))),
+            surface_corroboration_max_area_ratio=min(.25, max(.00001, float(
+                entry.get("surface_corroboration_max_area_ratio", .02)
+            ))),
             fine_break_candidate_area_px=max(1, int(entry.get("fine_break_candidate_area_px", 20))),
             fine_break_strong_area_px=max(1, int(entry.get("fine_break_strong_area_px", 60))),
             surface_normalization_mean=tuple(float(value) for value in entry.get("surface_normalization_mean", [.485, .456, .406])),

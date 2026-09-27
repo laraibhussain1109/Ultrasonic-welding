@@ -123,7 +123,8 @@
       "surface_near_candidate_ratio": 0.85,
       "geometry_surface_support_threshold": 0.15,
       "fine_break_candidate_area_px": 20,
-      "fine_break_strong_area_px": 60
+      "fine_break_strong_area_px": 60,
+      "surface_corroboration_max_area_ratio": 0.02
     },
     {
       "id": "BF-002",
@@ -247,7 +248,8 @@
       "surface_near_candidate_ratio": 0.85,
       "geometry_surface_support_threshold": 0.15,
       "fine_break_candidate_area_px": 20,
-      "fine_break_strong_area_px": 60
+      "fine_break_strong_area_px": 60,
+      "surface_corroboration_max_area_ratio": 0.02
     },
     {
       "id": "BF-003",
@@ -371,7 +373,8 @@
       "surface_near_candidate_ratio": 0.85,
       "geometry_surface_support_threshold": 0.15,
       "fine_break_candidate_area_px": 20,
-      "fine_break_strong_area_px": 60
+      "fine_break_strong_area_px": 60,
+      "surface_corroboration_max_area_ratio": 0.02
     },
     {
       "id": "BF-004",
@@ -495,7 +498,8 @@
       "surface_near_candidate_ratio": 0.85,
       "geometry_surface_support_threshold": 0.15,
       "fine_break_candidate_area_px": 20,
-      "fine_break_strong_area_px": 60
+      "fine_break_strong_area_px": 60,
+      "surface_corroboration_max_area_ratio": 0.02
     }
   ]
 }

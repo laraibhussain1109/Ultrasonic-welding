@@ -194,6 +194,23 @@ def largest_component_area(mask: np.ndarray) -> int:
     return max((int(stats[index, cv2.CC_STAT_AREA]) for index in range(1, count)), default=0)
 
 
+def localized_component_mask(score_map: np.ndarray, authority: np.ndarray, *, threshold: float,
+                             max_area_ratio: float) -> tuple[np.ndarray, int]:
+    """Keep only localized threshold components and reject broad optical shifts."""
+    evidence = np.asarray(score_map, np.float32) * np.asarray(authority, np.float32)
+    raw = evidence >= threshold
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(raw.astype(np.uint8), 8)
+    maximum_area = max(1, int(round(raw.size * max_area_ratio)))
+    localized = np.zeros(raw.shape, bool)
+    largest = 0
+    for label in range(1, count):
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if area <= maximum_area:
+            localized[labels == label] = True
+            largest = max(largest, area)
+    return localized, largest
+
+
 class TiledViTSurfaceInspector:
     """DINOv2 memory + normal-subspace reconstruction + geometry backend."""
 
@@ -350,6 +367,7 @@ class TiledViTSurfaceInspector:
                 "tile_overlap": config.surface_tile_overlap,
                 "surface_near_candidate_ratio": config.surface_near_candidate_ratio,
                 "geometry_surface_support_threshold": config.geometry_surface_support_threshold,
+                "surface_corroboration_max_area_ratio": config.surface_corroboration_max_area_ratio,
                 "fine_break_candidate_area_px": config.fine_break_candidate_area_px,
                 "fine_break_strong_area_px": config.fine_break_strong_area_px,
                 "normalization_mean": list(config.surface_normalization_mean),
@@ -552,6 +570,11 @@ class TiledViTSurfaceInspector:
         fine_thresholds = thresholds["fine_break"]
         fine_break_candidate = fine_break_area >= fine_thresholds["candidate"] / sensitivity
         fine_break_strong = fine_break_area >= fine_thresholds["strong"] / sensitivity
+        near_mask, near_component_area = localized_component_mask(
+            combined, authority,
+            threshold=candidate_line * config.surface_near_candidate_ratio,
+            max_area_ratio=config.surface_corroboration_max_area_ratio,
+        )
         surface_candidate, strong, geometry_corroborated = surface_decision_state(
             local_score=local_evidence,
             candidate_line=candidate_line,
@@ -561,6 +584,7 @@ class TiledViTSurfaceInspector:
             geometry_score=geometry.score,
             geometry_support_threshold=config.geometry_surface_support_threshold,
             near_candidate_ratio=config.surface_near_candidate_ratio,
+            localized_near_candidate=bool(np.any(near_mask)),
             fine_break_candidate=fine_break_candidate,
             fine_break_strong=fine_break_strong,
         )
@@ -583,7 +607,6 @@ class TiledViTSurfaceInspector:
         if surface_candidate and glare.score >= config.glare_threshold: reasons.append("LIKELY_GLARE")
         immediate = geometry_fail or strong
         status = "FAIL" if immediate else ("CANDIDATE" if surface_candidate else "PASS")
-        near_mask = ((combined * authority) >= candidate_line * config.surface_near_candidate_ratio)
         surface_mask = mask | (near_mask if geometry_corroborated else False)
         if fine_break_candidate:
             surface_mask |= fine_break_mask
@@ -603,7 +626,8 @@ class TiledViTSurfaceInspector:
                                "memory": memory_peak, "reconstruction": reconstruction_peak,
                                "global": stats.global_score, "local": stats.local_score,
                                "peak": stats.peak_score, "topk": stats.topk_score,
-                               "fine_break_area": float(fine_break_area)}
+                               "fine_break_area": float(fine_break_area),
+                               "near_component_area": float(near_component_area)}
         latencies = {"surface_tiles": surface_ms, "geometry": geometry_ms,
                      "total": (time.perf_counter() - started) * 1000, "tile_count": float(len(tiles))}
         if config.engineering_compare_legacy:

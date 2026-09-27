@@ -42,6 +42,7 @@ def test_model_registry_defaults_camera_and_allows_missing_roi(tmp_path):
     assert model.vit_input_size == 518
     assert model.surface_near_candidate_ratio == .85
     assert model.geometry_surface_support_threshold == .15
+    assert model.surface_corroboration_max_area_ratio == .02
     assert model.fine_break_candidate_area_px == 20
     assert model.fine_break_strong_area_px == 60
     assert model.counting_line_ratio == 0.45

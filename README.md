@@ -113,9 +113,12 @@ timings are retained in per-result engineering JSON diagnostics.
 The structural path also runs a native-resolution localized fin-gap detector.
 Its largest normal component is calibrated separately instead of being averaged
 over the whole blower. A surface response close to its calibrated candidate line
-is retained as `SURFACE_GEOMETRY_CORROBORATION` when independent geometry also
-responds; it is no longer displayed as a normal view merely because it misses the
-surface limit by a small margin. Retrain existing surface checkpoints after an
+is retained as `SURFACE_GEOMETRY_CORROBORATION` only when independent geometry
+also responds **and** that near-threshold surface component is localized. Broad
+regions caused by illumination, normal end-section appearance, or small
+registration shifts cannot accumulate into a false failure. A localized defect
+is no longer displayed as normal merely because it misses the surface limit by a
+small margin. Retrain existing surface checkpoints after an
 upgrade that introduces these calibration fields.
 
 ### CUDA and FAISS
