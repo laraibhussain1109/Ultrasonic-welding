@@ -24,6 +24,7 @@ from .config import PartModelConfig
 from .frame_quality import FrameQualityAnalyzer
 from .geometry_inspector import FinGeometryInspector, glare_evidence, support_rib_mask
 from .trainer import InspectionResult, list_images
+from .vit_tokens import spatial_patch_tokens
 from .yolo_tracking import YoloByteTrackDetector
 
 SURFACE_MODEL_VERSION = 1
@@ -284,16 +285,19 @@ class TiledViTSurfaceInspector:
             array = (array - np.asarray(config.surface_normalization_mean, np.float32)) / np.asarray(config.surface_normalization_std, np.float32)
             arrays.append(array.transpose(2, 0, 1))
         tensor = torch.from_numpy(np.stack(arrays)).pin_memory() if device.type == "cuda" else torch.from_numpy(np.stack(arrays))
+        model_grid = getattr(model.patch_embed, "grid_size", None)
+        if model_grid is None:
+            patch = getattr(model.patch_embed, "patch_size", (14, 14))
+            patch_h, patch_w = ((int(patch[0]), int(patch[1]))
+                                if isinstance(patch, (tuple, list)) else (int(patch), int(patch)))
+            grid = (config.vit_input_size // patch_h, config.vit_input_size // patch_w)
+        else:
+            grid = (tuple(int(value) for value in model_grid)
+                    if isinstance(model_grid, (tuple, list))
+                    else (int(model_grid), int(model_grid)))
         with torch.inference_mode(), torch.autocast(device_type="cuda", enabled=device.type == "cuda"):
             output = model.forward_features(tensor.to(device, non_blocking=True))
-            tokens = output.get("x_norm_patchtokens") if isinstance(output, dict) else output
-            if tokens.ndim != 3:
-                raise RuntimeError("Configured ViT does not expose spatial patch tokens")
-        patch = int(getattr(model.patch_embed, "patch_size", (14, 14))[0])
-        grid = (config.vit_input_size // patch, config.vit_input_size // patch)
-        if grid[0] * grid[1] != tokens.shape[1]:
-            side = int(round(tokens.shape[1] ** .5))
-            grid = (side, tokens.shape[1] // side)
+            tokens = spatial_patch_tokens(output, model, grid)
         return tokens.float().cpu().numpy(), grid
 
     @staticmethod

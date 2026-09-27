@@ -101,6 +101,9 @@ tile remains 768×768 in native ROI coordinates, while the DINOv2 ViT-S/14 tenso
 is explicitly prepared at its pretrained 518×518 input size for both training
 and inference. The resulting token map is projected back across the native tile;
 this avoids timm's fixed-input assertion without shrinking the entire blower ROI.
+The token adapter also removes timm's CLS/register prefix tokens before reshaping
+the spatial 37×37 patch grid; prefix tokens are global descriptors and cannot be
+placed into an anomaly map.
 A strong local response, agreement between memory and reconstruction, calibrated
 geometry, glare evidence, and location-aware detections among the last five
 valid rotational views drive auditable reason codes. Glare never deletes an

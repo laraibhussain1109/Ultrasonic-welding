@@ -31,3 +31,4 @@ def test_fixed_size_dinov2_receives_configured_518_tensor_not_native_768_tile():
     assert "rgb = prepare_vit_rgb(image, config.vit_input_size)" in source
     assert "img_size=config.vit_input_size" in source
     assert '"vit_input_size": config.vit_input_size' in source
+    assert "tokens = spatial_patch_tokens(output, model, grid)" in source
