@@ -118,7 +118,8 @@
       "inspection_interval_ms": 50,
       "engineering_compare_legacy": false,
       "vit_auto_download": true,
-      "surface_require_gpu": true
+      "surface_require_gpu": true,
+      "vit_input_size": 518
     },
     {
       "id": "BF-002",
@@ -237,7 +238,8 @@
       "inspection_interval_ms": 50,
       "engineering_compare_legacy": false,
       "vit_auto_download": true,
-      "surface_require_gpu": true
+      "surface_require_gpu": true,
+      "vit_input_size": 518
     },
     {
       "id": "BF-003",
@@ -356,7 +358,8 @@
       "inspection_interval_ms": 50,
       "engineering_compare_legacy": false,
       "vit_auto_download": true,
-      "surface_require_gpu": true
+      "surface_require_gpu": true,
+      "vit_input_size": 518
     },
     {
       "id": "BF-004",
@@ -475,7 +478,8 @@
       "inspection_interval_ms": 50,
       "engineering_compare_legacy": false,
       "vit_auto_download": true,
-      "surface_require_gpu": true
+      "surface_require_gpu": true,
+      "vit_input_size": 518
     }
   ]
 }

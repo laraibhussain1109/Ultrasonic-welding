@@ -122,6 +122,9 @@ class PartModelConfig:
     vit_weights_path: Path | None = None
     vit_auto_download: bool = True
     surface_require_gpu: bool = True
+    # DINOv2 ViT-S/14 was pretrained at 518x518. Native 768px tiles remain the
+    # inspection coordinate system; only each tile's ViT tensor uses this size.
+    vit_input_size: int = 518
     surface_tile_size: int = 768
     surface_tile_overlap: float = 0.25
     surface_tile_batch_size: int = 4
@@ -313,6 +316,7 @@ class ModelRegistry:
             vit_weights_path=Path(entry["vit_weights_path"]) if entry.get("vit_weights_path") else None,
             vit_auto_download=bool(entry.get("vit_auto_download", True)),
             surface_require_gpu=bool(entry.get("surface_require_gpu", True)),
+            vit_input_size=max(224, int(entry.get("vit_input_size", 518))),
             surface_tile_size=max(224, int(entry.get("surface_tile_size", 768))),
             surface_tile_overlap=min(.75, max(0., float(entry.get("surface_tile_overlap", .25)))),
             surface_tile_batch_size=max(1, int(entry.get("surface_tile_batch_size", 4))),

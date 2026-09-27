@@ -114,6 +114,23 @@ def merge_tile_maps(tile_maps: Iterable[np.ndarray], tiles: list[Tile], shape: t
     return total / np.maximum(weights, 1e-6)
 
 
+def prepare_vit_rgb(image: np.ndarray, input_size: int) -> np.ndarray:
+    """Convert a native tile to the fixed square tensor geometry expected by ViT.
+
+    Tile placement and anomaly-map reconstruction continue using the untouched
+    native tile. This function is shared by training and inference so the model
+    can never see 768px during one phase and 518px during the other.
+    """
+    if input_size <= 0 or image.size == 0:
+        raise ValueError("ViT input size and tile content must be non-empty")
+    rgb = (cv2.cvtColor(image, cv2.COLOR_BGR2RGB) if image.ndim == 3
+           else cv2.cvtColor(image, cv2.COLOR_GRAY2RGB))
+    if rgb.shape[:2] != (input_size, input_size):
+        interpolation = cv2.INTER_AREA if max(rgb.shape[:2]) > input_size else cv2.INTER_CUBIC
+        rgb = cv2.resize(rgb, (input_size, input_size), interpolation=interpolation)
+    return rgb
+
+
 def map_roi_box_to_frame(box: tuple[int, int, int, int], roi_bounds: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
     """Translate a native ROI-local box into full camera-frame coordinates."""
     x, y, width, height = box
@@ -219,7 +236,8 @@ class TiledViTSurfaceInspector:
         timm = self._require("timm", "Install the industrial dependencies so DINOv2 can be downloaded and cached.")
         weights = config.vit_weights_path or Path("data/models/backbones") / f"{config.vit_backbone}.pth"
         if weights.is_file():
-            model = timm.create_model(config.vit_backbone, pretrained=False, num_classes=0)
+            model = timm.create_model(config.vit_backbone, pretrained=False, num_classes=0,
+                                      img_size=config.vit_input_size)
             state = self._torch.load(weights, map_location="cpu", weights_only=True)
             if isinstance(state, dict) and "state_dict" in state:
                 state = state["state_dict"]
@@ -232,7 +250,8 @@ class TiledViTSurfaceInspector:
                 # timm uses the model's official pretrained configuration and
                 # Hugging Face cache. Persist our own atomic copy so subsequent
                 # starts work offline and never redownload the checkpoint.
-                model = timm.create_model(config.vit_backbone, pretrained=True, num_classes=0)
+                model = timm.create_model(config.vit_backbone, pretrained=True, num_classes=0,
+                                          img_size=config.vit_input_size)
                 weights.parent.mkdir(parents=True, exist_ok=True)
                 temporary = weights.with_suffix(weights.suffix + ".part")
                 self._torch.save(model.state_dict(), temporary)
@@ -256,7 +275,11 @@ class TiledViTSurfaceInspector:
         torch, model = self._torch, self._build_model(config)
         arrays = []
         for image in images:
-            rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) if image.ndim == 3 else cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+            # The native 768px tile remains unchanged for ROI/map coordinates,
+            # but the pretrained fixed-size ViT-S/14 patch embed expects 518px.
+            # Explicitly resizing here keeps training and inference identical
+            # and prevents timm's "Input height ... doesn't match model (518)".
+            rgb = prepare_vit_rgb(image, config.vit_input_size)
             array = rgb.astype(np.float32) / 255.0
             array = (array - np.asarray(config.surface_normalization_mean, np.float32)) / np.asarray(config.surface_normalization_std, np.float32)
             arrays.append(array.transpose(2, 0, 1))
@@ -267,7 +290,7 @@ class TiledViTSurfaceInspector:
             if tokens.ndim != 3:
                 raise RuntimeError("Configured ViT does not expose spatial patch tokens")
         patch = int(getattr(model.patch_embed, "patch_size", (14, 14))[0])
-        grid = (images[0].shape[0] // patch, images[0].shape[1] // patch)
+        grid = (config.vit_input_size // patch, config.vit_input_size // patch)
         if grid[0] * grid[1] != tokens.shape[1]:
             side = int(round(tokens.shape[1] ** .5))
             grid = (side, tokens.shape[1] // side)
@@ -310,6 +333,7 @@ class TiledViTSurfaceInspector:
     def _metadata(config: PartModelConfig) -> dict[str, Any]:
         return {"version": SURFACE_MODEL_VERSION, "preprocessing_version": PREPROCESSING_VERSION,
                 "backbone": config.vit_backbone, "tile_size": config.surface_tile_size,
+                "vit_input_size": config.vit_input_size,
                 "tile_overlap": config.surface_tile_overlap,
                 "normalization_mean": list(config.surface_normalization_mean),
                 "normalization_std": list(config.surface_normalization_std),

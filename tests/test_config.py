@@ -39,6 +39,7 @@ def test_model_registry_defaults_camera_and_allows_missing_roi(tmp_path):
     assert model.image_size == 640
     assert model.vit_auto_download is True
     assert model.surface_require_gpu is True
+    assert model.vit_input_size == 518
     assert model.counting_line_ratio == 0.45
     assert model.counting_direction == "left_to_right"
     assert model.tao_change_class_index == 1
@@ -108,6 +109,7 @@ def test_supplied_models_are_vit_surface_production_with_legacy_comparison_artif
     assert all(model.production_algorithm == "vit_surface_geometry" for model in models)
     assert all(model.surface_tile_size == 768 and model.surface_tile_overlap == .25 for model in models)
     assert all(model.vit_auto_download and model.surface_require_gpu for model in models)
+    assert all(model.vit_input_size == 518 for model in models)
     assert all(model.model_file.suffix == ".pt" for model in models)
     assert all(model.patchcore_model_file == model.model_file for model in models)
     assert all(model.tao_model_file is not None and model.tao_model_file.suffix == ".onnx" for model in models)

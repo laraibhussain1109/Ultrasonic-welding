@@ -97,7 +97,11 @@ pytest -q
 
 At inference the locked YOLO box crops original camera pixels before any surface
 processing. Overlapping 768-pixel tiles are blended into the full ROI map. A
-strong local response, agreement between memory and reconstruction, calibrated
+tile remains 768×768 in native ROI coordinates, while the DINOv2 ViT-S/14 tensor
+is explicitly prepared at its pretrained 518×518 input size for both training
+and inference. The resulting token map is projected back across the native tile;
+this avoids timm's fixed-input assertion without shrinking the entire blower ROI.
+A strong local response, agreement between memory and reconstruction, calibrated
 geometry, glare evidence, and location-aware detections among the last five
 valid rotational views drive auditable reason codes. Glare never deletes an
 anomaly. Operator output is the original ROI with red contours; raw maps and

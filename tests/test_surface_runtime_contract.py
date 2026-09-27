@@ -23,3 +23,11 @@ def test_surface_memory_search_prefers_torch_cuda_without_faiss_dependency():
     assert "surface_require_gpu" in source
     dependencies = project["project"]["dependencies"] + project["project"]["optional-dependencies"]["industrial"]
     assert not any("faiss" in dependency.casefold() for dependency in dependencies)
+
+
+def test_fixed_size_dinov2_receives_configured_518_tensor_not_native_768_tile():
+    source = Path("src/blower_inspection/surface_inspector.py").read_text(encoding="utf-8")
+
+    assert "rgb = prepare_vit_rgb(image, config.vit_input_size)" in source
+    assert "img_size=config.vit_input_size" in source
+    assert '"vit_input_size": config.vit_input_size' in source

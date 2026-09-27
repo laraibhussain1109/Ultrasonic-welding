@@ -5,7 +5,7 @@ cv2 = pytest.importorskip("cv2", exc_type=ImportError)
 
 from blower_inspection.surface_inspector import (
     generate_tiles, map_roi_box_to_frame, merge_tile_maps,
-    score_anomaly_map, tile_positions,
+    prepare_vit_rgb, score_anomaly_map, tile_positions,
 )
 
 
@@ -59,3 +59,13 @@ def test_soft_authority_reduces_but_does_not_erase_rib_anomaly():
 
 def test_native_roi_coordinate_mapping_is_translation_only():
     assert map_roi_box_to_frame((25, 15, 20, 10), (100, 200, 3200, 900)) == (125, 215, 20, 10)
+
+
+def test_native_768_tile_is_prepared_for_fixed_518_dinov2_input():
+    tile = np.zeros((768, 768, 3), np.uint8)
+    tile[0, 0] = (1, 2, 3)
+
+    prepared = prepare_vit_rgb(tile, 518)
+
+    assert prepared.shape == (518, 518, 3)
+    assert prepared.dtype == np.uint8
