@@ -1,10 +1,11 @@
 # NeuroIris Blower Fan Industrial Vision Inspection
 
 Python/PyQt6 inspection software for ultrasonic-welded blower fan parts. The
-default production decision uses **PatchCore + structural fin geometry +
-multi-view confirmation**. NVIDIA TAO VisualChangeNet remains available for
-engineering comparison, training, export, and ONNX runtime experiments, but it
-does not control PASS/FAIL by default.
+default production decision uses **native-resolution overlapping tiles + DINOv2
+patch-token memory + feature reconstruction + structural fin geometry +
+sliding-window multi-view confirmation**. The previous CNN PatchCore and NVIDIA
+TAO VisualChangeNet paths remain available for engineering comparison, training,
+export, and ONNX runtime experiments, but they do not control PASS/FAIL by default.
 
 > **New installation?** Follow the complete [step-by-step operating guide](docs/getting_started.md)
 > for PatchCore model training and starting a live inspection.
@@ -55,6 +56,48 @@ pip install -e ".[industrial,tao]"
 ```
 
 Start the UI with `python -m blower_inspection.app`.
+
+## Native-resolution DINOv2 production setup
+
+Production profiles request and verify `3840x2160`; the top status bar is based
+on the negotiated camera properties, not the request. A lower negotiated mode is
+shown as **LOW-RES FALLBACK** and logged as `CAMERA_RESOLUTION_MISMATCH`—frames
+are never enlarged and represented as native capture.
+
+Install the PyTorch build appropriate for the commissioned CUDA driver first,
+then install this project. PyTorch 2.2+, torchvision 0.17+, timm 1.0.9+, and
+OpenCV 4.8+ are declared requirements. CUDA is preferred, mixed precision and
+tile batching are enabled, and CPU remains a functional (slower) fallback.
+
+The application intentionally never downloads model weights at startup. Download
+the approved `vit_small_patch14_dinov2.lvd142m` timm checkpoint during machine
+provisioning, verify its checksum, and place it at:
+
+```text
+data/models/backbones/vit_small_patch14_dinov2_lvd142m.pth
+```
+
+Alternatively set each model's `vit_weights_path` to an approved local file.
+Then put normal rotational views in `data/training/BF-001/normal`, choose the
+model and YOLO locator in the UI, and press **TRAIN**. Training quality-gates and
+native-crops images, makes a disjoint calibration split, tiles every ROI, builds
+the DINO memory, fits the normal feature-reconstruction subspace, calibrates
+global/local/peak/top-K/component and geometry limits, and writes a JSON report.
+
+Run and test with:
+
+```bash
+python -m blower_inspection.app
+pytest -q
+```
+
+At inference the locked YOLO box crops original camera pixels before any surface
+processing. Overlapping 768-pixel tiles are blended into the full ROI map. A
+strong local response, agreement between memory and reconstruction, calibrated
+geometry, glare evidence, and location-aware detections among the last five
+valid rotational views drive auditable reason codes. Glare never deletes an
+anomaly. Operator output is the original ROI with red contours; raw maps and
+timings are retained in per-result engineering JSON diagnostics.
 
 ## Optional TAO engineering workflow (not default production training)
 

@@ -21,8 +21,8 @@ class PartModelConfig:
     min_defect_area_px: int = 120
     max_bad_sector_ratio: float = 0.18
     roi_ratios: tuple[float, float, float, float] | None = None
-    camera_width: int = 1920
-    camera_height: int = 1080
+    camera_width: int = 3840
+    camera_height: int = 2160
     camera_fps: int = 30
     image_size: int = 640
     yolo_model_path: Path | None = None
@@ -93,6 +93,7 @@ class PartModelConfig:
     padim_enabled: bool = False
     distillation_enabled: bool = False
     engineering_compare_tao: bool = False
+    engineering_compare_legacy: bool = False
     patchcore_edge_ignore_ratio: float = 0.05
     patchcore_embedding_layers: tuple[str, ...] = ("layer2", "layer3")
     patchcore_memory_bank_size: int = 8192
@@ -116,6 +117,24 @@ class PartModelConfig:
     hard_good_dir: Path | None = None
     patchcore_model_file: Path | None = None
     runtime_storage_mode: str = "memory"
+    surface_model_file: Path | None = None
+    vit_backbone: str = "vit_small_patch14_dinov2.lvd142m"
+    vit_weights_path: Path | None = None
+    surface_tile_size: int = 768
+    surface_tile_overlap: float = 0.25
+    surface_tile_batch_size: int = 4
+    surface_memory_bank_size: int = 32768
+    reconstruction_rank: int = 64
+    surface_band_top_ratio: float = 0.05
+    surface_band_bottom_ratio: float = 0.95
+    surface_rib_authority: float = 0.55
+    surface_persistence_required: int = 2
+    surface_persistence_window: int = 5
+    surface_sensitivity: float = 1.0
+    surface_normalization_mean: tuple[float, float, float] = (0.485, 0.456, 0.406)
+    surface_normalization_std: tuple[float, float, float] = (0.229, 0.224, 0.225)
+    geometry_max_width: int = 1280
+    inspection_interval_ms: int = 50
 
 
 class ModelRegistry:
@@ -196,8 +215,8 @@ class ModelRegistry:
             min_defect_area_px=int(entry.get("min_defect_area_px", 120)),
             max_bad_sector_ratio=float(entry.get("max_bad_sector_ratio", 0.18)),
             roi_ratios=tuple(float(value) for value in roi) if roi is not None else None,
-            camera_width=int(entry.get("camera_width", 1920)),
-            camera_height=int(entry.get("camera_height", 1080)),
+            camera_width=int(entry.get("camera_width", 3840)),
+            camera_height=int(entry.get("camera_height", 2160)),
             camera_fps=int(entry.get("camera_fps", 30)),
             image_size=int(entry.get("image_size", 640)),
             yolo_model_path=Path(entry["yolo_model_path"]) if entry.get("yolo_model_path") else None,
@@ -263,6 +282,7 @@ class ModelRegistry:
             padim_enabled=bool(entry.get("padim_enabled", False)),
             distillation_enabled=bool(entry.get("distillation_enabled", False)),
             engineering_compare_tao=bool(entry.get("engineering_compare_tao", False)),
+            engineering_compare_legacy=bool(entry.get("engineering_compare_legacy", False)),
             patchcore_edge_ignore_ratio=float(entry.get("patchcore_edge_ignore_ratio", .05)),
             patchcore_embedding_layers=tuple(entry.get("patchcore_embedding_layers", ["layer2", "layer3"])),
             patchcore_memory_bank_size=max(1, int(entry.get("patchcore_memory_bank_size", 8192))),
@@ -286,6 +306,24 @@ class ModelRegistry:
             hard_good_dir=Path(entry["hard_good_dir"]) if entry.get("hard_good_dir") else None,
             patchcore_model_file=Path(entry["patchcore_model_file"]) if entry.get("patchcore_model_file") else None,
             runtime_storage_mode=str(entry.get("runtime_storage_mode", "memory")),
+            surface_model_file=Path(entry["surface_model_file"]) if entry.get("surface_model_file") else None,
+            vit_backbone=str(entry.get("vit_backbone", "vit_small_patch14_dinov2.lvd142m")),
+            vit_weights_path=Path(entry["vit_weights_path"]) if entry.get("vit_weights_path") else None,
+            surface_tile_size=max(224, int(entry.get("surface_tile_size", 768))),
+            surface_tile_overlap=min(.75, max(0., float(entry.get("surface_tile_overlap", .25)))),
+            surface_tile_batch_size=max(1, int(entry.get("surface_tile_batch_size", 4))),
+            surface_memory_bank_size=max(256, int(entry.get("surface_memory_bank_size", 32768))),
+            reconstruction_rank=max(1, int(entry.get("reconstruction_rank", 64))),
+            surface_band_top_ratio=float(entry.get("surface_band_top_ratio", .05)),
+            surface_band_bottom_ratio=float(entry.get("surface_band_bottom_ratio", .95)),
+            surface_rib_authority=min(1., max(.05, float(entry.get("surface_rib_authority", .55)))),
+            surface_persistence_required=max(1, int(entry.get("surface_persistence_required", 2))),
+            surface_persistence_window=max(1, int(entry.get("surface_persistence_window", 5))),
+            surface_sensitivity=min(1.5, max(.5, float(entry.get("surface_sensitivity", 1.0)))),
+            surface_normalization_mean=tuple(float(value) for value in entry.get("surface_normalization_mean", [.485, .456, .406])),
+            surface_normalization_std=tuple(float(value) for value in entry.get("surface_normalization_std", [.229, .224, .225])),
+            geometry_max_width=max(320, int(entry.get("geometry_max_width", 1280))),
+            inspection_interval_ms=max(1, int(entry.get("inspection_interval_ms", 50))),
         )
 
 

@@ -13,6 +13,7 @@ from PyQt6.QtGui import QFont, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
+    QCheckBox,
     QDialog,
     QFormLayout,
     QFrame,
@@ -207,6 +208,7 @@ class InspectionWindow(QWidget):
         self.locked_presence_poll = 0
         self.locked_last_yolo_present = False
         self.raw_frame = None
+        self._reported_camera_mode = None
         self.fps_frame_count = 0
         self.fps_started_at = time.perf_counter()
         self.tolerance_percent = 5.0
@@ -259,8 +261,9 @@ class InspectionWindow(QWidget):
         self.tolerance_top = QLabel("TOLERANCE:  5%")
         self.fps_top = QLabel("FPS:  -")
         self.latency_top = QLabel("LATENCY:  - ms")
+        self.camera_top = QLabel("CAMERA:  OFFLINE")
         self.time_label = QLabel("--:--:--")
-        for widget in [self.online_label, self.speed_top, self.tolerance_top, self.fps_top, self.latency_top, self.time_label]:
+        for widget in [self.online_label, self.camera_top, self.speed_top, self.tolerance_top, self.fps_top, self.latency_top, self.time_label]:
             widget.setFont(QFont("Consolas", 12, QFont.Weight.Bold))
             layout.addWidget(widget)
             layout.addSpacing(25)
@@ -302,7 +305,7 @@ class InspectionWindow(QWidget):
         layout.addWidget(reset)
         layout.addSpacing(26)
         layout.addWidget(self._section("TOLERANCE SETTING"))
-        layout.addWidget(QLabel("DEFECT SIZE THRESHOLD — LOWER = STRICTER"))
+        layout.addWidget(QLabel("CALIBRATED DETECTOR SENSITIVITY — LOWER = STRICTER"))
         tolerance_grid = QGridLayout()
         for index, value in enumerate([1, 3, 5, 8]):
             button = QPushButton(f"{value}%")
@@ -336,11 +339,13 @@ class InspectionWindow(QWidget):
         layout.addWidget(QLabel("FIXED LINE RATE — OPTIMISED @ 30 FPS"))
         layout.addStretch(1)
         if self.user.is_admin:
+            self.comparison_mode = QCheckBox("ENGINEERING: COMPARE LEGACY PATCHCORE")
+            layout.addWidget(self.comparison_mode)
             export = QPushButton("⬡   EXPORT TAO MODEL (ENGINEERING)")
             export.setObjectName("train")
             export.clicked.connect(self.export_selected)
             layout.addWidget(export)
-            train = QPushButton("◆   TRAIN PATCHCORE MODEL")
+            train = QPushButton("◆   TRAIN COMPLETE INSPECTION MODEL")
             train.setObjectName("train")
             train.clicked.connect(self.train_selected)
             layout.addWidget(train)
@@ -425,15 +430,20 @@ class InspectionWindow(QWidget):
 
     def inspection_model(self) -> PartModelConfig:
         model = self.selected_model()
-        # The tolerance buttons are operator-facing strictness controls.  Lower
-        # percentages must reject smaller detected regions/sectors, while higher
-        # percentages allow larger confirmed defects before rejecting the part.
+        self.inference_interval_s = model.inspection_interval_ms / 1000.0
+        # This control changes calibrated surface-score lines as well as legacy
+        # area policy. It can no longer give the operator a false impression of
+        # changing sensitivity while leaving the active detector untouched.
         strictness_scale = max(self.tolerance_percent, 0.01) / 5.0
         tolerance_area = max(1, int(model.min_defect_area_px * strictness_scale))
+        calibrated_sensitivity = max(.5, min(1.5, 1.2 - (self.tolerance_percent - 1.0) * .04))
         return replace(
             model,
             min_defect_area_px=tolerance_area,
             max_bad_sector_ratio=max(0.0001, self.tolerance_percent / 100.0),
+            surface_sensitivity=calibrated_sensitivity,
+            engineering_compare_legacy=(self.comparison_mode.isChecked()
+                                        if hasattr(self, "comparison_mode") else False),
         )
 
     def _refresh_models(self, selected_id: str | None = None) -> None:
@@ -576,11 +586,11 @@ class InspectionWindow(QWidget):
         except Exception as exc:
             QMessageBox.critical(self, "Camera settings error", str(exc))
             return
-        if model.production_algorithm != "patchcore_geometry" and model.algorithm == "nvidia_tao":
+        if hasattr(self.inspector, "validate_ready"):
             try:
                 self.inspector.validate_ready(model)
             except Exception as exc:
-                QMessageBox.critical(self, "TAO model not ready", str(exc))
+                QMessageBox.critical(self, "Inspection model not ready", str(exc))
                 return
         try:
             self.part_detector = YoloByteTrackDetector(model.yolo_model_path, model.yolo_confidence)
@@ -592,6 +602,7 @@ class InspectionWindow(QWidget):
                 model.weak_candidate_required_views,
                 model.inspection_completion_mode,
                 model.counting_axis,
+                model.surface_persistence_window,
             )
             self.frame_sampler = SharpFrameSampler(
                 model.capture_burst_frames, model.minimum_sharpness
@@ -601,6 +612,15 @@ class InspectionWindow(QWidget):
                 maximum_history=max(24, model.minimum_rotation_views * 2),
             )
             self.camera.open()
+            assert self.camera.mode is not None
+            self.camera_top.setText(
+                f"CAMERA: {self.camera.mode.actual_width}×{self.camera.mode.actual_height} "
+                f"{'NATIVE' if self.camera.mode.native else 'LOW-RES FALLBACK'}"
+            )
+            self.log.addItem(self.camera.mode_summary())
+            if self.camera.mode.warning:
+                self.log.addItem(self.camera.mode.warning)
+                QMessageBox.warning(self, "Camera resolution warning", self.camera.mode.warning)
             if model.lock_roi_after_confirmation and not self._confirm_and_lock_roi(model):
                 self.camera.close()
                 self.part_detector = None
@@ -738,6 +758,17 @@ class InspectionWindow(QWidget):
             return
         try:
             raw_frame = self.camera.read()
+            if self.camera.mode is not None:
+                signature = (self.camera.mode.actual_width, self.camera.mode.actual_height, self.camera.mode.actual_fps)
+                self.camera_top.setText(
+                    f"CAMERA: {signature[0]}×{signature[1]} "
+                    f"{'NATIVE' if self.camera.mode.native else 'LOW-RES FALLBACK'}"
+                )
+                if signature != self._reported_camera_mode:
+                    self.log.addItem(self.camera.mode_summary())
+                    if self.camera.mode.warning:
+                        self.log.addItem(self.camera.mode.warning)
+                    self._reported_camera_mode = signature
             self.raw_frame = raw_frame
             assert self.part_detector is not None and self.rotating_parts is not None
             tracks = (self._locked_roi_tracks(raw_frame) if self.live_roi_bounds is not None
@@ -899,12 +930,20 @@ class InspectionWindow(QWidget):
         geometry_detail = (f"PITCH: {geometry_components.get('pitch', 0):.2f}   "
                            f"CONT: {geometry_components.get('continuity', 0):.2f}   "
                            f"BROKEN: {geometry_components.get('broken', 0):.2f}")
+        surface_detail = (f"MEM: {geometry_components.get('memory', 0):.3f}   "
+                          f"RECON: {geometry_components.get('reconstruction', 0):.3f}   "
+                          f"PEAK: {geometry_components.get('peak', 0):.3f}   "
+                          f"TOP-K: {geometry_components.get('topk', 0):.3f}")
+        telemetry = "   ".join(f"{key}: {value:.1f}ms" for key, value in result.latencies_ms.items()
+                               if key != "tile_count")
         self.last_result.setText(
             f"TRACK: {track_id}   VIEW SCORE: {result.anomaly_score:.2f}\n"
-            f"PATCHCORE: {result.anomaly_score:.2f}   GEOMETRY: {result.geometry_score or 0:.2f}\n"
+            f"SURFACE: {result.anomaly_score:.2f}   GEOMETRY: {result.geometry_score or 0:.2f}\n"
             f"GLARE: {result.glare_score or 0:.2f}   REGISTRATION: {result.registration_score or 0:.2f}\n"
             f"VIEW QUALITY: {result.view_quality_score if result.view_quality_score is not None else 1.0:.2f}\n"
             f"{geometry_detail}\n"
+            f"{surface_detail}\n"
+            f"TILES: {result.latencies_ms.get('tile_count', 0):.0f}   {telemetry}\n"
             f"VIEWS: {view_progress[1]}/{view_progress[2]} valid ({view_progress[0]} attempted)\n"
             f"REASON: {reason_text}\nLATENCY: {latency_ms:.1f} ms"
         )
@@ -1128,6 +1167,8 @@ class InspectionWindow(QWidget):
         self.viewer.setText("NO CAMERA FRAME")
         self.fps_top.setText("FPS:  -")
         self.online_label.setText("● OFFLINE")
+        self.camera_top.setText("CAMERA:  OFFLINE")
+        self._reported_camera_mode = None
         self.status_badge.setObjectName("statusStandby")
         self.status_badge.setText("STANDBY")
         self.status_badge.style().unpolish(self.status_badge)
@@ -1158,7 +1199,8 @@ class InspectionWindow(QWidget):
         self.tolerance_percent = max(0.0, min(float(value), 50.0))
         formatted = f"{self.tolerance_percent:.2f}".rstrip("0").rstrip(".")
         self.tolerance_top.setText(f"TOLERANCE:  {formatted}%")
-        self.log.addItem(f"TOLERANCE SET TO {formatted}%")
+        sensitivity = max(.5, min(1.5, 1.2 - (self.tolerance_percent - 1.0) * .04))
+        self.log.addItem(f"SENSITIVITY SET: tolerance={formatted}% calibrated score scale={sensitivity:.2f}x")
 
     def _tick(self) -> None:
         self.time_label.setText(time.strftime("%H:%M:%S"))

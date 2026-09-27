@@ -32,7 +32,7 @@ def test_app_validates_tao_readiness_before_opening_camera():
     camera_open = source.index("self.camera.open()", validation)
 
     assert validation < camera_open
-    assert '"TAO model not ready"' in source
+    assert '"Inspection model not ready"' in source
 
 
 def test_app_does_not_replace_the_inspector_after_readiness_validation():

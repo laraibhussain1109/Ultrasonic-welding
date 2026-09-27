@@ -30,10 +30,14 @@ def fuse_patchcore_geometry(patchcore_score: float, patchcore_mask: np.ndarray,
         reasons.append("GEOMETRY_DEFORMATION")
         return ProductionDecision("FAIL", tuple(reasons), True, False, geometry.defect_mask)
     patch_candidate = patchcore_score >= candidate_threshold
+    patch_strong = patchcore_score >= fail_threshold
     geometry_candidate = geometry.score >= geometry_candidate_threshold
     if patch_candidate and geometry_candidate:
         return ProductionDecision("FAIL", ("PATCHCORE_ANOMALY", "GEOMETRY_DEFORMATION"), True, False,
                                   patchcore_mask | geometry.defect_mask)
+    if patch_strong and glare_score < glare_threshold:
+        return ProductionDecision("FAIL", ("STRONG_LOCAL_SURFACE_ANOMALY",), True, False,
+                                  patchcore_mask)
     # The calibrated candidate line is the start of anomalous PatchCore
     # evidence.  Do not require the score to reach the immediate-failure line
     # before forwarding that evidence to the multi-view persistence tracker.
@@ -43,5 +47,6 @@ def fuse_patchcore_geometry(patchcore_score: float, patchcore_mask: np.ndarray,
     if patch_candidate and glare_score < glare_threshold:
         return ProductionDecision("CANDIDATE", ("PATCHCORE_ANOMALY",), False, True, patchcore_mask)
     if patch_candidate and glare_score >= glare_threshold:
-        return ProductionDecision("PASS", ("LIKELY_GLARE",), False, False, np.zeros_like(patchcore_mask))
+        return ProductionDecision("CANDIDATE", ("PATCHCORE_ANOMALY", "LIKELY_GLARE"),
+                                  False, True, patchcore_mask)
     return ProductionDecision("PASS", (), False, False, np.zeros_like(patchcore_mask))

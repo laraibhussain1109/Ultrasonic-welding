@@ -23,6 +23,7 @@ from .geometry_inspector import GeometryEvidence, FinGeometryInspector, glare_ev
 from .inspection_fusion import fuse_patchcore_geometry
 from .roi_stabilizer import CanonicalROI, ROIStabilizer
 from .trainer import InspectionResult, inspection_overlay, list_images
+from .surface_inspector import score_anomaly_map
 from .yolo_tracking import YoloByteTrackDetector
 
 PATCHCORE_MODEL_VERSION = 3
@@ -332,20 +333,25 @@ class PatchCoreInspector(HybridPatchcorePadimInspector):
         if calibration.get("memory_bank_hash") != checkpoint.get("memory_bank_hash") or calibration.get("embedding_layers") != list(self.settings.embedding_layers):
             raise RuntimeError("Stale PatchCore calibration: model/settings do not match")
         patch_started = time.perf_counter(); raw = self._raw_map(roi, checkpoint, torch)
-        band = inspection_band_mask(raw.shape, config.inspection_band_top_ratio, config.inspection_band_bottom_ratio)
+        band = inspection_band_mask(raw.shape, config.surface_band_top_ratio, config.surface_band_bottom_ratio)
         ribs, _ = support_rib_mask(roi)
         if config.support_rib_mask_enabled:
             margin = max(1, round(raw.shape[1] * config.support_rib_margin_ratio))
             ribs = cv2.dilate(ribs.astype(np.uint8), np.ones((1, margin * 2 + 1), np.uint8)).astype(bool)
-        valid = band & ~ribs
+        valid = band
         authority = edge_authority_mask(raw.shape, config.patchcore_edge_ignore_ratio)
         glare = glare_evidence(roi, raw.shape, top=config.inspection_band_top_ratio,
                                bottom=config.inspection_band_bottom_ratio)
-        weighted = raw * authority * valid * (1.0 - .75 * glare.mask.astype(np.float32))
+        # Ribs retain calibrated soft authority and glare remains post-detection
+        # evidence; neither can make a real surface location invisible.
+        authority[ribs] *= config.surface_rib_authority
+        weighted = raw * authority * valid
         thresholds = calibration["thresholds"]
         candidate, fail = config.patchcore_candidate_threshold or thresholds["candidate"], config.patchcore_fail_threshold or thresholds["fail"]
-        mask = (weighted >= thresholds["patch_p999"]) & valid
-        image_score = float(np.quantile(weighted[valid], .995)) if np.any(valid) else 0.0
+        statistics, mask = score_anomaly_map(weighted, valid.astype(np.float32),
+                                             component_threshold=thresholds["patch_p999"])
+        image_score = max(statistics.global_score, statistics.local_score,
+                          statistics.peak_score, statistics.topk_score)
         section_scores = tuple(float(np.quantile(part[part > 0], .995)) if np.any(part > 0) else 0.0
                                for part in np.array_split(weighted, config.patchcore_section_count, axis=1))
         candidate_sections = tuple(index for index, score in enumerate(section_scores) if score >= candidate)

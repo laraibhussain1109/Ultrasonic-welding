@@ -24,8 +24,8 @@
         0.77,
         0.22
       ],
-      "camera_width": 1920,
-      "camera_height": 1080,
+      "camera_width": 3840,
+      "camera_height": 2160,
       "camera_fps": 30,
       "capture_burst_frames": 5,
       "minimum_sharpness": 60.0,
@@ -60,7 +60,7 @@
       "counting_direction": "top_to_bottom",
       "minimum_rotation_descriptor_distance": 0.06,
       "lock_roi_after_confirmation": true,
-      "production_algorithm": "patchcore_geometry",
+      "production_algorithm": "vit_surface_geometry",
       "engineering_compare_tao": false,
       "patchcore_primary": true,
       "padim_enabled": false,
@@ -68,8 +68,8 @@
       "patchcore_calibration_file": "data/models/BF-001/patchcore_calibration.json",
       "patchcore_edge_ignore_ratio": 0.05,
       "patchcore_embedding_layers": [
-        "layer2",
-        "layer3"
+        "layer1",
+        "layer2"
       ],
       "patchcore_memory_bank_size": 8192,
       "patchcore_coreset_ratio": 0.08,
@@ -89,7 +89,34 @@
       "patchcore_model_file": "data/models/BF-001/patchcore_primary.pt",
       "tao_model_file": "data/models/BF-001/visual_changenet.onnx",
       "runtime_storage_mode": "memory",
-      "yolo_presence_confidence": 0.95
+      "yolo_presence_confidence": 0.95,
+      "surface_model_file": "data/models/BF-001/vit_surface.pt",
+      "vit_backbone": "vit_small_patch14_dinov2.lvd142m",
+      "vit_weights_path": "data/models/backbones/vit_small_patch14_dinov2_lvd142m.pth",
+      "surface_tile_size": 768,
+      "surface_tile_overlap": 0.25,
+      "surface_tile_batch_size": 4,
+      "surface_memory_bank_size": 32768,
+      "reconstruction_rank": 64,
+      "surface_band_top_ratio": 0.05,
+      "surface_band_bottom_ratio": 0.95,
+      "surface_rib_authority": 0.55,
+      "surface_persistence_required": 2,
+      "surface_persistence_window": 5,
+      "surface_sensitivity": 1.0,
+      "surface_normalization_mean": [
+        0.485,
+        0.456,
+        0.406
+      ],
+      "surface_normalization_std": [
+        0.229,
+        0.224,
+        0.225
+      ],
+      "geometry_max_width": 1280,
+      "inspection_interval_ms": 50,
+      "engineering_compare_legacy": false
     },
     {
       "id": "BF-002",
@@ -114,8 +141,8 @@
         0.77,
         0.22
       ],
-      "camera_width": 1920,
-      "camera_height": 1080,
+      "camera_width": 3840,
+      "camera_height": 2160,
       "camera_fps": 30,
       "capture_burst_frames": 5,
       "minimum_sharpness": 60.0,
@@ -150,7 +177,7 @@
       "counting_direction": "top_to_bottom",
       "minimum_rotation_descriptor_distance": 0.06,
       "lock_roi_after_confirmation": true,
-      "production_algorithm": "patchcore_geometry",
+      "production_algorithm": "vit_surface_geometry",
       "engineering_compare_tao": false,
       "patchcore_primary": true,
       "padim_enabled": false,
@@ -158,8 +185,8 @@
       "patchcore_calibration_file": "data/models/BF-002/patchcore_calibration.json",
       "patchcore_edge_ignore_ratio": 0.05,
       "patchcore_embedding_layers": [
-        "layer2",
-        "layer3"
+        "layer1",
+        "layer2"
       ],
       "patchcore_memory_bank_size": 8192,
       "patchcore_coreset_ratio": 0.08,
@@ -179,7 +206,34 @@
       "patchcore_model_file": "data/models/BF-002/patchcore_primary.pt",
       "tao_model_file": "data/models/BF-002/visual_changenet.onnx",
       "runtime_storage_mode": "memory",
-      "yolo_presence_confidence": 0.95
+      "yolo_presence_confidence": 0.95,
+      "surface_model_file": "data/models/BF-002/vit_surface.pt",
+      "vit_backbone": "vit_small_patch14_dinov2.lvd142m",
+      "vit_weights_path": "data/models/backbones/vit_small_patch14_dinov2_lvd142m.pth",
+      "surface_tile_size": 768,
+      "surface_tile_overlap": 0.25,
+      "surface_tile_batch_size": 4,
+      "surface_memory_bank_size": 32768,
+      "reconstruction_rank": 64,
+      "surface_band_top_ratio": 0.05,
+      "surface_band_bottom_ratio": 0.95,
+      "surface_rib_authority": 0.55,
+      "surface_persistence_required": 2,
+      "surface_persistence_window": 5,
+      "surface_sensitivity": 1.0,
+      "surface_normalization_mean": [
+        0.485,
+        0.456,
+        0.406
+      ],
+      "surface_normalization_std": [
+        0.229,
+        0.224,
+        0.225
+      ],
+      "geometry_max_width": 1280,
+      "inspection_interval_ms": 50,
+      "engineering_compare_legacy": false
     },
     {
       "id": "BF-003",
@@ -204,8 +258,8 @@
         0.77,
         0.22
       ],
-      "camera_width": 1920,
-      "camera_height": 1080,
+      "camera_width": 3840,
+      "camera_height": 2160,
       "camera_fps": 30,
       "capture_burst_frames": 5,
       "minimum_sharpness": 60.0,
@@ -240,7 +294,7 @@
       "counting_direction": "top_to_bottom",
       "minimum_rotation_descriptor_distance": 0.06,
       "lock_roi_after_confirmation": true,
-      "production_algorithm": "patchcore_geometry",
+      "production_algorithm": "vit_surface_geometry",
       "engineering_compare_tao": false,
       "patchcore_primary": true,
       "padim_enabled": false,
@@ -248,8 +302,8 @@
       "patchcore_calibration_file": "data/models/BF-003/patchcore_calibration.json",
       "patchcore_edge_ignore_ratio": 0.05,
       "patchcore_embedding_layers": [
-        "layer2",
-        "layer3"
+        "layer1",
+        "layer2"
       ],
       "patchcore_memory_bank_size": 8192,
       "patchcore_coreset_ratio": 0.08,
@@ -269,7 +323,34 @@
       "patchcore_model_file": "data/models/BF-003/patchcore_primary.pt",
       "tao_model_file": "data/models/BF-003/visual_changenet.onnx",
       "runtime_storage_mode": "memory",
-      "yolo_presence_confidence": 0.95
+      "yolo_presence_confidence": 0.95,
+      "surface_model_file": "data/models/BF-003/vit_surface.pt",
+      "vit_backbone": "vit_small_patch14_dinov2.lvd142m",
+      "vit_weights_path": "data/models/backbones/vit_small_patch14_dinov2_lvd142m.pth",
+      "surface_tile_size": 768,
+      "surface_tile_overlap": 0.25,
+      "surface_tile_batch_size": 4,
+      "surface_memory_bank_size": 32768,
+      "reconstruction_rank": 64,
+      "surface_band_top_ratio": 0.05,
+      "surface_band_bottom_ratio": 0.95,
+      "surface_rib_authority": 0.55,
+      "surface_persistence_required": 2,
+      "surface_persistence_window": 5,
+      "surface_sensitivity": 1.0,
+      "surface_normalization_mean": [
+        0.485,
+        0.456,
+        0.406
+      ],
+      "surface_normalization_std": [
+        0.229,
+        0.224,
+        0.225
+      ],
+      "geometry_max_width": 1280,
+      "inspection_interval_ms": 50,
+      "engineering_compare_legacy": false
     },
     {
       "id": "BF-004",
@@ -294,8 +375,8 @@
         0.77,
         0.22
       ],
-      "camera_width": 1920,
-      "camera_height": 1080,
+      "camera_width": 3840,
+      "camera_height": 2160,
       "camera_fps": 30,
       "capture_burst_frames": 5,
       "minimum_sharpness": 60.0,
@@ -330,7 +411,7 @@
       "counting_direction": "top_to_bottom",
       "minimum_rotation_descriptor_distance": 0.06,
       "lock_roi_after_confirmation": true,
-      "production_algorithm": "patchcore_geometry",
+      "production_algorithm": "vit_surface_geometry",
       "engineering_compare_tao": false,
       "patchcore_primary": true,
       "padim_enabled": false,
@@ -338,8 +419,8 @@
       "patchcore_calibration_file": "data/models/BF-004/patchcore_calibration.json",
       "patchcore_edge_ignore_ratio": 0.05,
       "patchcore_embedding_layers": [
-        "layer2",
-        "layer3"
+        "layer1",
+        "layer2"
       ],
       "patchcore_memory_bank_size": 8192,
       "patchcore_coreset_ratio": 0.08,
@@ -359,7 +440,34 @@
       "patchcore_model_file": "data/models/BF-004/patchcore_primary.pt",
       "tao_model_file": "data/models/BF-004/visual_changenet.onnx",
       "runtime_storage_mode": "memory",
-      "yolo_presence_confidence": 0.95
+      "yolo_presence_confidence": 0.95,
+      "surface_model_file": "data/models/BF-004/vit_surface.pt",
+      "vit_backbone": "vit_small_patch14_dinov2.lvd142m",
+      "vit_weights_path": "data/models/backbones/vit_small_patch14_dinov2_lvd142m.pth",
+      "surface_tile_size": 768,
+      "surface_tile_overlap": 0.25,
+      "surface_tile_batch_size": 4,
+      "surface_memory_bank_size": 32768,
+      "reconstruction_rank": 64,
+      "surface_band_top_ratio": 0.05,
+      "surface_band_bottom_ratio": 0.95,
+      "surface_rib_authority": 0.55,
+      "surface_persistence_required": 2,
+      "surface_persistence_window": 5,
+      "surface_sensitivity": 1.0,
+      "surface_normalization_mean": [
+        0.485,
+        0.456,
+        0.406
+      ],
+      "surface_normalization_std": [
+        0.229,
+        0.224,
+        0.225
+      ],
+      "geometry_max_width": 1280,
+      "inspection_interval_ms": 50,
+      "engineering_compare_legacy": false
     }
   ]
 }

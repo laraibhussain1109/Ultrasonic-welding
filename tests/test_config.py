@@ -33,8 +33,8 @@ def test_model_registry_defaults_camera_and_allows_missing_roi(tmp_path):
     model = registry.get("BF-001")
 
     assert model.roi_ratios is None
-    assert model.camera_width == 1920
-    assert model.camera_height == 1080
+    assert model.camera_width == 3840
+    assert model.camera_height == 2160
     assert model.camera_fps == 30
     assert model.image_size == 640
     assert model.counting_line_ratio == 0.45
@@ -98,12 +98,13 @@ def test_model_registry_persists_tao_artifact_path(tmp_path):
     assert str(ModelRegistry(path).get("BF-001").model_file) == "models/export.onnx"
 
 
-def test_supplied_models_are_patchcore_production_with_separate_tao_artifacts():
+def test_supplied_models_are_vit_surface_production_with_legacy_comparison_artifacts():
     models = ModelRegistry("config/models.json").all()
 
     assert models
     assert all(model.algorithm == "hybrid_patchcore_geometry" for model in models)
-    assert all(model.production_algorithm == "patchcore_geometry" for model in models)
+    assert all(model.production_algorithm == "vit_surface_geometry" for model in models)
+    assert all(model.surface_tile_size == 768 and model.surface_tile_overlap == .25 for model in models)
     assert all(model.model_file.suffix == ".pt" for model in models)
     assert all(model.patchcore_model_file == model.model_file for model in models)
     assert all(model.tao_model_file is not None and model.tao_model_file.suffix == ".onnx" for model in models)

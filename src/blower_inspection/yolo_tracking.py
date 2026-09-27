@@ -127,6 +127,7 @@ class RotatingPartSession:
     geometry_candidate_views: int = 0
     confirmed_defect_views: int = 0
     last_candidate_sections: set[int] = field(default_factory=set)
+    candidate_window: list[set[int]] = field(default_factory=list)
     confirmed_defect_sections: set[int] = field(default_factory=set)
     reason_codes: set[str] = field(default_factory=set)
 
@@ -159,6 +160,7 @@ class RotatingPartInspector:
         weak_candidate_required_views: int = 2,
         completion_mode: str = "counting_line",
         counting_axis: str = "x",
+        persistence_window: int = 5,
     ) -> None:
         if not 0.0 < counting_line_ratio < 1.0:
             raise ValueError("counting_line_ratio must be between 0 and 1")
@@ -176,6 +178,7 @@ class RotatingPartInspector:
         self.counting_axis = counting_axis
         self.minimum_rotation_views = max(1, int(minimum_rotation_views))
         self.weak_candidate_required_views = max(1, int(weak_candidate_required_views))
+        self.persistence_window = max(self.weak_candidate_required_views, int(persistence_window))
         self.completion_mode = completion_mode
         self.sessions: dict[int, RotatingPartSession] = {}
         self.track_to_part: dict[int, int] = {}
@@ -250,20 +253,29 @@ class RotatingPartInspector:
             session.valid_views += 1
         if geometry_score >= 1.0:
             session.geometry_strong_views += 1
+        if view_valid:
+            window_sections = set(candidate_sections)
+            session.candidate_window.append((window_sections or {-1}) if provisional_candidate else set())
+            session.candidate_window[:] = session.candidate_window[-self.persistence_window:]
         if provisional_candidate:
             session.patchcore_candidate_views += 1
             sections = set(candidate_sections)
-            # A repeated scalar spike is not persistence. Require the anomaly
-            # to recur in at least one longitudinal section. Legacy callers
-            # without section evidence retain their former behavior.
-            if not sections or not session.last_candidate_sections or sections & session.last_candidate_sections:
-                session.persistent_candidate_count += 1
+            # Sliding valid-view persistence allows candidate/PASS/candidate
+            # while still requiring a matching longitudinal physical location.
+            if sections:
+                session.persistent_candidate_count = max(
+                    sum(bool(item & {section}) for item in session.candidate_window)
+                    for section in sections
+                )
             else:
-                session.persistent_candidate_count = 1
+                session.persistent_candidate_count = sum(-1 in item for item in session.candidate_window)
             session.last_candidate_sections = sections
-        else:
-            session.persistent_candidate_count = 0
-            session.last_candidate_sections.clear()
+        elif view_valid:
+            localized = [item for item in session.candidate_window if item]
+            session.persistent_candidate_count = max(
+                (sum(bool(item & {section}) for item in localized)
+                 for section in set().union(*localized)), default=0
+            )
         # Old callers preserve fail-latching. Hybrid callers explicitly label
         # severe versus provisional evidence.
         severe = (not is_pass) if immediate_failure is None else immediate_failure
@@ -275,6 +287,8 @@ class RotatingPartInspector:
             session.confirmed_defect_views += 1
         session.has_failure |= severe or session.persistent_candidate_count >= self.weak_candidate_required_views
         if severe or session.persistent_candidate_count >= self.weak_candidate_required_views:
+            if not severe:
+                session.reason_codes.add("PERSISTENT_SURFACE_ANOMALY")
             # Sections run along the cylinder axis, so their screen x-position
             # remains useful even after the defective circumference rotates out
             # of sight. Preserve every confirmed location for the whole part.
