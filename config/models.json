@@ -116,7 +116,9 @@
       ],
       "geometry_max_width": 1280,
       "inspection_interval_ms": 50,
-      "engineering_compare_legacy": false
+      "engineering_compare_legacy": false,
+      "vit_auto_download": true,
+      "surface_require_gpu": true
     },
     {
       "id": "BF-002",
@@ -233,7 +235,9 @@
       ],
       "geometry_max_width": 1280,
       "inspection_interval_ms": 50,
-      "engineering_compare_legacy": false
+      "engineering_compare_legacy": false,
+      "vit_auto_download": true,
+      "surface_require_gpu": true
     },
     {
       "id": "BF-003",
@@ -350,7 +354,9 @@
       ],
       "geometry_max_width": 1280,
       "inspection_interval_ms": 50,
-      "engineering_compare_legacy": false
+      "engineering_compare_legacy": false,
+      "vit_auto_download": true,
+      "surface_require_gpu": true
     },
     {
       "id": "BF-004",
@@ -467,7 +473,9 @@
       ],
       "geometry_max_width": 1280,
       "inspection_interval_ms": 50,
-      "engineering_compare_legacy": false
+      "engineering_compare_legacy": false,
+      "vit_auto_download": true,
+      "surface_require_gpu": true
     }
   ]
 }

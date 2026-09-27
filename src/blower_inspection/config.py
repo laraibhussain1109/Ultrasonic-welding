@@ -120,6 +120,8 @@ class PartModelConfig:
     surface_model_file: Path | None = None
     vit_backbone: str = "vit_small_patch14_dinov2.lvd142m"
     vit_weights_path: Path | None = None
+    vit_auto_download: bool = True
+    surface_require_gpu: bool = True
     surface_tile_size: int = 768
     surface_tile_overlap: float = 0.25
     surface_tile_batch_size: int = 4
@@ -309,6 +311,8 @@ class ModelRegistry:
             surface_model_file=Path(entry["surface_model_file"]) if entry.get("surface_model_file") else None,
             vit_backbone=str(entry.get("vit_backbone", "vit_small_patch14_dinov2.lvd142m")),
             vit_weights_path=Path(entry["vit_weights_path"]) if entry.get("vit_weights_path") else None,
+            vit_auto_download=bool(entry.get("vit_auto_download", True)),
+            surface_require_gpu=bool(entry.get("surface_require_gpu", True)),
             surface_tile_size=max(224, int(entry.get("surface_tile_size", 768))),
             surface_tile_overlap=min(.75, max(0., float(entry.get("surface_tile_overlap", .25)))),
             surface_tile_batch_size=max(1, int(entry.get("surface_tile_batch_size", 4))),

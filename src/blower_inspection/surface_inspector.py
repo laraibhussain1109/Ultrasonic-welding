@@ -175,16 +175,36 @@ class TiledViTSurfaceInspector:
         self._model: Any = None
         self._torch: Any = None
         self._checkpoint_cache: tuple[float, dict[str, Any]] | None = None
+        self._search_cache: tuple[int, Any, Any, Any, Any] | None = None
 
     @staticmethod
     def _path(config: PartModelConfig) -> Path:
         return config.surface_model_file or config.model_file
 
-    def _device(self):
+    def _device(self, config: PartModelConfig | None = None):
         torch = self._require("torch", "Install the industrial dependencies with: pip install -e '.[industrial]'")
         if self._torch is None:
             self._torch = torch
-        return torch.device(self.device_name or ("cuda" if torch.cuda.is_available() else "cpu"))
+        if self.device_name:
+            device = torch.device(self.device_name)
+        elif torch.cuda.is_available():
+            # CUDA is always selected ahead of CPU. CUDA index zero is the
+            # production default; an explicit constructor device can override it.
+            device = torch.device("cuda:0")
+        else:
+            device = torch.device("cpu")
+        if config is not None and config.surface_require_gpu and device.type != "cuda":
+            cuda_build = getattr(getattr(torch, "version", None), "cuda", None) or "CPU-only"
+            raise RuntimeError(
+                "CUDA GPU REQUIRED FOR SURFACE INSPECTION — PyTorch cannot access CUDA. "
+                f"Installed PyTorch build: {cuda_build}. Install a CUDA-enabled PyTorch build "
+                "supported by the installed NVIDIA driver, then verify torch.cuda.is_available()."
+            )
+        if device.type == "cuda":
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+        return device
 
     @staticmethod
     def _require(name: str, hint: str):
@@ -196,27 +216,43 @@ class TiledViTSurfaceInspector:
     def _build_model(self, config: PartModelConfig):
         if self._model is not None:
             return self._model
-        timm = self._require("timm", "Install timm, then provision the configured DINOv2 weights locally.")
-        weights = config.vit_weights_path
-        if weights is None or not weights.is_file():
+        timm = self._require("timm", "Install the industrial dependencies so DINOv2 can be downloaded and cached.")
+        weights = config.vit_weights_path or Path("data/models/backbones") / f"{config.vit_backbone}.pth"
+        if weights.is_file():
+            model = timm.create_model(config.vit_backbone, pretrained=False, num_classes=0)
+            state = self._torch.load(weights, map_location="cpu", weights_only=True)
+            if isinstance(state, dict) and "state_dict" in state:
+                state = state["state_dict"]
+            state = {key.removeprefix("module."): value for key, value in state.items()}
+            missing, unexpected = model.load_state_dict(state, strict=False)
+            if len(missing) > 8 or unexpected:
+                raise RuntimeError(f"DINOv2 weight/backbone mismatch: missing={missing[:8]}, unexpected={unexpected[:8]}")
+        elif config.vit_auto_download:
+            try:
+                # timm uses the model's official pretrained configuration and
+                # Hugging Face cache. Persist our own atomic copy so subsequent
+                # starts work offline and never redownload the checkpoint.
+                model = timm.create_model(config.vit_backbone, pretrained=True, num_classes=0)
+                weights.parent.mkdir(parents=True, exist_ok=True)
+                temporary = weights.with_suffix(weights.suffix + ".part")
+                self._torch.save(model.state_dict(), temporary)
+                temporary.replace(weights)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Automatic DINOv2 download failed for {config.vit_backbone!r}. "
+                    "Check internet/proxy access to Hugging Face, or copy a compatible checkpoint to "
+                    f"{weights}. Original error: {exc}"
+                ) from exc
+        else:
             raise RuntimeError(
-                "DINOv2 weights are not available locally. Set vit_weights_path for this model. "
-                "Weights are never downloaded silently during production startup."
+                f"DINOv2 weights are missing at {weights} and vit_auto_download is disabled."
             )
-        model = timm.create_model(config.vit_backbone, pretrained=False, num_classes=0)
-        state = self._torch.load(weights, map_location="cpu", weights_only=True)
-        if isinstance(state, dict) and "state_dict" in state:
-            state = state["state_dict"]
-        state = {key.removeprefix("module."): value for key, value in state.items()}
-        missing, unexpected = model.load_state_dict(state, strict=False)
-        if len(missing) > 8 or unexpected:
-            raise RuntimeError(f"DINOv2 weight/backbone mismatch: missing={missing[:8]}, unexpected={unexpected[:8]}")
-        model.eval().to(self._device())
+        model.eval().to(self._device(config))
         self._model = model
         return model
 
     def _tokens(self, images: list[np.ndarray], config: PartModelConfig) -> tuple[np.ndarray, tuple[int, int]]:
-        device = self._device()
+        device = self._device(config)
         torch, model = self._torch, self._build_model(config)
         arrays = []
         for image in images:
@@ -244,23 +280,31 @@ class TiledViTSurfaceInspector:
         _u, _s, vt = np.linalg.svd(centered, full_matrices=False)
         return mean, vt[:min(rank, vt.shape[0])].astype(np.float32)
 
-    @staticmethod
-    def _branch_maps(tokens: np.ndarray, grid: tuple[int, int], checkpoint: dict[str, Any]) -> tuple[list[np.ndarray], list[np.ndarray]]:
-        flat = tokens.reshape(-1, tokens.shape[-1]).astype(np.float32)
-        memory = np.asarray(checkpoint["memory_bank"], np.float32)
-        # Bounded chunks avoid a patches x memory allocation exceeding 12 GB.
+    def _branch_maps(self, tokens: np.ndarray, grid: tuple[int, int], checkpoint: dict[str, Any],
+                     config: PartModelConfig) -> tuple[list[np.ndarray], list[np.ndarray]]:
+        torch, device = self._torch, self._device(config)
+        flat = torch.as_tensor(tokens.reshape(-1, tokens.shape[-1]), dtype=torch.float32,
+                               device=device)
+        cache_key = id(checkpoint)
+        if self._search_cache is None or self._search_cache[0] != cache_key:
+            memory = torch.as_tensor(checkpoint["memory_bank"], dtype=torch.float32, device=device)
+            memory_norm = (memory * memory).sum(1).unsqueeze(0)
+            mean = torch.as_tensor(checkpoint["reconstruction_mean"], dtype=torch.float32, device=device)
+            basis = torch.as_tensor(checkpoint["reconstruction_basis"], dtype=torch.float32, device=device)
+            self._search_cache = cache_key, memory, memory_norm, mean, basis
+        _, memory, memory_norm, mean, basis = self._search_cache
+        # Bounded GPU chunks avoid a patches x memory allocation exceeding 12 GB.
         nearest = []
         for start in range(0, len(flat), 2048):
             query = flat[start:start + 2048]
-            distance = np.maximum((query * query).sum(1, keepdims=True) + (memory * memory).sum(1)[None]
-                                  - 2 * query @ memory.T, 0)
-            nearest.append(np.sqrt(distance.min(1)))
-        memory_score = np.concatenate(nearest).reshape(tokens.shape[0], *grid)
-        mean, basis = np.asarray(checkpoint["reconstruction_mean"]), np.asarray(checkpoint["reconstruction_basis"])
+            distance = ((query * query).sum(1, keepdim=True) + memory_norm
+                        - 2 * query @ memory.T).clamp_min_(0)
+            nearest.append(distance.min(1).values.sqrt_())
+        memory_score = torch.cat(nearest).reshape(tokens.shape[0], *grid)
         centered = flat - mean
         reconstruction = centered @ basis.T @ basis + mean
-        residual = np.sqrt(np.mean((flat - reconstruction) ** 2, axis=1)).reshape(tokens.shape[0], *grid)
-        return list(memory_score), list(residual)
+        residual = torch.mean((flat - reconstruction) ** 2, dim=1).sqrt_().reshape(tokens.shape[0], *grid)
+        return list(memory_score.cpu().numpy()), list(residual.cpu().numpy())
 
     @staticmethod
     def _metadata(config: PartModelConfig) -> dict[str, Any]:
@@ -279,7 +323,10 @@ class TiledViTSurfaceInspector:
             raise RuntimeError("MODEL CONFIGURATION MISMATCH — RETRAIN REQUIRED: " + ", ".join(mismatches))
 
     def runtime_device_name(self) -> str:
-        return str(self._device())
+        device = self._device()
+        if device.type == "cuda":
+            return f"{device} ({self._torch.cuda.get_device_name(device.index or 0)})"
+        return str(device)
 
     def runtime_summary(self) -> str:
         return "DINOv2 tiled memory + PCA feature reconstruction + calibrated fin geometry"
@@ -287,6 +334,9 @@ class TiledViTSurfaceInspector:
     def validate_ready(self, config: PartModelConfig) -> None:
         checkpoint = self._load(config)
         self._validate(config, checkpoint)
+        # Readiness includes the actual feature extractor. This verifies CUDA
+        # and performs the one-time automatic pretrained-weight download.
+        self._build_model(config)
 
     def train(self, config: PartModelConfig, progress_callback=None) -> Path:
         paths = list_images(config.normal_image_dir)
@@ -367,7 +417,7 @@ class TiledViTSurfaceInspector:
         stamp = path.stat().st_mtime
         if self._checkpoint_cache and self._checkpoint_cache[0] == stamp:
             return self._checkpoint_cache[1]
-        self._device()
+        self._device(config)
         checkpoint = self._torch.load(path, map_location="cpu", weights_only=True)
         self._checkpoint_cache = stamp, checkpoint
         return checkpoint
@@ -378,7 +428,7 @@ class TiledViTSurfaceInspector:
         for start in range(0, len(tiles), config.surface_tile_batch_size):
             batch = tiles[start:start + config.surface_tile_batch_size]
             tokens, grid = self._tokens([tile.image for tile in batch], config)
-            memory, reconstruction = self._branch_maps(tokens, grid, checkpoint)
+            memory, reconstruction = self._branch_maps(tokens, grid, checkpoint, config)
             memory_maps.extend(memory)
             reconstruction_maps.extend(reconstruction)
         shape = roi.shape[:2]
