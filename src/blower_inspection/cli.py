@@ -14,6 +14,7 @@ from .config import ModelRegistry, ensure_model_folders
 from .esp32_output import ESP32FailOutput
 from .dataset import prepare_yolo_dataset
 from .inspector_factory import inspector_for_model
+from .qualification import run_qualification
 from .tao_training import (
     copy_default_visual_changenet_spec,
     download_visual_changenet_pretrained,
@@ -112,6 +113,12 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("image")
     inspect.add_argument("--esp32-output", action="store_true", help="Send FAIL/PASS output to ESP32 after inspecting the image")
 
+    qualify = sub.add_parser("qualify", help="Evaluate a frozen model on independent good/NG parts")
+    qualify.add_argument("model_id")
+    qualify.add_argument("--good", required=True, help="Independent known-good qualification folder")
+    qualify.add_argument("--ng", required=True, help="Known-defect qualification folder with optional category subfolders")
+    qualify.add_argument("--output", help="Qualification JSON output path")
+
     prepare = sub.add_parser("prepare-dataset", help="YOLO-crop known-good full-FOV images for training")
     prepare.add_argument("model_id", help="Configured part model whose YOLO checkpoint should be used")
     prepare.add_argument("source", help="Directory containing known-good full-FOV images")
@@ -141,7 +148,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Python executable: {Path(sys.executable).resolve()}")
         print(f"Imported CLI: {package_file}")
         print(f"Model registry: {Path(args.models).resolve()}")
-        print("Supported PatchCore algorithms: hybrid_patchcore_geometry, patchcore_geometry, patchcore_primary")
+        print("Production backend: phase-aware golden reference + tiled DINOv2 + reconstruction + fin geometry")
+        print("Legacy engineering backends: hybrid_patchcore_geometry, patchcore_geometry, patchcore_primary")
         print(f"Supported completion modes: {', '.join(sorted(SUPPORTED_COMPLETION_MODES))}")
         failed = False
         for model in registry.all():
@@ -189,12 +197,21 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Calibrating TAO export {model.model_file} with normals in {model.normal_image_dir}...")
         else:
             print(
-                f"Auto-cropping {model.normal_image_dir} in memory with {model.yolo_model_path} "
-                "before training (source images will not be modified)..."
+                f"Training phase-aware golden reference + DINOv2 surface + fin geometry from "
+                f"{model.normal_image_dir} with {model.yolo_model_path} (sources are not modified)..."
             )
         output = inspector.train(model, progress_callback=_print_progress)
-        action = "Calibrated" if not patchcore_production and model.algorithm == "nvidia_tao" else "Trained"
+        action = ("Calibrated" if not patchcore_production and model.algorithm == "nvidia_tao"
+                  else "Training complete — validation required")
         print(f"{action} {model.id}: {output}")
+        return 0
+
+    if args.command == "qualify":
+        model = registry.get(args.model_id)
+        inspector = inspector_for_model(model)
+        inspector.validate_ready(model)
+        report = run_qualification(inspector, model, args.good, args.ng, args.output)
+        print(f"Frozen-model qualification report: {report}")
         return 0
 
     if args.command == "tao-init":

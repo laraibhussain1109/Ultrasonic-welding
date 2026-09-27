@@ -64,7 +64,9 @@ def fuse_evidence(tao: TaoEvidence, geometry: GeometryEvidence, *, glare_score: 
                               confirmed_mask=tao.defect_mask | geometry.defect_mask)
     if tao.anomaly_score >= tao_candidate_threshold:
         if likely_glare:
-            return HybridDecision("PASS", min(.69, .25 * min(t, 1.0) + .2 * g), ("LIKELY_GLARE",))
+            return HybridDecision("CANDIDATE", min(.99, .7 * t + .2 * g),
+                                  ("PERSISTENT_VISUAL_CHANGE", "LIKELY_GLARE"),
+                                  provisional_candidate=True, confirmed_mask=tao.defect_mask)
         if geometry.score < geometry_candidate_threshold and not localized_tao_change:
             reason = "MINOR_VISUAL_CHANGE" if tao_area_ratio < tao_candidate_min_area_ratio else "UNLOCALIZED_TAO_CHANGE"
             return HybridDecision("PASS", min(.69, .25 * min(t, 1.0) + .2 * g), (reason,))
