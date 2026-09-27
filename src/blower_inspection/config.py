@@ -149,6 +149,16 @@ class PartModelConfig:
     surface_normalization_std: tuple[float, float, float] = (0.229, 0.224, 0.225)
     geometry_max_width: int = 1280
     inspection_interval_ms: int = 50
+    golden_reference_enabled: bool = True
+    golden_phase_bins: int = 12
+    golden_candidates: int = 3
+    golden_registration_enabled: bool = True
+    golden_min_match_quality: float = 0.45
+    golden_noise_floor: float = 0.08
+    golden_max_component_ratio: float = 0.03
+    training_split_seed: int = 42
+    memory_longitudinal_sections: int = 6
+    memory_phase_neighborhood: int = 1
 
 
 class ModelRegistry:
@@ -348,6 +358,16 @@ class ModelRegistry:
             surface_normalization_std=tuple(float(value) for value in entry.get("surface_normalization_std", [.229, .224, .225])),
             geometry_max_width=max(320, int(entry.get("geometry_max_width", 1280))),
             inspection_interval_ms=max(1, int(entry.get("inspection_interval_ms", 50))),
+            golden_reference_enabled=bool(entry.get("golden_reference_enabled", True)),
+            golden_phase_bins=max(2, int(entry.get("golden_phase_bins", 12))),
+            golden_candidates=max(1, int(entry.get("golden_candidates", 3))),
+            golden_registration_enabled=bool(entry.get("golden_registration_enabled", True)),
+            golden_min_match_quality=float(entry.get("golden_min_match_quality", .45)),
+            golden_noise_floor=max(.01, float(entry.get("golden_noise_floor", .08))),
+            golden_max_component_ratio=min(.25, max(.0001, float(entry.get("golden_max_component_ratio", .03)))),
+            training_split_seed=int(entry.get("training_split_seed", 42)),
+            memory_longitudinal_sections=max(1, int(entry.get("memory_longitudinal_sections", 6))),
+            memory_phase_neighborhood=max(0, int(entry.get("memory_phase_neighborhood", 1))),
         )
 
 

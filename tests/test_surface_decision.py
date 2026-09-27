@@ -1,4 +1,16 @@
-from blower_inspection.surface_decision import surface_decision_state
+from blower_inspection.surface_decision import production_status, surface_decision_state
+
+
+def test_strong_learned_appearance_alone_requires_persistence():
+    assert production_status(appearance_candidate=True, appearance_strong=True,
+                             golden_candidate=False, golden_structural_strong=False,
+                             geometry_fail=False, fine_break_strong=False) == "CANDIDATE"
+
+
+def test_native_structural_break_fails_immediately():
+    assert production_status(appearance_candidate=False, appearance_strong=False,
+                             golden_candidate=False, golden_structural_strong=False,
+                             geometry_fail=False, fine_break_strong=True) == "FAIL"
 
 
 def decide(**overrides):

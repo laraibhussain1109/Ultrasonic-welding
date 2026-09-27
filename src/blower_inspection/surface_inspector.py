@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+import hashlib
 import json
 from pathlib import Path
 import time
@@ -22,15 +23,17 @@ import numpy as np
 from .camera import crop_component_roi
 from .config import PartModelConfig
 from .frame_quality import FrameQualityAnalyzer
+from .golden_reference import GOLDEN_REFERENCE_VERSION, GoldenReferenceBank
 from .geometry_inspector import (
     FinGeometryInspector, glare_evidence, inspection_band_mask, support_rib_mask,
 )
-from .trainer import InspectionResult, broken_fin_mask, list_images
-from .surface_decision import surface_decision_state
+from .trainer import InspectionResult, broken_fin_mask
+from .training_dataset import split_physical_groups
+from .surface_decision import production_status, surface_decision_state
 from .vit_tokens import spatial_patch_tokens
 from .yolo_tracking import YoloByteTrackDetector
 
-SURFACE_MODEL_VERSION = 1
+SURFACE_MODEL_VERSION = 3
 PREPROCESSING_VERSION = "native-tile-rgb-imagenet-v1"
 
 
@@ -188,6 +191,37 @@ def robust_limit(values: list[float], multiplier: float) -> float:
     return max(float(np.quantile(array, .995)), median + multiplier * 1.4826 * max(mad, 1e-6))
 
 
+def representative_memory(strata: dict[tuple[int, int], list[np.ndarray]], limit: int,
+                          *, seed: int = 42) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
+    """Deterministic stratified farthest-first memory preserving phase/position."""
+    if not strata:
+        raise ValueError("No DINO feature candidates were extracted")
+    keys = sorted(strata)
+    quota = max(1, limit // len(keys))
+    selected, phases, sections, counts = [], [], [], {}
+    for phase, section in keys:
+        pool = np.concatenate(strata[(phase, section)]).astype(np.float32)
+        target = min(len(pool), quota)
+        # Bound k-center candidates deterministically for practical training.
+        if len(pool) > max(target * 8, 4096):
+            indices = np.linspace(0, len(pool) - 1, max(target * 8, 4096)).astype(int)
+            pool = pool[indices]
+        chosen = [int((seed + phase * 31 + section * 17) % len(pool))]
+        nearest = np.sum((pool - pool[chosen[0]]) ** 2, axis=1)
+        while len(chosen) < target:
+            index = int(np.argmax(nearest)); chosen.append(index)
+            nearest = np.minimum(nearest, np.sum((pool - pool[index]) ** 2, axis=1))
+        picked = pool[chosen]
+        selected.append(picked)
+        phases.extend([phase] * len(picked)); sections.extend([section] * len(picked))
+        counts[f"phase_{phase}/section_{section}"] = {"candidates": int(len(pool)), "selected": len(picked)}
+    memory = np.concatenate(selected)
+    if len(memory) > limit:
+        keep = np.linspace(0, len(memory) - 1, limit).astype(int)
+        memory = memory[keep]; phases = np.asarray(phases)[keep].tolist(); sections = np.asarray(sections)[keep].tolist()
+    return memory, np.asarray(phases, np.int16), np.asarray(sections, np.int16), counts
+
+
 def largest_component_area(mask: np.ndarray) -> int:
     """Return the largest localized region without averaging it over the ROI."""
     count, _labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), 8)
@@ -219,7 +253,9 @@ class TiledViTSurfaceInspector:
         self._model: Any = None
         self._torch: Any = None
         self._checkpoint_cache: tuple[float, dict[str, Any]] | None = None
-        self._search_cache: tuple[int, Any, Any, Any, Any] | None = None
+        self._search_cache: tuple[int, Any, Any, Any, Any, Any, Any] | None = None
+        self._golden_cache: tuple[float, GoldenReferenceBank] | None = None
+        self._weights_digest: tuple[Path, float, str] | None = None
 
     @staticmethod
     def _path(config: PartModelConfig) -> Path:
@@ -334,7 +370,8 @@ class TiledViTSurfaceInspector:
         return mean, vt[:min(rank, vt.shape[0])].astype(np.float32)
 
     def _branch_maps(self, tokens: np.ndarray, grid: tuple[int, int], checkpoint: dict[str, Any],
-                     config: PartModelConfig) -> tuple[list[np.ndarray], list[np.ndarray]]:
+                     config: PartModelConfig, *, phase: int | None = None,
+                     sections: list[int] | None = None) -> tuple[list[np.ndarray], list[np.ndarray]]:
         torch, device = self._torch, self._device(config)
         flat = torch.as_tensor(tokens.reshape(-1, tokens.shape[-1]), dtype=torch.float32,
                                device=device)
@@ -344,25 +381,56 @@ class TiledViTSurfaceInspector:
             memory_norm = (memory * memory).sum(1).unsqueeze(0)
             mean = torch.as_tensor(checkpoint["reconstruction_mean"], dtype=torch.float32, device=device)
             basis = torch.as_tensor(checkpoint["reconstruction_basis"], dtype=torch.float32, device=device)
-            self._search_cache = cache_key, memory, memory_norm, mean, basis
-        _, memory, memory_norm, mean, basis = self._search_cache
+            phases = torch.as_tensor(checkpoint.get("memory_phases", []), dtype=torch.int16, device=device)
+            memory_sections = torch.as_tensor(checkpoint.get("memory_sections", []), dtype=torch.int16, device=device)
+            self._search_cache = cache_key, memory, memory_norm, mean, basis, phases, memory_sections
+        _, memory, memory_norm, mean, basis, phases, memory_sections = self._search_cache
         # Bounded GPU chunks avoid a patches x memory allocation exceeding 12 GB.
-        nearest = []
-        for start in range(0, len(flat), 2048):
-            query = flat[start:start + 2048]
-            distance = ((query * query).sum(1, keepdim=True) + memory_norm
-                        - 2 * query @ memory.T).clamp_min_(0)
-            nearest.append(distance.min(1).values.sqrt_())
-        memory_score = torch.cat(nearest).reshape(tokens.shape[0], *grid)
+        memory_maps = []
+        patch_count = grid[0] * grid[1]
+        phase_count = max(config.golden_phase_bins, 1)
+        for sample in range(tokens.shape[0]):
+            selected = torch.ones(memory.shape[0], dtype=torch.bool, device=device)
+            if phase is not None and len(phases) == len(memory):
+                delta = torch.abs(phases.to(torch.int32) - int(phase))
+                delta = torch.minimum(delta, phase_count - delta)
+                selected &= delta <= config.memory_phase_neighborhood
+            if sections is not None and len(memory_sections) == len(memory):
+                selected &= memory_sections == int(sections[sample])
+            if int(selected.sum()) < 32:
+                selected[:] = True  # safe compatibility fallback, recorded by model version
+            bank, norms = memory[selected], memory_norm[:, selected]
+            query_all = flat[sample * patch_count:(sample + 1) * patch_count]
+            nearest = []
+            for start in range(0, len(query_all), 2048):
+                query = query_all[start:start + 2048]
+                distance = ((query * query).sum(1, keepdim=True) + norms
+                            - 2 * query @ bank.T).clamp_min_(0)
+                nearest.append(distance.min(1).values.sqrt_())
+            memory_maps.append(torch.cat(nearest).reshape(*grid))
+        memory_score = torch.stack(memory_maps)
         centered = flat - mean
         reconstruction = centered @ basis.T @ basis + mean
         residual = torch.mean((flat - reconstruction) ** 2, dim=1).sqrt_().reshape(tokens.shape[0], *grid)
         return list(memory_score.cpu().numpy()), list(residual.cpu().numpy())
 
-    @staticmethod
-    def _metadata(config: PartModelConfig) -> dict[str, Any]:
+    def _weight_sha256(self, config: PartModelConfig) -> str:
+        path = config.vit_weights_path
+        if path is None or not path.is_file():
+            return "unavailable"
+        stamp = path.stat().st_mtime
+        if self._weights_digest is None or self._weights_digest[:2] != (path, stamp):
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                for block in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(block)
+            self._weights_digest = path, stamp, digest.hexdigest()
+        return self._weights_digest[2]
+
+    def _metadata(self, config: PartModelConfig) -> dict[str, Any]:
         return {"version": SURFACE_MODEL_VERSION, "preprocessing_version": PREPROCESSING_VERSION,
                 "backbone": config.vit_backbone, "tile_size": config.surface_tile_size,
+                "weights_sha256": self._weight_sha256(config),
                 "vit_input_size": config.vit_input_size,
                 "tile_overlap": config.surface_tile_overlap,
                 "surface_near_candidate_ratio": config.surface_near_candidate_ratio,
@@ -370,6 +438,17 @@ class TiledViTSurfaceInspector:
                 "surface_corroboration_max_area_ratio": config.surface_corroboration_max_area_ratio,
                 "fine_break_candidate_area_px": config.fine_break_candidate_area_px,
                 "fine_break_strong_area_px": config.fine_break_strong_area_px,
+                "golden_reference_version": GOLDEN_REFERENCE_VERSION,
+                "golden_reference_enabled": config.golden_reference_enabled,
+                "golden_registration_enabled": config.golden_registration_enabled,
+                "golden_phase_bins": config.golden_phase_bins,
+                "golden_candidates": config.golden_candidates,
+                "golden_min_match_quality": config.golden_min_match_quality,
+                "golden_noise_floor": config.golden_noise_floor,
+                "memory_longitudinal_sections": config.memory_longitudinal_sections,
+                "memory_phase_neighborhood": config.memory_phase_neighborhood,
+                "reconstruction_rank": config.reconstruction_rank,
+                "roi_ratios": list(config.roi_ratios) if config.roi_ratios else None,
                 "normalization_mean": list(config.surface_normalization_mean),
                 "normalization_std": list(config.surface_normalization_std),
                 "camera_resolution": [config.camera_width, config.camera_height]}
@@ -398,7 +477,14 @@ class TiledViTSurfaceInspector:
         self._build_model(config)
 
     def train(self, config: PartModelConfig, progress_callback=None) -> Path:
-        paths = list_images(config.normal_image_dir)
+        if not config.golden_reference_enabled or not config.golden_registration_enabled:
+            raise ValueError("Production vit_surface_geometry requires enabled golden references and registration")
+        dataset_split = split_physical_groups(config.normal_image_dir, seed=config.training_split_seed)
+        paths = list(dataset_split.training + dataset_split.calibration + dataset_split.validation)
+        hard_good_paths = (sorted(path for path in config.hard_good_dir.rglob("*")
+                                  if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"})
+                           if config.hard_good_dir and config.hard_good_dir.exists() else [])
+        paths.extend(path for path in hard_good_paths if path not in paths)
         if len(paths) < 6:
             raise ValueError("At least six diverse normal rotational views are required")
         detector = YoloByteTrackDetector(config.yolo_model_path, config.yolo_confidence) if config.yolo_model_path else None
@@ -410,7 +496,15 @@ class TiledViTSurfaceInspector:
             if frame is None:
                 rejected.append({"path": str(path), "reasons": ["UNREADABLE"]})
                 continue
-            roi = detector.exact_crop(frame) if detector else crop_component_roi(frame, roi_ratios=config.roi_ratios)
+            # Admin-approved hard-good captures are saved from the already
+            # locked native ROI.  Running part localisation on them again can
+            # crop the blower twice and poison calibration/reference data.
+            if path in hard_good_paths:
+                roi = frame
+            else:
+                roi = detector.exact_crop(frame) if detector else crop_component_roi(
+                    frame, roi_ratios=config.roi_ratios
+                )
             result = quality.analyze(roi)
             row = {"path": str(path), "sharpness": result.sharpness, "saturation": result.saturation_ratio,
                    "glare": result.glare_ratio, "dark": result.dark_ratio, "reasons": list(result.reasons)}
@@ -424,30 +518,74 @@ class TiledViTSurfaceInspector:
                                                "rejected": rejected,
                                                "error": "INSUFFICIENT_DIVERSE_NORMAL_VIEWS"}, indent=2) + "\n")
             raise ValueError(f"Only {len(accepted)} quality/diverse images remain; see the training report")
-        split = max(1, int(round(len(accepted) * .2)))
-        calibration, training = accepted[::max(1, len(accepted) // split)][:split], []
-        calibration_paths = {item[0] for item in calibration}
-        training = [item for item in accepted if item[0] not in calibration_paths]
-        all_tokens: list[np.ndarray] = []
+        duplicates, near_duplicates, unique, signatures = [], [], [], {}
+        for item in accepted:
+            path, roi, _row = item
+            group = next((key for key, members in dataset_split.groups.items() if path in members), "hard_good")
+            thumb = cv2.resize(cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY), (96, 32), interpolation=cv2.INTER_AREA)
+            digest = hashlib.sha256(thumb.tobytes()).hexdigest()
+            previous = signatures.setdefault(group, [])
+            if any(old_digest == digest for old_digest, _old_thumb, _old_path in previous):
+                duplicates.append(str(path)); continue
+            close = next((old_path for _old_digest, old_thumb, old_path in previous
+                          if float(np.mean(np.abs(thumb.astype(np.float32) - old_thumb.astype(np.float32)))) <= .25), None)
+            if close is not None:
+                near_duplicates.append({"path": str(path), "matches": str(close)}); continue
+            previous.append((digest, thumb, path)); unique.append(item)
+        accepted = unique
+        accepted_by_path = {item[0]: item for item in accepted}
+        training = [accepted_by_path[path] for path in dataset_split.training if path in accepted_by_path]
+        calibration = [accepted_by_path[path] for path in dataset_split.calibration if path in accepted_by_path]
+        validation = [accepted_by_path[path] for path in dataset_split.validation if path in accepted_by_path]
+        hard_good = [accepted_by_path[path] for path in hard_good_paths if path in accepted_by_path]
+        calibration.extend(hard_good)
+        if not training or not calibration:
+            raise ValueError("Physical-part split left no qualified training or calibration views; see training report")
+        golden_path = self._path(config).parent / "golden"
+        group_for_path = {path: group for group, members in dataset_split.groups.items() for path in members}
+        golden_records = [(roi, str(path), group_for_path.get(path, "hard_good"))
+                          for path, roi, _row in training + hard_good]
+        golden = GoldenReferenceBank.build(golden_records, golden_path,
+                                           phase_bins=config.golden_phase_bins,
+                                           noise_floor=config.golden_noise_floor)
+        feature_strata: dict[tuple[int, int], list[np.ndarray]] = {}
         for _path, roi, _row in training:
             tiles = generate_tiles(roi, config.surface_tile_size, config.surface_tile_overlap)
+            phase = golden.candidates(roi, 1)[0]
             for start in range(0, len(tiles), config.surface_tile_batch_size):
-                tokens, _grid = self._tokens([tile.image for tile in tiles[start:start + config.surface_tile_batch_size]], config)
-                all_tokens.append(tokens.reshape(-1, tokens.shape[-1]))
-        features = np.concatenate(all_tokens)
-        rng = np.random.default_rng(42)
-        if len(features) > config.surface_memory_bank_size:
-            features = features[rng.choice(len(features), config.surface_memory_bank_size, replace=False)]
+                batch_tiles = tiles[start:start + config.surface_tile_batch_size]
+                tokens, _grid = self._tokens([tile.image for tile in batch_tiles], config)
+                for tile, tile_tokens in zip(batch_tiles, tokens):
+                    section = min(config.memory_longitudinal_sections - 1,
+                                  int((tile.x + tile.valid_width / 2) * config.memory_longitudinal_sections / roi.shape[1]))
+                    feature_strata.setdefault((phase, section), []).append(tile_tokens.reshape(-1, tile_tokens.shape[-1]))
+        features, memory_phases, memory_sections, memory_stats = representative_memory(
+            feature_strata, config.surface_memory_bank_size, seed=config.training_split_seed
+        )
         mean, basis = self._fit_reconstructor(features, config.reconstruction_rank)
-        provisional = {"memory_bank": features, "reconstruction_mean": mean, "reconstruction_basis": basis}
+        provisional = {"memory_bank": features, "memory_phases": memory_phases,
+                       "memory_sections": memory_sections,
+                       "reconstruction_mean": mean, "reconstruction_basis": basis}
         samples: dict[str, list[float]] = {key: [] for key in (
-            "global", "local", "peak", "topk", "memory", "reconstruction", "fine_break"
+            "global", "local", "peak", "topk", "memory", "reconstruction", "fine_break",
+            "golden_intensity", "golden_edge", "golden_dino"
         )}
         geometry_images = [item[1] for item in accepted]
         geometry = FinGeometryInspector.calibrate(geometry_images, band_top=config.inspection_band_top_ratio,
                                                   band_bottom=config.inspection_band_bottom_ratio)
         for _path, roi, _row in calibration:
-            memory_map, reconstruction_map, _ = self._surface_maps(roi, config, provisional)
+            phase = golden.candidates(roi, 1)[0]
+            memory_map, reconstruction_map, _ = self._surface_maps(roi, config, provisional, phase=phase)
+            golden_evidence = golden.compare(roi, candidates=config.golden_candidates,
+                min_correlation=config.golden_min_match_quality,
+                max_translation_ratio=config.registration_max_translation_ratio,
+                max_rotation_deg=config.registration_max_rotation_deg)
+            if golden_evidence.registration.success:
+                samples["golden_intensity"].append(golden_evidence.intensity_score)
+                samples["golden_edge"].append(golden_evidence.edge_score)
+                reference = cv2.imread(str(golden.directory / f"phase_{golden_evidence.phase_bin:03d}.png"))
+                _map, score = self._golden_dino(golden_evidence.registration.aligned_image, reference, config)
+                samples["golden_dino"].append(score)
             for name, branch in (("memory", memory_map), ("reconstruction", reconstruction_map)):
                 samples[name].append(float(np.quantile(branch, .9995)))
             combined = self._normalize_branches(memory_map, reconstruction_map, None)
@@ -459,7 +597,7 @@ class TiledViTSurfaceInspector:
                                                 config.surface_band_bottom_ratio)
             samples["fine_break"].append(float(largest_component_area(fine_break)))
         thresholds = {name: {"candidate": robust_limit(values, 6), "strong": robust_limit(values, 10)}
-                      for name, values in samples.items()}
+                      for name, values in samples.items() if values}
         thresholds["fine_break"]["candidate"] = max(
             thresholds["fine_break"]["candidate"], float(config.fine_break_candidate_area_px)
         )
@@ -468,18 +606,46 @@ class TiledViTSurfaceInspector:
             thresholds["fine_break"]["candidate"] * 1.5,
             float(config.fine_break_strong_area_px),
         )
+        for required in ("golden_intensity", "golden_edge", "golden_dino"):
+            if required not in thresholds:
+                raise ValueError(f"Golden-reference calibration produced no valid {required} samples")
         checkpoint = {"memory_bank": self._torch.as_tensor(features),
+                      "memory_phases": self._torch.as_tensor(memory_phases),
+                      "memory_sections": self._torch.as_tensor(memory_sections),
                       "reconstruction_mean": self._torch.as_tensor(mean),
                       "reconstruction_basis": self._torch.as_tensor(basis),
                       "metadata": self._metadata(config), "thresholds": thresholds,
-                      "geometry": geometry, "trained_at": datetime.now().isoformat()}
+                      "geometry": geometry, "golden_digest": golden.digest,
+                      "trained_at": datetime.now().isoformat()}
         path = self._path(config)
         path.parent.mkdir(parents=True, exist_ok=True)
         self._torch.save(checkpoint, path)
-        report = {"accepted": [item[2] for item in accepted], "rejected": rejected,
+        self._checkpoint_cache = None; self._search_cache = None; self._golden_cache = None
+        validation_rows, false_rejects = [], 0
+        for source, validation_roi, _row in validation:
+            result = self.inspect(config, validation_roi, save_outputs=False, crop_to_component=False)
+            rejected_view = result.status in {"CANDIDATE", "FAIL"}
+            false_rejects += int(rejected_view)
+            validation_rows.append({"path": str(source), "status": result.status,
+                                    "score": result.anomaly_score, "reasons": list(result.reason_codes)})
+        report = {"status": "TRAINING_COMPLETE_VALIDATION_REQUIRED",
+                  "dataset": dataset_split.report(),
+                  "accepted": [item[2] for item in accepted], "rejected": rejected,
+                  "duplicates_removed": duplicates, "near_duplicates_removed": near_duplicates,
                   "training_count": len(training), "calibration_count": len(calibration),
+                  "validation_count": len(validation), "hard_good_count": len(hard_good),
                   "tile_size": config.surface_tile_size, "tile_overlap": config.surface_tile_overlap,
-                  "thresholds": thresholds, "rotation_coverage_views": len(accepted)}
+                  "thresholds": thresholds, "rotation_coverage_views": len(accepted),
+                  "golden_reference": golden.manifest,
+                  "memory": {"total_candidate_tokens": int(sum(sum(len(item) for item in values) for values in feature_strata.values())),
+                             "selected_tokens": int(len(features)), "strata": memory_stats,
+                             "source_part_coverage": len({group_for_path.get(path) for path, _, _ in training}),
+                             "reconstruction_rank": config.reconstruction_rank},
+                  "validation": {"held_out_good_views": len(validation),
+                                 "false_rejects": false_rejects,
+                                 "good_pass_rate": (len(validation) - false_rejects) / max(len(validation), 1),
+                                 "results": validation_rows,
+                                 "production_qualified": False}}
         path.with_suffix(".training_report.json").write_text(json.dumps(report, indent=2) + "\n")
         return path
 
@@ -495,13 +661,43 @@ class TiledViTSurfaceInspector:
         self._checkpoint_cache = stamp, checkpoint
         return checkpoint
 
-    def _surface_maps(self, roi: np.ndarray, config: PartModelConfig, checkpoint: dict[str, Any]):
+    def _golden_bank(self, config: PartModelConfig, checkpoint: dict[str, Any]) -> GoldenReferenceBank:
+        path = self._path(config).parent / "golden"
+        stamp = (path / "manifest.json").stat().st_mtime
+        if self._golden_cache is None or self._golden_cache[0] != stamp:
+            self._golden_cache = stamp, GoldenReferenceBank.load(path)
+        bank = self._golden_cache[1]
+        if checkpoint.get("golden_digest") != bank.digest:
+            raise RuntimeError("MODEL CONFIGURATION MISMATCH — RETRAIN REQUIRED: golden reference hash")
+        return bank
+
+    def _golden_dino(self, current: np.ndarray, reference: np.ndarray,
+                     config: PartModelConfig) -> tuple[np.ndarray, float]:
+        """Dense corresponding-token residual after phase match and registration."""
+        current_tiles = generate_tiles(current, config.surface_tile_size, config.surface_tile_overlap)
+        reference_tiles = generate_tiles(reference, config.surface_tile_size, config.surface_tile_overlap)
+        maps = []
+        for start in range(0, len(current_tiles), config.surface_tile_batch_size):
+            c_batch = current_tiles[start:start + config.surface_tile_batch_size]
+            r_batch = reference_tiles[start:start + config.surface_tile_batch_size]
+            current_tokens, grid = self._tokens([item.image for item in c_batch], config)
+            reference_tokens, _ = self._tokens([item.image for item in r_batch], config)
+            maps.extend(list(np.sqrt(np.mean((current_tokens - reference_tokens) ** 2, axis=2)).reshape(-1, *grid)))
+        merged = merge_tile_maps(maps, current_tiles, current.shape[:2])
+        return merged, float(np.quantile(merged, .9995))
+
+    def _surface_maps(self, roi: np.ndarray, config: PartModelConfig, checkpoint: dict[str, Any],
+                      *, phase: int | None = None):
         tiles = generate_tiles(roi, config.surface_tile_size, config.surface_tile_overlap)
         memory_maps, reconstruction_maps = [], []
         for start in range(0, len(tiles), config.surface_tile_batch_size):
             batch = tiles[start:start + config.surface_tile_batch_size]
             tokens, grid = self._tokens([tile.image for tile in batch], config)
-            memory, reconstruction = self._branch_maps(tokens, grid, checkpoint, config)
+            sections = [min(config.memory_longitudinal_sections - 1,
+                            int((tile.x + tile.valid_width / 2) * config.memory_longitudinal_sections / roi.shape[1]))
+                        for tile in batch]
+            memory, reconstruction = self._branch_maps(tokens, grid, checkpoint, config,
+                                                       phase=phase, sections=sections)
             memory_maps.extend(memory)
             reconstruction_maps.extend(reconstruction)
         shape = roi.shape[:2]
@@ -530,6 +726,8 @@ class TiledViTSurfaceInspector:
 
     def inspect(self, config: PartModelConfig, image: np.ndarray, *, save_outputs: bool = True,
                 crop_to_component: bool = True) -> InspectionResult:
+        if not config.golden_reference_enabled or not config.golden_registration_enabled:
+            raise RuntimeError("MODEL CONFIGURATION MISMATCH — RETRAIN REQUIRED: golden reference/registration disabled")
         started = time.perf_counter()
         roi = crop_component_roi(image, roi_ratios=config.roi_ratios) if crop_to_component else image.copy()
         checkpoint = self._load(config)
@@ -539,8 +737,27 @@ class TiledViTSurfaceInspector:
             return InspectionResult("VIEW INVALID", 0, 0, 0, [], display_image=roi,
                                     reason_codes=quality.reasons, view_valid=False,
                                     view_quality_score=quality.sharpness)
+        golden_started = time.perf_counter()
+        golden = self._golden_bank(config, checkpoint)
+        golden_evidence = golden.compare(roi, candidates=config.golden_candidates,
+            min_correlation=config.golden_min_match_quality,
+            max_translation_ratio=config.registration_max_translation_ratio,
+            max_rotation_deg=config.registration_max_rotation_deg)
+        if not golden_evidence.registration.success:
+            return InspectionResult("VIEW INVALID", 0, 0, 0, [], display_image=roi,
+                reason_codes=("REGISTRATION_INVALID", golden_evidence.registration.failure_reason or "UNKNOWN"),
+                view_valid=False, registration_score=golden_evidence.registration.correlation,
+                reference_index=golden_evidence.reference_index,
+                latencies_ms={"registration": (time.perf_counter() - golden_started) * 1000})
+        golden_reference = cv2.imread(str(golden.directory / f"phase_{golden_evidence.phase_bin:03d}.png"))
+        golden_dino_map, golden_dino_score = self._golden_dino(
+            golden_evidence.registration.aligned_image, golden_reference, config
+        )
+        golden_ms = (time.perf_counter() - golden_started) * 1000
         tile_started = time.perf_counter()
-        memory_map, reconstruction_map, tiles = self._surface_maps(roi, config, checkpoint)
+        memory_map, reconstruction_map, tiles = self._surface_maps(
+            roi, config, checkpoint, phase=golden_evidence.phase_bin
+        )
         surface_ms = (time.perf_counter() - tile_started) * 1000
         thresholds = checkpoint["thresholds"]
         combined = self._normalize_branches(memory_map, reconstruction_map, thresholds)
@@ -570,6 +787,21 @@ class TiledViTSurfaceInspector:
         fine_thresholds = thresholds["fine_break"]
         fine_break_candidate = fine_break_area >= fine_thresholds["candidate"] / sensitivity
         fine_break_strong = fine_break_area >= fine_thresholds["strong"] / sensitivity
+        golden_intensity_candidate = golden_evidence.intensity_score >= thresholds["golden_intensity"]["candidate"] / sensitivity
+        golden_edge_candidate = golden_evidence.edge_score >= thresholds["golden_edge"]["candidate"] / sensitivity
+        golden_dino_candidate = golden_dino_score >= thresholds["golden_dino"]["candidate"] / sensitivity
+        golden_raw_candidate = golden_intensity_candidate or golden_edge_candidate or golden_dino_candidate
+        golden_native = cv2.resize(np.maximum(
+            golden_evidence.intensity_map / max(thresholds["golden_intensity"]["candidate"], 1e-6),
+            golden_evidence.edge_map / max(thresholds["golden_edge"]["candidate"], 1e-6)),
+            (roi.shape[1], roi.shape[0]), interpolation=cv2.INTER_CUBIC)
+        golden_local, _golden_area = localized_component_mask(
+            golden_native, np.ones(roi.shape[:2], np.float32), threshold=1.0 / sensitivity,
+            max_area_ratio=config.golden_max_component_ratio)
+        golden_candidate = golden_raw_candidate and bool(np.any(golden_local))
+        golden_strong = (golden_evidence.edge_score >= thresholds["golden_edge"]["strong"] / sensitivity
+                         and golden_dino_score >= thresholds["golden_dino"]["strong"] / sensitivity
+                         and geometry.score >= config.geometry_candidate_threshold)
         near_mask, near_component_area = localized_component_mask(
             combined, authority,
             threshold=candidate_line * config.surface_near_candidate_ratio,
@@ -598,6 +830,9 @@ class TiledViTSurfaceInspector:
         if geometry_corroborated: reasons.append("SURFACE_GEOMETRY_CORROBORATION")
         if fine_break_candidate: reasons.append("BROKEN_FIN_CANDIDATE")
         if fine_break_strong: reasons.append("BROKEN_FIN")
+        if golden_candidate and golden_intensity_candidate: reasons.append("GOLDEN_INTENSITY_MISMATCH")
+        if golden_candidate and golden_edge_candidate: reasons.append("GOLDEN_EDGE_MISMATCH")
+        if golden_candidate and golden_dino_candidate: reasons.append("GOLDEN_DINO_MISMATCH")
         if geometry.broken_fin_score >= config.geometry_fail_threshold: reasons.append("BROKEN_FIN")
         if geometry.missing_fin_score >= config.geometry_fail_threshold: reasons.append("MISSING_FIN")
         if geometry.tilted_fin_score >= config.geometry_fail_threshold: reasons.append("TILTED_FIN")
@@ -605,11 +840,25 @@ class TiledViTSurfaceInspector:
         if geometry_fail: reasons.append("GEOMETRY_DEFORMATION")
         # Glare is evidence for temporal confirmation, never a subtraction or PASS override.
         if surface_candidate and glare.score >= config.glare_threshold: reasons.append("LIKELY_GLARE")
-        immediate = geometry_fail or strong
-        status = "FAIL" if immediate else ("CANDIDATE" if surface_candidate else "PASS")
+        # Learned appearance can be extremely certain about a harmless batch,
+        # texture, or illumination change. It therefore remains a persistent
+        # candidate even when memory and reconstruction agree. Only native
+        # structural evidence (including the independently calibrated fine-fin
+        # detector) or registered golden+geometry corroboration can reject a
+        # part from one view.
+        status = production_status(
+            appearance_candidate=surface_candidate,
+            appearance_strong=strong,
+            golden_candidate=golden_candidate,
+            golden_structural_strong=golden_strong,
+            geometry_fail=geometry_fail,
+            fine_break_strong=fine_break_strong,
+        )
         surface_mask = mask | (near_mask if geometry_corroborated else False)
         if fine_break_candidate:
             surface_mask |= fine_break_mask
+        if golden_candidate:
+            surface_mask |= golden_local
         confirmed = (surface_mask if status != "PASS" else np.zeros_like(mask)) | geometry_mask
         display = roi.copy() if roi.ndim == 3 else cv2.cvtColor(roi, cv2.COLOR_GRAY2BGR)
         contours, _ = cv2.findContours(confirmed.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -627,8 +876,11 @@ class TiledViTSurfaceInspector:
                                "global": stats.global_score, "local": stats.local_score,
                                "peak": stats.peak_score, "topk": stats.topk_score,
                                "fine_break_area": float(fine_break_area),
-                               "near_component_area": float(near_component_area)}
-        latencies = {"surface_tiles": surface_ms, "geometry": geometry_ms,
+                               "near_component_area": float(near_component_area),
+                               "golden_intensity": golden_evidence.intensity_score,
+                               "golden_edge": golden_evidence.edge_score,
+                               "golden_dino": golden_dino_score}
+        latencies = {"registration_golden": golden_ms, "surface_tiles": surface_ms, "geometry": geometry_ms,
                      "total": (time.perf_counter() - started) * 1000, "tile_count": float(len(tiles))}
         if config.engineering_compare_legacy:
             comparison_started = time.perf_counter()
@@ -661,7 +913,8 @@ class TiledViTSurfaceInspector:
         return InspectionResult(status, local_evidence, int(confirmed.sum()), 0, [],
                                 overlay_path, report_path, display, boxes,
                                 geometry_score=geometry.score, periodicity_score=geometry.periodicity_score,
-                                glare_score=glare.score, reason_codes=tuple(reasons), view_valid=True,
+                                glare_score=glare.score, registration_score=golden_evidence.registration.correlation,
+                                reason_codes=tuple(reasons), reference_index=golden_evidence.reference_index, view_valid=True,
                                 view_quality_score=quality.sharpness, latencies_ms=latencies,
                                 geometry_components=geometry_components,
                                 candidate_sections=sections)

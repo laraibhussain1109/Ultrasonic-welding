@@ -124,7 +124,18 @@
       "geometry_surface_support_threshold": 0.15,
       "fine_break_candidate_area_px": 20,
       "fine_break_strong_area_px": 60,
-      "surface_corroboration_max_area_ratio": 0.02
+      "surface_corroboration_max_area_ratio": 0.02,
+      "golden_reference_enabled": true,
+      "golden_phase_bins": 12,
+      "golden_candidates": 3,
+      "golden_registration_enabled": true,
+      "golden_min_match_quality": 0.45,
+      "golden_noise_floor": 0.08,
+      "golden_max_component_ratio": 0.03,
+      "training_split_seed": 42,
+      "memory_longitudinal_sections": 6,
+      "memory_phase_neighborhood": 1,
+      "hard_good_dir": "data/training/BF-001/hard_good"
     },
     {
       "id": "BF-002",
@@ -249,7 +260,18 @@
       "geometry_surface_support_threshold": 0.15,
       "fine_break_candidate_area_px": 20,
       "fine_break_strong_area_px": 60,
-      "surface_corroboration_max_area_ratio": 0.02
+      "surface_corroboration_max_area_ratio": 0.02,
+      "golden_reference_enabled": true,
+      "golden_phase_bins": 12,
+      "golden_candidates": 3,
+      "golden_registration_enabled": true,
+      "golden_min_match_quality": 0.45,
+      "golden_noise_floor": 0.08,
+      "golden_max_component_ratio": 0.03,
+      "training_split_seed": 42,
+      "memory_longitudinal_sections": 7,
+      "memory_phase_neighborhood": 1,
+      "hard_good_dir": "data/training/BF-002/hard_good"
     },
     {
       "id": "BF-003",
@@ -374,7 +396,18 @@
       "geometry_surface_support_threshold": 0.15,
       "fine_break_candidate_area_px": 20,
       "fine_break_strong_area_px": 60,
-      "surface_corroboration_max_area_ratio": 0.02
+      "surface_corroboration_max_area_ratio": 0.02,
+      "golden_reference_enabled": true,
+      "golden_phase_bins": 12,
+      "golden_candidates": 3,
+      "golden_registration_enabled": true,
+      "golden_min_match_quality": 0.45,
+      "golden_noise_floor": 0.08,
+      "golden_max_component_ratio": 0.03,
+      "training_split_seed": 42,
+      "memory_longitudinal_sections": 8,
+      "memory_phase_neighborhood": 1,
+      "hard_good_dir": "data/training/BF-003/hard_good"
     },
     {
       "id": "BF-004",
@@ -499,7 +532,18 @@
       "geometry_surface_support_threshold": 0.15,
       "fine_break_candidate_area_px": 20,
       "fine_break_strong_area_px": 60,
-      "surface_corroboration_max_area_ratio": 0.02
+      "surface_corroboration_max_area_ratio": 0.02,
+      "golden_reference_enabled": true,
+      "golden_phase_bins": 12,
+      "golden_candidates": 3,
+      "golden_registration_enabled": true,
+      "golden_min_match_quality": 0.45,
+      "golden_noise_floor": 0.08,
+      "golden_max_component_ratio": 0.03,
+      "training_split_seed": 42,
+      "memory_longitudinal_sections": 9,
+      "memory_phase_neighborhood": 1,
+      "hard_good_dir": "data/training/BF-004/hard_good"
     }
   ]
 }

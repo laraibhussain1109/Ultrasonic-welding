@@ -49,6 +49,7 @@ from .daily_stats import DailyStatistics, operating_day
 from .fail_output import ESP32FailOutputBridge
 from .frame_selection import RotationPhaseGate, SharpFrameSampler
 from .inspector_factory import inspector_for_model
+from .qualification import run_qualification
 from .trainer import InspectionResult
 from .tao_training import run_visual_changenet_task
 from .yolo_tracking import SUPPORTED_COMPLETION_MODES, RotatingPartInspector, TrackedPart, YoloByteTrackDetector
@@ -133,7 +134,7 @@ class TrainWorker(QThread):
                 self.model.production_algorithm != "patchcore_geometry"
                 and self.model.algorithm == "nvidia_tao"
             )
-            action = "CALIBRATED" if tao_production else "TRAINED"
+            action = "CALIBRATED" if tao_production else "TRAINING COMPLETE — VALIDATION REQUIRED"
             self.finished_ok.emit(f"{action} {self.model.id}: {output}")
         except Exception as exc:
             self.failed.emit(f"TRAINING FAILED {self.model.id}: {exc}")
@@ -158,6 +159,21 @@ class InspectionWorker(QThread):
             self.failed.emit(str(exc))
             return
         self.finished_result.emit(self.track_id, result, (time.perf_counter() - start) * 1000.0)
+
+
+class QualificationWorker(QThread):
+    finished_ok = pyqtSignal(str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, inspector, model, good_dir, ng_dir) -> None:
+        super().__init__(); self.inspector, self.model = inspector, model
+        self.good_dir, self.ng_dir = good_dir, ng_dir
+
+    def run(self) -> None:
+        try:
+            self.finished_ok.emit(str(run_qualification(self.inspector, self.model, self.good_dir, self.ng_dir)))
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
 
 class TaoExportWorker(QThread):
@@ -223,6 +239,7 @@ class InspectionWindow(QWidget):
         self.started_at = time.time()
         self.train_worker: TrainWorker | None = None
         self.export_worker: TaoExportWorker | None = None
+        self.qualification_worker: QualificationWorker | None = None
         self.setWindowTitle(f"NeuroIris Blower Fan Inspection - {user.username} ({user.role})")
         self.resize(1884, 940)
         self._build_ui()
@@ -339,6 +356,8 @@ class InspectionWindow(QWidget):
         layout.addWidget(QLabel("FIXED LINE RATE — OPTIMISED @ 30 FPS"))
         layout.addStretch(1)
         if self.user.is_admin:
+            self.backend_label = QLabel("PRODUCTION: DINOv2 GOLDEN SURFACE + FIN GEOMETRY")
+            layout.addWidget(self.backend_label)
             self.comparison_mode = QCheckBox("ENGINEERING: COMPARE LEGACY PATCHCORE")
             layout.addWidget(self.comparison_mode)
             export = QPushButton("⬡   EXPORT TAO MODEL (ENGINEERING)")
@@ -349,6 +368,12 @@ class InspectionWindow(QWidget):
             train.setObjectName("train")
             train.clicked.connect(self.train_selected)
             layout.addWidget(train)
+            qualify = QPushButton("✓   RUN QUALIFICATION")
+            qualify.setObjectName("train"); qualify.clicked.connect(self.run_qualification)
+            layout.addWidget(qualify)
+            hard_good = QPushButton("＋   ADD CURRENT VIEW AS HARD GOOD")
+            hard_good.clicked.connect(self.add_current_as_hard_good)
+            layout.addWidget(hard_good)
         return panel
 
     def _center_panel(self) -> QFrame:
@@ -599,7 +624,7 @@ class InspectionWindow(QWidget):
                 model.counting_line_ratio,
                 model.counting_direction,
                 model.minimum_rotation_views,
-                model.weak_candidate_required_views,
+                model.surface_persistence_required,
                 model.inspection_completion_mode,
                 model.counting_axis,
                 model.surface_persistence_window,
@@ -1113,13 +1138,44 @@ class InspectionWindow(QWidget):
             model = self.registry.update_model_settings(model.id, model_file=Path(path).resolve())
             self._refresh_models(selected_id=model.id)
             self.inspector = inspector_for_model(model)
-        operation = "TAO CALIBRATION" if tao_production else "PATCHCORE TRAINING"
+        operation = ("TAO CALIBRATION" if tao_production else
+                     "GOLDEN REFERENCE + DINOv2 + FIN GEOMETRY TRAINING")
         self.log.addItem(f"{operation} STARTED {model.id}")
         self.train_worker = TrainWorker(self.inspector, model)
         self.train_worker.finished_ok.connect(lambda message: self.log.addItem(message))
         self.train_worker.progress.connect(self._show_training_progress)
         self.train_worker.failed.connect(lambda message: QMessageBox.critical(self, "Training failed", message))
         self.train_worker.start()
+
+    def add_current_as_hard_good(self) -> None:
+        if not self.user.is_admin or self.raw_frame is None:
+            QMessageBox.warning(self, "Hard good", "An admin must capture a live reviewed-good view first.")
+            return
+        model = self.selected_model()
+        answer = QMessageBox.question(self, "Approve hard good",
+            "Confirm this is a physically known-good blower. It will be used only after explicit retraining.")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        directory = model.hard_good_dir or model.normal_image_dir.parent / "hard_good"
+        image = crop_bounds(self.raw_frame, self.live_roi_bounds) if self.live_roi_bounds else crop_component_roi(self.raw_frame, roi_ratios=model.roi_ratios)
+        path = save_capture(image, directory, "approved_hard_good")
+        self.log.addItem(f"HARD GOOD SAVED (RETRAIN REQUIRED): {path}")
+
+    def run_qualification(self) -> None:
+        if not self.user.is_admin:
+            return
+        good = QFileDialog.getExistingDirectory(self, "Select independent qualification/good folder")
+        if not good: return
+        ng = QFileDialog.getExistingDirectory(self, "Select independent qualification/ng folder")
+        if not ng: return
+        model = self.selected_model(); inspector = inspector_for_model(model)
+        try: inspector.validate_ready(model)
+        except Exception as exc:
+            QMessageBox.critical(self, "Qualification unavailable", str(exc)); return
+        self.qualification_worker = QualificationWorker(inspector, model, good, ng)
+        self.qualification_worker.finished_ok.connect(lambda path: self.log.addItem(f"QUALIFICATION COMPLETE: {path}"))
+        self.qualification_worker.failed.connect(lambda error: QMessageBox.critical(self, "Qualification failed", error))
+        self.qualification_worker.start()
 
     def export_selected(self) -> None:
         if not self.user.is_admin:

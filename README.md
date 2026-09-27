@@ -1,14 +1,15 @@
 # NeuroIris Blower Fan Industrial Vision Inspection
 
 Python/PyQt6 inspection software for ultrasonic-welded blower fan parts. The
-default production decision uses **native-resolution overlapping tiles + DINOv2
-patch-token memory + feature reconstruction + structural fin geometry +
+default production decision uses **phase-aware registered golden references +
+native-resolution overlapping tiles + DINOv2 patch-token memory + golden DINO
+difference + feature reconstruction + structural fin geometry +
 sliding-window multi-view confirmation**. The previous CNN PatchCore and NVIDIA
 TAO VisualChangeNet paths remain available for engineering comparison, training,
 export, and ONNX runtime experiments, but they do not control PASS/FAIL by default.
 
 > **New installation?** Follow the complete [step-by-step operating guide](docs/getting_started.md)
-> for PatchCore model training and starting a live inspection.
+> for complete production model training and starting a live inspection.
 
 The supplied model IDs contain hyphens (`BF-001` through `BF-004`). For example,
 BF-002 training images belong in `data/training/BF-002/normal`; a similarly
@@ -110,6 +111,37 @@ valid rotational views drive auditable reason codes. Glare never deletes an
 anomaly. Operator output is the original ROI with red contours; raw maps and
 timings are retained in per-result engineering JSON diagnostics.
 
+Normal data should be grouped by physical blower so no part crosses a split:
+
+```text
+data/training/BF-001/normal/parts/part-001/session-01/*.png
+data/training/BF-001/normal/parts/part-002/session-01/*.png
+data/training/BF-001/hard_good/*.png
+```
+
+Training deterministically assigns complete physical groups to 70% fitting,
+15% calibration, and 15% untouched good validation. Legacy flat directories are
+still accepted but the report explicitly warns that physical independence cannot
+be proven. All qualified images are considered; there is no 300-image DINO cap.
+Feature memory is selected by deterministic farthest-first coverage within phase
+and longitudinal strata instead of global random sampling.
+
+The model directory contains a versioned `golden/manifest.json`, robust per-phase
+median/MAD intensity and edge maps, descriptors, and representative references.
+Inspection phase-matches candidates, registers conservatively, and returns
+`VIEW INVALID / REGISTRATION_INVALID` when no reference qualifies.
+
+Frozen qualification never tunes thresholds:
+
+```bash
+blower-inspection qualify BF-001 --good qualification/good --ng qualification/ng
+```
+
+NG category folders such as `minor_chip`, `cracked_fin`, `broken_fin`,
+`tilted_fin`, and `missing_fin` are reported separately; `scratch_ok` and
+`glare_ok` are treated as acceptable good categories. The GUI exposes **RUN
+QUALIFICATION** and explicit admin-approved **ADD CURRENT VIEW AS HARD GOOD**.
+
 The structural path also runs a native-resolution localized fin-gap detector.
 Its largest normal component is calibrated separately instead of being averaged
 over the whole blower. A surface response close to its calibrated candidate line
@@ -148,7 +180,7 @@ combination rather than adding `faiss-gpu` to this project's pip requirements.
 ## Optional TAO engineering workflow (not default production training)
 
 The section below is retained for teams that deliberately train/export TAO for
-research comparison. For normal PatchCore production setup, skip this section
+research comparison. For normal golden-reference/DINOv2 production setup, skip this section
 and use [the step-by-step operating guide](docs/getting_started.md).
 
 Each part in `config/models.json` points to its own TAO ONNX export, calibration file, normal-image directory, output directory, camera mode, ROI, and YOLO locator. Export a fixed-spatial-shape TAO visual-anomaly model as, for example, `data/models/BF-001/tao_anomaly.onnx`.

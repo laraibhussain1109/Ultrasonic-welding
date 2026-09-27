@@ -19,7 +19,7 @@ def test_surface_memory_search_prefers_torch_cuda_without_faiss_dependency():
         project = tomllib.load(handle)
 
     assert 'torch.device("cuda:0")' in source
-    assert "query @ memory.T" in source
+    assert "query @ bank.T" in source
     assert "surface_require_gpu" in source
     dependencies = project["project"]["dependencies"] + project["project"]["optional-dependencies"]["industrial"]
     assert not any("faiss" in dependency.casefold() for dependency in dependencies)

@@ -26,3 +26,20 @@ def surface_decision_state(*, local_score: float, candidate_line: float, strong_
     strong = ((local_score >= strong_line and memory_candidate and reconstruction_candidate)
               or fine_break_strong)
     return candidate, strong, corroborated
+
+
+def production_status(*, appearance_candidate: bool, appearance_strong: bool,
+                      golden_candidate: bool, golden_structural_strong: bool,
+                      geometry_fail: bool, fine_break_strong: bool) -> str:
+    """Fuse evidence without allowing appearance certainty to masquerade as structure.
+
+    ``appearance_strong`` is intentionally accepted for diagnostics but is not
+    an immediate-fail gate.  Batch/texture changes can strongly activate two
+    learned branches at once; location-aware persistence must confirm those.
+    """
+    del appearance_strong
+    if geometry_fail or fine_break_strong or golden_structural_strong:
+        return "FAIL"
+    if appearance_candidate or golden_candidate:
+        return "CANDIDATE"
+    return "PASS"
