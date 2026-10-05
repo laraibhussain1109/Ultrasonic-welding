@@ -359,7 +359,7 @@ class InspectionWindow(QWidget):
         layout.addWidget(self.viewer, 1)
         bottom = QFrame(objectName="bottomPanel")
         bottom_layout = QHBoxLayout(bottom)
-        bottom_layout.addWidget(QLabel("ANOMALY SCORE"))
+        bottom_layout.addWidget(QLabel("STRUCTURAL EVIDENCE"))
         self.score_slider = QSlider(Qt.Orientation.Horizontal)
         self.score_slider.setEnabled(False)
         self.score_slider.setRange(0, 1000)
@@ -380,6 +380,15 @@ class InspectionWindow(QWidget):
         self.status_badge.setObjectName("statusStandby")
         layout.addWidget(self.status_badge)
         layout.addSpacing(20)
+        layout.addWidget(self._section("PHASE-LOCKED INSPECTION"))
+        self.phase_state = QLabel(
+            "STATE: IDLE\nPHASE: - / 6    ANGLE: -\n"
+            "BURST: 0 / 7    QUALIFIED: 0\nREGISTRATION: -    FITMENT: -"
+        )
+        self.phase_state.setFont(QFont("Consolas", 10, QFont.Weight.Bold))
+        self.phase_state.setStyleSheet("color:#00d9ff; padding:8px; border:1px solid #0b314a;")
+        layout.addWidget(self.phase_state)
+        layout.addSpacing(12)
         layout.addWidget(self._section("SESSION STATISTICS"))
         stats_grid = QGridLayout()
         self.inspected_value = self._metric_card("INSPECTED", "0")
@@ -393,7 +402,7 @@ class InspectionWindow(QWidget):
         layout.addLayout(stats_grid)
         layout.addSpacing(25)
         layout.addWidget(self._section("LAST RESULT"))
-        self.last_result = QLabel("FRAME:  -\nSCORE:  -\nCOVERAGE:  -\nLATENCY:  -")
+        self.last_result = QLabel("PHASE:  -\nSTRUCTURE:  -\nREASON:  -\nLATENCY:  -")
         self.last_result.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
         layout.addWidget(self.last_result)
         layout.addSpacing(25)
