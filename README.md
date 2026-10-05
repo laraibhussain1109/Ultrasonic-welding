@@ -1,13 +1,15 @@
 # NeuroIris Blower Fan Industrial Vision Inspection
 
 Python/PyQt6 inspection software for ultrasonic-welded blower fan parts. The
-default production decision uses **PatchCore + structural fin geometry +
-multi-view confirmation**. NVIDIA TAO VisualChangeNet remains available for
-engineering comparison, training, export, and ONNX runtime experiments, but it
-does not control PASS/FAIL by default.
+default production decision uses **phase-aware registered golden references +
+native-resolution overlapping tiles + DINOv2 patch-token memory + golden DINO
+difference + feature reconstruction + structural fin geometry +
+sliding-window multi-view confirmation**. The previous CNN PatchCore and NVIDIA
+TAO VisualChangeNet paths remain available for engineering comparison, training,
+export, and ONNX runtime experiments, but they do not control PASS/FAIL by default.
 
 > **New installation?** Follow the complete [step-by-step operating guide](docs/getting_started.md)
-> for PatchCore model training and starting a live inspection.
+> for complete production model training and starting a live inspection.
 
 The supplied model IDs contain hyphens (`BF-001` through `BF-004`). For example,
 BF-002 training images belong in `data/training/BF-002/normal`; a similarly
@@ -56,10 +58,150 @@ pip install -e ".[industrial,tao]"
 
 Start the UI with `python -m blower_inspection.app`.
 
+## Native-resolution DINOv2 production setup
+
+Production profiles request and verify `3840x2160`; the top status bar is based
+on the negotiated camera properties, not the request. A lower negotiated mode is
+shown as **LOW-RES FALLBACK** and logged as `CAMERA_RESOLUTION_MISMATCH`—frames
+are never enlarged and represented as native capture.
+
+Install the PyTorch build appropriate for the commissioned CUDA driver first,
+then install this project. PyTorch 2.2+, torchvision 0.17+, timm 1.0.9+, and
+OpenCV 4.8+ are declared requirements. CUDA is preferred, mixed precision and
+tile batching are enabled, and supplied production profiles require a working
+GPU rather than silently falling back to slow CPU inference.
+
+On the first training or inspection readiness check, the application downloads
+the official pretrained `vit_small_patch14_dinov2.lvd142m` weights through timm,
+then atomically stores an offline copy at:
+
+```text
+data/models/backbones/vit_small_patch14_dinov2_lvd142m.pth
+```
+
+The download is reused on every later start. Set `vit_auto_download` to `false`
+for an air-gapped/validated installation and place an approved checkpoint at the
+configured `vit_weights_path` instead. A failed proxy/download produces an
+actionable error and never substitutes untrained/random weights. Then put normal
+rotational views in `data/training/BF-001/normal`, choose the
+model and YOLO locator in the UI, and press **TRAIN**. Training quality-gates and
+native-crops images, makes a disjoint calibration split, tiles every ROI, builds
+the DINO memory, fits the normal feature-reconstruction subspace, calibrates
+global/local/peak/top-K/component and geometry limits, and writes a JSON report.
+
+Run and test with:
+
+```bash
+python -m blower_inspection.app
+pytest -q
+```
+
+At inference the locked YOLO box crops original camera pixels before any surface
+processing. Overlapping 768-pixel tiles are blended into the full ROI map. A
+tile remains 768×768 in native ROI coordinates, while the DINOv2 ViT-S/14 tensor
+is explicitly prepared at its pretrained 518×518 input size for both training
+and inference. The resulting token map is projected back across the native tile;
+this avoids timm's fixed-input assertion without shrinking the entire blower ROI.
+The token adapter also removes timm's CLS/register prefix tokens before reshaping
+the spatial 37×37 patch grid; prefix tokens are global descriptors and cannot be
+placed into an anomaly map.
+A strong local response, agreement between memory and reconstruction, calibrated
+geometry, glare evidence, and location-aware detections among the last five
+valid rotational views drive auditable reason codes. Glare never deletes an
+anomaly. Operator output is the original ROI with red contours; raw maps and
+timings are retained in per-result engineering JSON diagnostics.
+
+Production fusion deliberately excludes broad full-ROI appearance activation
+from defect persistence. Such activation is normally an illumination, material
+batch, or residual registration change. Tiny localized components retain full
+authority, and native fine-fin or calibrated geometry evidence can still fail a
+part immediately. Geometry must reach its own calibrated candidate state before
+it can corroborate a learned surface response; sub-candidate geometry noise does
+not promote an otherwise normal blower to FAIL.
+
+Tolerance presets are applied to the next inspected view, visibly highlight the
+active button, and clear only unconfirmed weak-candidate history. They never
+erase a confirmed/latched structural defect. The left engineering panel is
+scrollable so tolerance and training controls remain reachable at every window
+size.
+
+Normal data should be grouped by physical blower so no part crosses a split:
+
+```text
+data/training/BF-001/normal/parts/part-001/session-01/*.png
+data/training/BF-001/normal/parts/part-002/session-01/*.png
+data/training/BF-001/hard_good/*.png
+```
+
+Training deterministically assigns complete physical groups to 70% fitting,
+15% calibration, and 15% untouched good validation. Legacy flat directories are
+still accepted but the report explicitly warns that physical independence cannot
+be proven. All qualified images are considered; there is no 300-image DINO cap.
+Feature memory is selected by deterministic farthest-first coverage within phase
+and longitudinal strata instead of global random sampling.
+
+The model directory contains a versioned `golden/manifest.json`, robust per-phase
+median/MAD intensity and edge maps, descriptors, and representative references.
+Inspection phase-matches candidates, registers conservatively, and returns
+`VIEW INVALID / REGISTRATION_INVALID` when no reference qualifies.
+
+Frozen qualification never tunes thresholds:
+
+```bash
+blower-inspection qualify BF-001 --good qualification/good --ng qualification/ng
+```
+
+NG category folders such as `minor_chip`, `cracked_fin`, `broken_fin`,
+`tilted_fin`, and `missing_fin` are reported separately; `scratch_ok` and
+`glare_ok` are treated as acceptable good categories. The GUI exposes **RUN
+QUALIFICATION** and explicit admin-approved **ADD CURRENT VIEW AS HARD GOOD**.
+
+The structural path also runs a native-resolution localized fin-gap detector.
+Its largest normal component is calibrated separately instead of being averaged
+over the whole blower. A surface response close to its calibrated candidate line
+is retained as `SURFACE_GEOMETRY_CORROBORATION` only when independent geometry
+also responds **and** that near-threshold surface component is localized. Broad
+regions caused by illumination, normal end-section appearance, or small
+registration shifts cannot accumulate into a false failure. A localized defect
+is no longer displayed as normal merely because it misses the surface limit by a
+small margin. Retrain existing surface checkpoints after an
+upgrade that introduces these calibration fields.
+
+### CUDA and FAISS
+
+The surface backend always chooses CUDA before CPU, keeps DINO inference on the
+GPU, and performs both memory search and reconstruction on the GPU with bounded
+PyTorch matrix batches. Supplied production models set `surface_require_gpu` to
+`true`, so a CPU-only PyTorch installation stops clearly instead of silently
+running a slow production line.
+
+The default tile batch is eight on the target 12 GB GPU. Golden-reference DINO
+tokens are cached per phase, and phase registration stops after a high-quality
+first match instead of always running ECC for every candidate. This removes
+repeated reference-network work and reduces CPU registration stalls. GPU usage
+can still appear bursty because capture, quality selection, phase matching, ECC,
+geometry, and UI rendering are CPU stages rather than CUDA kernels.
+
+Use the command generated by the official PyTorch installation selector for
+your operating system. The "CUDA 13.3" value shown by `nvidia-smi` is the maximum
+CUDA level supported by the installed driver; PyTorch wheels bring their own
+CUDA runtime and do not need the same minor version. Verify the installation:
+
+```bash
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+```
+
+This project deliberately does **not** require FAISS. PyPI commonly has no
+`faiss-gpu` wheel for current Python/CUDA combinations, which causes the “No
+matching distribution” message. The exact memory search uses PyTorch CUDA
+directly, avoiding another binary compatibility constraint. If FAISS is evaluated
+separately, install its GPU package from a supported Conda channel/runtime
+combination rather than adding `faiss-gpu` to this project's pip requirements.
+
 ## Optional TAO engineering workflow (not default production training)
 
 The section below is retained for teams that deliberately train/export TAO for
-research comparison. For normal PatchCore production setup, skip this section
+research comparison. For normal golden-reference/DINOv2 production setup, skip this section
 and use [the step-by-step operating guide](docs/getting_started.md).
 
 Each part in `config/models.json` points to its own TAO ONNX export, calibration file, normal-image directory, output directory, camera mode, ROI, and YOLO locator. Export a fixed-spatial-shape TAO visual-anomaly model as, for example, `data/models/BF-001/tao_anomaly.onnx`.

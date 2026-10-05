@@ -283,3 +283,41 @@ def test_part_departure_checks_later_views_and_keeps_failure_latched():
     assert len(completed) == 1
     assert completed[0].status == "FAIL"
     assert completed[0].frames_inspected == 3
+
+
+def test_sliding_window_confirms_candidate_pass_candidate_at_same_location():
+    tracker = RotatingPartInspector(minimum_rotation_views=5, weak_candidate_required_views=2,
+                                    completion_mode="minimum_views", persistence_window=5)
+    tracker.observe_tracks([tracked(1, 30)], 100)
+    tracker.record_inspection(1, is_pass=False, anomaly_score=.8, immediate_failure=False,
+                              provisional_candidate=True, candidate_sections=(3,))
+    tracker.record_inspection(1, is_pass=True, anomaly_score=.1, immediate_failure=False)
+    tracker.record_inspection(1, is_pass=False, anomaly_score=.9, immediate_failure=False,
+                              provisional_candidate=True, candidate_sections=(3,))
+    assert tracker.latched_failure(1)
+
+
+def test_sliding_window_does_not_combine_unrelated_locations():
+    tracker = RotatingPartInspector(minimum_rotation_views=5, weak_candidate_required_views=2,
+                                    completion_mode="minimum_views", persistence_window=5)
+    tracker.observe_tracks([tracked(1, 30)], 100)
+    tracker.record_inspection(1, is_pass=False, anomaly_score=.8, immediate_failure=False,
+                              provisional_candidate=True, candidate_sections=(1,))
+    tracker.record_inspection(1, is_pass=True, anomaly_score=.1, immediate_failure=False)
+    tracker.record_inspection(1, is_pass=False, anomaly_score=.9, immediate_failure=False,
+                              provisional_candidate=True, candidate_sections=(4,))
+    assert not tracker.latched_failure(1)
+
+
+def test_sensitivity_change_can_clear_only_unconfirmed_candidate_history():
+    tracker = RotatingPartInspector(minimum_rotation_views=5, weak_candidate_required_views=2,
+                                    completion_mode="minimum_views", persistence_window=5)
+    tracker.observe_tracks([tracked(1, 30)], 100)
+    tracker.record_inspection(1, is_pass=False, anomaly_score=.8, immediate_failure=False,
+                              provisional_candidate=True, candidate_sections=(2,))
+
+    tracker.reset_weak_candidates()
+    tracker.record_inspection(1, is_pass=False, anomaly_score=.8, immediate_failure=False,
+                              provisional_candidate=True, candidate_sections=(2,))
+
+    assert not tracker.latched_failure(1)

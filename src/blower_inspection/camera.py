@@ -3,11 +3,36 @@
 from __future__ import annotations
 
 from datetime import datetime
+from dataclasses import dataclass
 from pathlib import Path
 import sys
 
 import cv2
 import numpy as np
+
+
+@dataclass(frozen=True)
+class CameraMode:
+    requested_width: int
+    requested_height: int
+    requested_fps: float
+    actual_width: int
+    actual_height: int
+    actual_fps: float
+    backend: str
+    fourcc: str
+
+    @property
+    def native(self) -> bool:
+        return self.actual_width >= self.requested_width and self.actual_height >= self.requested_height
+
+    @property
+    def warning(self) -> str | None:
+        if self.native:
+            return None
+        return ("CAMERA_RESOLUTION_MISMATCH — LOW-RES FALLBACK: requested "
+                f"{self.requested_width}x{self.requested_height}, actual "
+                f"{self.actual_width}x{self.actual_height}; small-defect sensitivity is reduced")
 
 
 def _preferred_capture_backend() -> int:
@@ -279,6 +304,10 @@ class USBCamera:
         self.height = height
         self.fps = fps
         self.capture: cv2.VideoCapture | None = None
+        self.requested_width = width
+        self.requested_height = height
+        self.requested_fps = fps
+        self.mode: CameraMode | None = None
 
     def open(self) -> None:
         self.capture = cv2.VideoCapture(self.index, _preferred_capture_backend())
@@ -303,6 +332,19 @@ class USBCamera:
             self.height = actual_height
         if actual_fps > 0:
             self.fps = actual_fps
+        backend = self.capture.getBackendName() if hasattr(self.capture, "getBackendName") else "unknown"
+        code = int(self.capture.get(cv2.CAP_PROP_FOURCC)) if hasattr(cv2, "CAP_PROP_FOURCC") else 0
+        fourcc = "".join(chr((code >> (8 * index)) & 0xff) for index in range(4)).strip("\x00") or "unknown"
+        self.mode = CameraMode(self.requested_width, self.requested_height, float(self.requested_fps),
+                               self.width, self.height, float(self.fps), backend, fourcc)
+
+    def mode_summary(self) -> str:
+        if self.mode is None:
+            return f"Requested: {self.requested_width}x{self.requested_height} @ {self.requested_fps} FPS"
+        status = "NATIVE" if self.mode.native else "LOW-RES FALLBACK"
+        return (f"Requested: {self.mode.requested_width}x{self.mode.requested_height} @ {self.mode.requested_fps:g} FPS | "
+                f"Actual: {self.mode.actual_width}x{self.mode.actual_height} @ {self.mode.actual_fps:g} FPS | "
+                f"Backend: {self.mode.backend} | FOURCC: {self.mode.fourcc} | {status}")
 
     def read(self) -> np.ndarray:
         if self.capture is None:
@@ -311,6 +353,14 @@ class USBCamera:
         ok, frame = self.capture.read()
         if not ok or frame is None:
             raise RuntimeError("Camera frame capture failed")
+        # Some drivers report the requested properties but deliver another
+        # mode. Pixel dimensions are the final authority; never upscale here.
+        frame_height, frame_width = frame.shape[:2]
+        if self.mode is not None and (frame_width != self.mode.actual_width or frame_height != self.mode.actual_height):
+            self.width, self.height = frame_width, frame_height
+            self.mode = CameraMode(self.mode.requested_width, self.mode.requested_height,
+                                   self.mode.requested_fps, frame_width, frame_height,
+                                   self.mode.actual_fps, self.mode.backend, self.mode.fourcc)
         return frame
 
     def close(self) -> None:

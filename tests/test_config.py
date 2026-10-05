@@ -33,10 +33,19 @@ def test_model_registry_defaults_camera_and_allows_missing_roi(tmp_path):
     model = registry.get("BF-001")
 
     assert model.roi_ratios is None
-    assert model.camera_width == 1920
-    assert model.camera_height == 1080
+    assert model.camera_width == 3840
+    assert model.camera_height == 2160
     assert model.camera_fps == 30
     assert model.image_size == 640
+    assert model.vit_auto_download is True
+    assert model.surface_require_gpu is True
+    assert model.vit_input_size == 518
+    assert model.surface_near_candidate_ratio == .85
+    assert model.geometry_surface_support_threshold == .55
+    assert model.surface_tile_batch_size == 8
+    assert model.surface_corroboration_max_area_ratio == .02
+    assert model.fine_break_candidate_area_px == 20
+    assert model.fine_break_strong_area_px == 60
     assert model.counting_line_ratio == 0.45
     assert model.counting_direction == "left_to_right"
     assert model.tao_change_class_index == 1
@@ -98,12 +107,16 @@ def test_model_registry_persists_tao_artifact_path(tmp_path):
     assert str(ModelRegistry(path).get("BF-001").model_file) == "models/export.onnx"
 
 
-def test_supplied_models_are_patchcore_production_with_separate_tao_artifacts():
+def test_supplied_models_are_vit_surface_production_with_legacy_comparison_artifacts():
     models = ModelRegistry("config/models.json").all()
 
     assert models
     assert all(model.algorithm == "hybrid_patchcore_geometry" for model in models)
-    assert all(model.production_algorithm == "patchcore_geometry" for model in models)
+    assert all(model.production_algorithm == "vit_surface_geometry" for model in models)
+    assert all(model.surface_tile_size == 768 and model.surface_tile_overlap == .25 for model in models)
+    assert all(model.vit_auto_download and model.surface_require_gpu for model in models)
+    assert all(model.vit_input_size == 518 for model in models)
+    assert all(model.surface_near_candidate_ratio == .85 for model in models)
     assert all(model.model_file.suffix == ".pt" for model in models)
     assert all(model.patchcore_model_file == model.model_file for model in models)
     assert all(model.tao_model_file is not None and model.tao_model_file.suffix == ".onnx" for model in models)
