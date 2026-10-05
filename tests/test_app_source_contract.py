@@ -32,7 +32,7 @@ def test_app_validates_tao_readiness_before_opening_camera():
     camera_open = source.index("self.camera.open()", validation)
 
     assert validation < camera_open
-    assert '"TAO model not ready"' in source
+    assert '"Inspection model not ready"' in source
 
 
 def test_app_does_not_replace_the_inspector_after_readiness_validation():
@@ -50,6 +50,16 @@ def test_app_distinguishes_view_pass_from_final_part_pass():
     assert 'badge_object, badge_text = "statusStandby", "VIEW OK — CHECKING"' in source
     assert "VIEW SCORE:" in source
     assert "VIEWS:" in source
+
+
+def test_invalid_completed_inspection_is_inhibited_but_not_counted_as_bad_part():
+    source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
+    start = source.index('if part.status == "VIEW INVALID":')
+    record = source.index("self.daily_statistics.record(part.status)", start)
+
+    assert "self.fail_output.send_result(True)" in source[start:record]
+    assert "return" in source[start:record]
+    assert "VIEW INVALID — CHECK CAMERA / ROI" in source[start:record]
 
 
 def test_app_preflights_part_departure_runtime_support():
@@ -98,3 +108,14 @@ def test_app_offers_reduced_tolerance_presets_and_manual_float_input():
     assert 'QPushButton("MANUAL")' in source
     assert "self.manual_tolerance.setRange(0.00, 50.00)" in source
     assert "self.manual_tolerance.setDecimals(2)" in source
+    assert "self.tolerance_buttons" in source
+    assert "reset_weak_candidates()" in source
+    assert "QScrollArea" in source
+
+
+def test_dinov2_production_training_is_not_labeled_patchcore():
+    source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
+
+    assert '"GOLDEN REFERENCE + DINOv2 + FIN GEOMETRY TRAINING"' in source
+    assert 'else "PATCHCORE TRAINING"' not in source
+    assert "model.surface_persistence_required" in source

@@ -13,10 +13,17 @@ def test_prepare_dataset_cli_options():
     )
 
     assert args.command == "prepare-dataset"
+
+
+def test_qualification_cli_requires_frozen_good_and_ng_sets():
+    args = build_parser().parse_args(["qualify", "BF-001", "--good", "qualification/good",
+                                      "--ng", "qualification/ng"])
+
+    assert args.command == "qualify"
+    assert args.good == "qualification/good"
+    assert args.ng == "qualification/ng"
     assert args.model_id == "BF-001"
-    assert args.source == "camera-images"
-    assert args.output == "normal-crops"
-    assert args.replace is True
+    assert args.output is None
 
 
 def test_train_accepts_tao_model_file():

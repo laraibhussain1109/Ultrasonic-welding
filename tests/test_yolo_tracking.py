@@ -193,7 +193,7 @@ def test_persistent_candidate_section_is_latched_only_when_confirmed():
     assert inspector.defect_sections(20) == (4,)
 
 
-def test_fixed_station_fails_closed_after_too_many_invalid_views():
+def test_fixed_station_inhibits_without_calling_invalid_views_a_defect():
     inspector = RotatingPartInspector(minimum_rotation_views=2, completion_mode="minimum_views")
     inspector.observe_tracks([tracked(4, 50)], frame_width=100)
 
@@ -204,7 +204,7 @@ def test_fixed_station_fails_closed_after_too_many_invalid_views():
                                              view_valid=False, immediate_failure=False)
 
     assert completed is not None
-    assert completed.status == "FAIL"
+    assert completed.status == "VIEW INVALID"
     assert "INSUFFICIENT_VIEW_QUALITY" in completed.reason_codes
 
 
@@ -220,7 +220,7 @@ def test_fixed_station_part_removal_finishes_incomplete_session_fail_closed():
     completed = inspector.observe_tracks([], frame_width=100, now=1.6)
 
     assert len(completed) == 1
-    assert completed[0].status == "FAIL"
+    assert completed[0].status == "VIEW INVALID"
     assert completed[0].frames_inspected == 2
     assert "INSUFFICIENT_VIEW_QUALITY" in completed[0].reason_codes
     assert not inspector.sessions
@@ -283,3 +283,41 @@ def test_part_departure_checks_later_views_and_keeps_failure_latched():
     assert len(completed) == 1
     assert completed[0].status == "FAIL"
     assert completed[0].frames_inspected == 3
+
+
+def test_sliding_window_confirms_candidate_pass_candidate_at_same_location():
+    tracker = RotatingPartInspector(minimum_rotation_views=5, weak_candidate_required_views=2,
+                                    completion_mode="minimum_views", persistence_window=5)
+    tracker.observe_tracks([tracked(1, 30)], 100)
+    tracker.record_inspection(1, is_pass=False, anomaly_score=.8, immediate_failure=False,
+                              provisional_candidate=True, candidate_sections=(3,))
+    tracker.record_inspection(1, is_pass=True, anomaly_score=.1, immediate_failure=False)
+    tracker.record_inspection(1, is_pass=False, anomaly_score=.9, immediate_failure=False,
+                              provisional_candidate=True, candidate_sections=(3,))
+    assert tracker.latched_failure(1)
+
+
+def test_sliding_window_does_not_combine_unrelated_locations():
+    tracker = RotatingPartInspector(minimum_rotation_views=5, weak_candidate_required_views=2,
+                                    completion_mode="minimum_views", persistence_window=5)
+    tracker.observe_tracks([tracked(1, 30)], 100)
+    tracker.record_inspection(1, is_pass=False, anomaly_score=.8, immediate_failure=False,
+                              provisional_candidate=True, candidate_sections=(1,))
+    tracker.record_inspection(1, is_pass=True, anomaly_score=.1, immediate_failure=False)
+    tracker.record_inspection(1, is_pass=False, anomaly_score=.9, immediate_failure=False,
+                              provisional_candidate=True, candidate_sections=(4,))
+    assert not tracker.latched_failure(1)
+
+
+def test_sensitivity_change_can_clear_only_unconfirmed_candidate_history():
+    tracker = RotatingPartInspector(minimum_rotation_views=5, weak_candidate_required_views=2,
+                                    completion_mode="minimum_views", persistence_window=5)
+    tracker.observe_tracks([tracked(1, 30)], 100)
+    tracker.record_inspection(1, is_pass=False, anomaly_score=.8, immediate_failure=False,
+                              provisional_candidate=True, candidate_sections=(2,))
+
+    tracker.reset_weak_candidates()
+    tracker.record_inspection(1, is_pass=False, anomaly_score=.8, immediate_failure=False,
+                              provisional_candidate=True, candidate_sections=(2,))
+
+    assert not tracker.latched_failure(1)

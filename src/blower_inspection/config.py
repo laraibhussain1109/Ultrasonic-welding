@@ -21,8 +21,8 @@ class PartModelConfig:
     min_defect_area_px: int = 120
     max_bad_sector_ratio: float = 0.18
     roi_ratios: tuple[float, float, float, float] | None = None
-    camera_width: int = 1920
-    camera_height: int = 1080
+    camera_width: int = 3840
+    camera_height: int = 2160
     camera_fps: int = 30
     image_size: int = 640
     yolo_model_path: Path | None = None
@@ -93,6 +93,7 @@ class PartModelConfig:
     padim_enabled: bool = False
     distillation_enabled: bool = False
     engineering_compare_tao: bool = False
+    engineering_compare_legacy: bool = False
     patchcore_edge_ignore_ratio: float = 0.05
     patchcore_embedding_layers: tuple[str, ...] = ("layer2", "layer3")
     patchcore_memory_bank_size: int = 8192
@@ -116,6 +117,49 @@ class PartModelConfig:
     hard_good_dir: Path | None = None
     patchcore_model_file: Path | None = None
     runtime_storage_mode: str = "memory"
+    surface_model_file: Path | None = None
+    vit_backbone: str = "vit_small_patch14_dinov2.lvd142m"
+    vit_weights_path: Path | None = None
+    vit_auto_download: bool = True
+    surface_require_gpu: bool = True
+    # DINOv2 ViT-S/14 was pretrained at 518x518. Native 768px tiles remain the
+    # inspection coordinate system; only each tile's ViT tensor uses this size.
+    vit_input_size: int = 518
+    surface_tile_size: int = 768
+    surface_tile_overlap: float = 0.25
+    surface_tile_batch_size: int = 8
+    surface_memory_bank_size: int = 32768
+    reconstruction_rank: int = 64
+    surface_band_top_ratio: float = 0.05
+    surface_band_bottom_ratio: float = 0.95
+    surface_rib_authority: float = 0.55
+    surface_persistence_required: int = 2
+    surface_persistence_window: int = 5
+    surface_sensitivity: float = 1.0
+    # Near-threshold surface evidence is retained only when independent
+    # geometry reaches its calibrated candidate semantics. Sub-candidate noise
+    # must not promote an appearance variation into a defect.
+    surface_near_candidate_ratio: float = 0.85
+    geometry_surface_support_threshold: float = 0.55
+    # Geometry can corroborate only a localized near-threshold surface region;
+    # broad illumination/registration changes must not fail the whole blower.
+    surface_corroboration_max_area_ratio: float = 0.02
+    fine_break_candidate_area_px: int = 20
+    fine_break_strong_area_px: int = 60
+    surface_normalization_mean: tuple[float, float, float] = (0.485, 0.456, 0.406)
+    surface_normalization_std: tuple[float, float, float] = (0.229, 0.224, 0.225)
+    geometry_max_width: int = 1280
+    inspection_interval_ms: int = 50
+    golden_reference_enabled: bool = True
+    golden_phase_bins: int = 12
+    golden_candidates: int = 3
+    golden_registration_enabled: bool = True
+    golden_min_match_quality: float = 0.45
+    golden_noise_floor: float = 0.08
+    golden_max_component_ratio: float = 0.03
+    training_split_seed: int = 42
+    memory_longitudinal_sections: int = 6
+    memory_phase_neighborhood: int = 1
 
 
 class ModelRegistry:
@@ -196,8 +240,8 @@ class ModelRegistry:
             min_defect_area_px=int(entry.get("min_defect_area_px", 120)),
             max_bad_sector_ratio=float(entry.get("max_bad_sector_ratio", 0.18)),
             roi_ratios=tuple(float(value) for value in roi) if roi is not None else None,
-            camera_width=int(entry.get("camera_width", 1920)),
-            camera_height=int(entry.get("camera_height", 1080)),
+            camera_width=int(entry.get("camera_width", 3840)),
+            camera_height=int(entry.get("camera_height", 2160)),
             camera_fps=int(entry.get("camera_fps", 30)),
             image_size=int(entry.get("image_size", 640)),
             yolo_model_path=Path(entry["yolo_model_path"]) if entry.get("yolo_model_path") else None,
@@ -263,6 +307,7 @@ class ModelRegistry:
             padim_enabled=bool(entry.get("padim_enabled", False)),
             distillation_enabled=bool(entry.get("distillation_enabled", False)),
             engineering_compare_tao=bool(entry.get("engineering_compare_tao", False)),
+            engineering_compare_legacy=bool(entry.get("engineering_compare_legacy", False)),
             patchcore_edge_ignore_ratio=float(entry.get("patchcore_edge_ignore_ratio", .05)),
             patchcore_embedding_layers=tuple(entry.get("patchcore_embedding_layers", ["layer2", "layer3"])),
             patchcore_memory_bank_size=max(1, int(entry.get("patchcore_memory_bank_size", 8192))),
@@ -286,6 +331,44 @@ class ModelRegistry:
             hard_good_dir=Path(entry["hard_good_dir"]) if entry.get("hard_good_dir") else None,
             patchcore_model_file=Path(entry["patchcore_model_file"]) if entry.get("patchcore_model_file") else None,
             runtime_storage_mode=str(entry.get("runtime_storage_mode", "memory")),
+            surface_model_file=Path(entry["surface_model_file"]) if entry.get("surface_model_file") else None,
+            vit_backbone=str(entry.get("vit_backbone", "vit_small_patch14_dinov2.lvd142m")),
+            vit_weights_path=Path(entry["vit_weights_path"]) if entry.get("vit_weights_path") else None,
+            vit_auto_download=bool(entry.get("vit_auto_download", True)),
+            surface_require_gpu=bool(entry.get("surface_require_gpu", True)),
+            vit_input_size=max(224, int(entry.get("vit_input_size", 518))),
+            surface_tile_size=max(224, int(entry.get("surface_tile_size", 768))),
+            surface_tile_overlap=min(.75, max(0., float(entry.get("surface_tile_overlap", .25)))),
+            surface_tile_batch_size=max(1, int(entry.get("surface_tile_batch_size", 8))),
+            surface_memory_bank_size=max(256, int(entry.get("surface_memory_bank_size", 32768))),
+            reconstruction_rank=max(1, int(entry.get("reconstruction_rank", 64))),
+            surface_band_top_ratio=float(entry.get("surface_band_top_ratio", .05)),
+            surface_band_bottom_ratio=float(entry.get("surface_band_bottom_ratio", .95)),
+            surface_rib_authority=min(1., max(.05, float(entry.get("surface_rib_authority", .55)))),
+            surface_persistence_required=max(1, int(entry.get("surface_persistence_required", 2))),
+            surface_persistence_window=max(1, int(entry.get("surface_persistence_window", 5))),
+            surface_sensitivity=min(1.5, max(.5, float(entry.get("surface_sensitivity", 1.0)))),
+            surface_near_candidate_ratio=min(1., max(.5, float(entry.get("surface_near_candidate_ratio", .85)))),
+            geometry_surface_support_threshold=min(1., max(0., float(entry.get("geometry_surface_support_threshold", .55)))),
+            surface_corroboration_max_area_ratio=min(.25, max(.00001, float(
+                entry.get("surface_corroboration_max_area_ratio", .02)
+            ))),
+            fine_break_candidate_area_px=max(1, int(entry.get("fine_break_candidate_area_px", 20))),
+            fine_break_strong_area_px=max(1, int(entry.get("fine_break_strong_area_px", 60))),
+            surface_normalization_mean=tuple(float(value) for value in entry.get("surface_normalization_mean", [.485, .456, .406])),
+            surface_normalization_std=tuple(float(value) for value in entry.get("surface_normalization_std", [.229, .224, .225])),
+            geometry_max_width=max(320, int(entry.get("geometry_max_width", 1280))),
+            inspection_interval_ms=max(1, int(entry.get("inspection_interval_ms", 50))),
+            golden_reference_enabled=bool(entry.get("golden_reference_enabled", True)),
+            golden_phase_bins=max(2, int(entry.get("golden_phase_bins", 12))),
+            golden_candidates=max(1, int(entry.get("golden_candidates", 3))),
+            golden_registration_enabled=bool(entry.get("golden_registration_enabled", True)),
+            golden_min_match_quality=float(entry.get("golden_min_match_quality", .45)),
+            golden_noise_floor=max(.01, float(entry.get("golden_noise_floor", .08))),
+            golden_max_component_ratio=min(.25, max(.0001, float(entry.get("golden_max_component_ratio", .03)))),
+            training_split_seed=int(entry.get("training_split_seed", 42)),
+            memory_longitudinal_sections=max(1, int(entry.get("memory_longitudinal_sections", 6))),
+            memory_phase_neighborhood=max(0, int(entry.get("memory_phase_neighborhood", 1))),
         )
 
 

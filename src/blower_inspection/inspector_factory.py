@@ -12,6 +12,10 @@ def inspector_for_model(config: PartModelConfig) -> Any:
     """Create the inspection backend configured for a part model."""
     production_algorithm = config.production_algorithm.strip().casefold()
     algorithm = config.algorithm.strip().casefold()
+    if production_algorithm in {"vit_surface_geometry", "dinov2_surface_geometry"}:
+        from .surface_inspector import TiledViTSurfaceInspector
+
+        return TiledViTSurfaceInspector()
     if production_algorithm == "patchcore_geometry" or algorithm in {
         "patchcore_primary", "hybrid_patchcore_geometry", "patchcore_geometry"
     }:

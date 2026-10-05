@@ -34,14 +34,27 @@ def register_to_reference(image: np.ndarray, reference: np.ndarray, *, min_corre
         if gray.shape[::-1] != working_size:
             gray = cv2.resize(gray, working_size, interpolation=cv2.INTER_AREA)
         gray = cv2.GaussianBlur(gray, (5, 5), 0).astype(np.float32) / 255.0
-        gradient = cv2.magnitude(
-            cv2.Sobel(gray, cv2.CV_32F, 1, 0),
-            cv2.Sobel(gray, cv2.CV_32F, 0, 1),
-        )
+        # Give persistent support-rib/end-cap edges more registration authority
+        # than the many interchangeable horizontal fin edges. Equal magnitude
+        # weighting lets ECC move by one or more fin periods while retaining a
+        # deceptively high correlation.
+        gx = np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0))
+        gy = np.abs(cv2.Sobel(gray, cv2.CV_32F, 0, 1))
+        gradient = gx + .30 * gy
         return cv2.normalize(gradient, None, 0.0, 1.0, cv2.NORM_MINMAX)
     ref_s, image_s = structural(reference), structural(image)
     shift, _response = cv2.phaseCorrelate(ref_s, image_s)
-    warp = np.array([[1, 0, shift[0]], [0, 1, shift[1]]], dtype=np.float32)
+    # A blower is strongly periodic. Unconstrained phase correlation can lock
+    # onto a different fin period and report a large but visually plausible
+    # translation. Feeding that alias to ECC traps refinement at the wrong fin
+    # and made almost every otherwise-good qualification view invalid. The
+    # locked ROI should already be close, so use phase correlation only inside
+    # the same physical translation envelope enforced on the final transform.
+    working_limit_x = working_size[0] * max_translation_ratio
+    working_limit_y = working_size[1] * max_translation_ratio
+    initial_x = float(shift[0]) if abs(shift[0]) <= working_limit_x else 0.0
+    initial_y = float(shift[1]) if abs(shift[1]) <= working_limit_y else 0.0
+    warp = np.array([[1, 0, initial_x], [0, 1, initial_y]], dtype=np.float32)
     correlation = 0.0
     try:
         criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 40, 1e-5)

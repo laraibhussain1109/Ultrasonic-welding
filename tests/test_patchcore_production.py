@@ -65,7 +65,7 @@ def test_glare_spike_does_not_fail_but_catastrophic_geometry_does():
     mask = np.ones((20, 20), bool)
     glare = fuse_patchcore_geometry(2, mask, _geometry(), glare_score=1,
                                     candidate_threshold=.7, fail_threshold=1)
-    assert glare.status == "PASS" and "LIKELY_GLARE" in glare.reason_codes
+    assert glare.status == "CANDIDATE" and glare.provisional_candidate and "LIKELY_GLARE" in glare.reason_codes
     catastrophic = fuse_patchcore_geometry(.1, mask, _geometry(1.2), glare_score=1,
                                            candidate_threshold=.7, fail_threshold=1)
     assert catastrophic.status == "FAIL" and catastrophic.immediate_failure
@@ -84,15 +84,16 @@ def test_patchcore_candidate_below_fail_line_is_forwarded_for_multi_view_confirm
     assert np.array_equal(decision.confirmed_mask, mask)
 
 
-def test_patchcore_candidate_is_still_rejected_as_likely_glare():
+def test_patchcore_candidate_under_glare_remains_eligible_for_confirmation():
     mask = np.ones((20, 20), bool)
 
     decision = fuse_patchcore_geometry(.8, mask, _geometry(), glare_score=.8,
                                        candidate_threshold=.7, fail_threshold=1,
                                        glare_threshold=.55)
 
-    assert decision.status == "PASS"
-    assert decision.reason_codes == ("LIKELY_GLARE",)
+    assert decision.status == "CANDIDATE"
+    assert decision.provisional_candidate
+    assert decision.reason_codes == ("PATCHCORE_ANOMALY", "LIKELY_GLARE")
 
 
 def test_local_geometry_is_not_averaged_over_full_blower(monkeypatch):
