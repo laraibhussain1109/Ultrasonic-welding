@@ -98,12 +98,15 @@ def test_model_registry_persists_tao_artifact_path(tmp_path):
     assert str(ModelRegistry(path).get("BF-001").model_file) == "models/export.onnx"
 
 
-def test_supplied_models_are_patchcore_production_with_separate_tao_artifacts():
+def test_supplied_models_are_phase_locked_production_with_legacy_artifacts():
     models = ModelRegistry("config/models.json").all()
 
     assert models
     assert all(model.algorithm == "hybrid_patchcore_geometry" for model in models)
-    assert all(model.production_algorithm == "patchcore_geometry" for model in models)
+    assert all(model.production_algorithm == "phase_locked_structural" for model in models)
+    assert all(not model.patchcore_primary for model in models)
+    assert all(model.inspection_angles == (60, 120, 180, 240, 300, 360) for model in models)
+    assert all(model.temporal_confirmation_frames >= 3 for model in models)
     assert all(model.model_file.suffix == ".pt" for model in models)
     assert all(model.patchcore_model_file == model.model_file for model in models)
     assert all(model.tao_model_file is not None and model.tao_model_file.suffix == ".onnx" for model in models)

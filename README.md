@@ -1,10 +1,160 @@
 # NeuroIris Blower Fan Industrial Vision Inspection
 
 Python/PyQt6 inspection software for ultrasonic-welded blower fan parts. The
-default production decision uses **PatchCore + structural fin geometry +
-multi-view confirmation**. NVIDIA TAO VisualChangeNet remains available for
-engineering comparison, training, export, and ONNX runtime experiments, but it
-does not control PASS/FAIL by default.
+default production decision is now **PLC phase-locked robust golden structure +
+fin geometry + same-phase burst confirmation**. PatchCore, DINO-derived
+features, TAO and a future EfficientAD provider are engineering/supporting
+signals only and cannot independently reject a part.
+
+## Phase-locked production architecture
+
+The former anomaly-first path was intentionally retired as production authority:
+an embedding detector answers “does this look unusual?”, so harmless highlights,
+finish variation, sensor noise and sub-pixel pose changes produced false rejects.
+Production now asks the narrower question “is there repeatable physical structural
+damage at the PLC-declared physical angle?” The implementation is in
+`phase_locked.py`; the fail-closed hardware sequence is in `plc_inspection.py`.
+
+1. **Fitment revolution.** The first continuous 360° motion collects tracked ROI
+   centers, dimensions, sharpness and confidence. Robust p99 runout, horizontal/
+   vertical motion and width MAD qualify seating. It is not a defect scan.
+2. **HOME lock.** After fitment passes and the PLC reports `HOME`, the reference
+   ROI/coordinate system and stable HOME image are captured.
+3. **Indexed views.** The PLC, never image similarity, declares `POSITION_60`,
+   `POSITION_120`, …, `POSITION_360`. Frames received while moving are rejected.
+4. **Stationary burst.** After the configurable settle delay, seven frames are
+   captured by default. Blur is discarded and at least five must qualify.
+5. **Phase-only comparison.** Each view is registered with a small bounded ECC
+   transform exclusively against its own phase model. Excess correction or low
+   correlation produces `VIEW_INVALID`, not a component defect.
+6. **Structural fusion.** Local-contrast gray, Scharr magnitude/orientation,
+   stable-edge probability, explicit glare masks and fin continuity provide the
+   evidence. Broad brightness/glare is non-authoritative. A localized structural
+   candidate must overlap in at least three registered frames of that same phase.
+7. **Closure and verdict.** Final 360° is checked against HOME for index loss or
+   fixture slip. Only a complete six-phase session can PASS or FAIL; missing
+   phases, registration problems and position drift are `INSPECTION_INVALID`.
+
+### PLC protocol and statuses
+
+Accepted input messages are `PART_PRESENT`, `FITMENT_START`, `FITMENT_COMPLETE`,
+`HOME`, `MOTOR_MOVING`, and `POSITION_60` through `POSITION_360` (the equivalent
+`PHASE:<angle>` form is also accepted). Every transition is timestamped. The
+states are `IDLE`, `PART_PRESENT`, `FITMENT_ROTATION`, `FITMENT_ANALYSIS`,
+`FITMENT_PASS`, `WAIT_PHASE`, `SETTLING`, `CAPTURING_BURST`, `ANALYZING_PHASE`,
+`FINAL_HOME_CHECK`, `FINALIZING`, and terminal `PASS`/`FAIL`/`INVALID`.
+
+### Camera-only phase synchronization
+
+The installed PLC does not need a spare phase output. The desktop uses the fixed
+ROI video to detect **motion versus stationary transitions**, not to match or
+recognize surface appearance. After inspection starts it observes the initial
+continuous fitment revolution; the first confirmed stop locks HOME. Every later
+confirmed moving-to-stopped transition advances the known mechanical sequence
+60°, 120°, 180°, 240°, 300°, 360°. It then waits `settle_delay_ms` and captures
+the configured stationary burst. Frames observed while moving are never sent to
+structural inspection.
+
+This remains deterministic indexing: image similarity does not choose an angle,
+and an arbitrary surface pattern cannot change phase order. The configurable
+`camera_motion_threshold`, `camera_moving_confirmation_frames`, and
+`camera_stationary_confirmation_frames` values control transition debounce.
+If a future PLC phase link becomes available, `PhaseInspectionController` still
+accepts authoritative PLC events directly.
+
+The backend's generic one-image API remains fail-closed with
+`VIEW INVALID / PLC_PHASE_REQUIRED`; the live desktop does not use that path for
+phase-locked models. It supplies the angle and complete burst emitted by the
+camera transition sequencer.
+
+`PASS` means every required stationary structural view and HOME closure passed.
+`FAIL` means temporally confirmed structural damage. `FITMENT_FAIL` means bad
+seating/runout. `VIEW_INVALID` means an unusable phase capture, while
+`INSPECTION_INVALID` means the part must be reinspected because sequence,
+registration, completeness, tracking or closure integrity failed. Existing
+ESP32 PASS/FAIL outputs remain the line-output transport; invalid results must
+inhibit acceptance rather than be reported as component defects.
+
+### Golden and fitment calibration
+
+When operators place the cylindrical blower without a mechanically keyed
+circumferential zero, the physical surface at PLC 60° is intentionally **not**
+assumed to be the same surface on the next part. In this normal production mode,
+put reviewed GOOD images directly in the existing folder:
+
+```text
+data/training/BF-001/normal/*.png
+```
+
+Calibration automatically takes a deterministic, configurable sample from this
+common population and builds all six PLC-angle banks from it. The PLC angle is
+still authoritative for capture ordering, stationary-burst consensus and
+closure checking; it is not treated as a permanent identity for one physical
+surface. `golden_calibration_max_images` defaults to 64 so thousands of 4K
+images do not exhaust RAM during robust pixelwise calibration.
+
+Only use separately collected phase-specific datasets when the fixture has a
+real mechanical key/index that gives every part the same physical zero. That
+advanced layout is:
+
+```text
+data/training/BF-001/phase_060/good/<physical-part-id>/*.png
+data/training/BF-001/phase_120/good/<physical-part-id>/*.png
+...
+data/training/BF-001/phase_360/good/<physical-part-id>/*.png
+```
+
+For each phase, calibration stores pixelwise median and `max(1.4826*MAD,
+golden_noise_floor)` for normalized gray and gradients, stable-edge probability,
+physical-part count, ROI/resolution, preprocessing/registration version and UTC
+creation time in `data/models/<model>/phase_NNN/golden_v1.npz`. Incompatible
+versions, ROI shapes or phases fail closed and require recalibration. Capture
+fitment revolutions from at least three known-good physical parts; use the saved
+median, MAD, p95/p99 and recommended rejection threshold rather than copying a
+threshold between fixtures.
+
+For the ordinary unkeyed workflow, the existing reviewed images in `normal` are
+enough; no manual sorting or copying into angle folders is required. Press
+**CALIBRATE GOLDEN MODEL** in the admin UI or run:
+
+```bash
+blower-inspection train BF-001
+```
+
+The calibration entry point automatically detects pooled versus explicitly
+phase-organized input, reports progress, builds into a staging directory, and
+publishes the versioned banks only after every phase succeeds. A partially
+organized phase dataset is rejected rather than silently mixed with pooled data.
+The resulting
+`data/models/BF-001/phase_locked_manifest.json` records the calibration metadata.
+The old **TRAIN PATCHCORE MODEL** action is intentionally not shown when the
+production algorithm is phase locked.
+
+Threshold qualification must use held-out physical GOOD parts and report the
+GOOD false-reject rate plus median/MAD/p95/p99/p99.5 for runout, registration,
+golden residual, edge mismatch, geometry and any supporting-AI score. Validate
+small chips, broken/missing/tilted fins and dents with representative seeded or
+approved defective parts after the false-reject requirement passes.
+
+### Production configuration
+
+`config/models.json` exposes `inspection_angles`, `settle_delay_ms`,
+`burst_frame_count`, `minimum_qualified_frames`,
+`temporal_confirmation_frames`, bounded registration settings, fitment limits,
+golden/edge/geometry candidate and fail thresholds, glare handling,
+`efficientad_enabled`, and `production_algorithm`. The commissioned default is
+`phase_locked_structural`; `patchcore_geometry` remains an explicit legacy
+engineering-comparison selection. Do not alter calibrated values without a new
+qualification report.
+
+Troubleshoot false rejects by checking the reason code first: recalibrate a
+specific phase with more independent hard-good parts for normal finish variance;
+repair fixture/indexing for runout or closure failures; and correct focus,
+exposure or settle timing for insufficient bursts. Never solve a fixture or
+registration fault by allowing larger warps. Engineering mode may display the
+gradient residual, edge mismatch, glare mask, registration result and optional
+AI map; production presentation should leave PASS imagery untouched and draw
+red contours/boxes only for confirmed defects.
 
 > **New installation?** Follow the complete [step-by-step operating guide](docs/getting_started.md)
 > for PatchCore model training and starting a live inspection.
