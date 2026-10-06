@@ -91,6 +91,19 @@ def test_app_imports_backend_factory_from_its_own_module():
     assert "from .tao_inspector import inspector_for_model" not in source
 
 
+def test_phase_bursts_are_queued_and_yolo_does_not_block_active_cycle():
+    source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
+
+    assert "self.pending_phase_bursts.append" in source
+    assert "def _start_next_phase_burst" in source
+    assert "if not camera_cycle_active" in source
+    assert "phase_input_width" in source and "phase_input_height" in source
+    assert "self.pixel_ignore.setRange(2, 1000)" in source
+    assert 'authority_label = ("STRUCTURAL"' in source
+    assert "def _capture_stopped_burst" in source
+    assert "camera_stationary_flush_frames" in source
+
+
 def test_app_offers_reduced_tolerance_presets_and_manual_float_input():
     source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
 
