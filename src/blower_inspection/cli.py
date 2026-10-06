@@ -176,10 +176,11 @@ def main(argv: list[str] | None = None) -> int:
                 raise SystemExit(str(exc)) from exc
             model = registry.update_model_settings(model.id, model_file=candidate)
         inspector = inspector_for_model(model)
+        phase_calibration = model.production_algorithm == "phase_locked_structural"
         patchcore_production = model.production_algorithm == "patchcore_geometry"
         if patchcore_production and model.yolo_model_path is None:
             raise SystemExit(f"No yolo_model_path is configured for {model.id}")
-        if not patchcore_production and model.algorithm == "nvidia_tao":
+        if not phase_calibration and not patchcore_production and model.algorithm == "nvidia_tao":
             if not model.model_file.is_file():
                 raise SystemExit(
                     f"VisualChangeNet export not found: {model.model_file}. The `train` command calibrates an "
@@ -187,13 +188,13 @@ def main(argv: list[str] | None = None) -> int:
                     "then `tao-export --spec <export.yaml>`, or pass the resulting ONNX with --model-file."
                 )
             print(f"Calibrating TAO export {model.model_file} with normals in {model.normal_image_dir}...")
-        else:
+        elif patchcore_production:
             print(
                 f"Auto-cropping {model.normal_image_dir} in memory with {model.yolo_model_path} "
                 "before training (source images will not be modified)..."
             )
         output = inspector.train(model, progress_callback=_print_progress)
-        action = "Calibrated" if not patchcore_production and model.algorithm == "nvidia_tao" else "Trained"
+        action = "Phase goldens calibrated" if phase_calibration else ("Calibrated" if not patchcore_production and model.algorithm == "nvidia_tao" else "Trained")
         print(f"{action} {model.id}: {output}")
         return 0
 
