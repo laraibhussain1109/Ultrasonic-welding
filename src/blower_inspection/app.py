@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import time
+from collections import deque
 from dataclasses import replace
 from pathlib import Path
 
@@ -48,6 +49,7 @@ from .daily_stats import DailyStatistics, operating_day
 from .fail_output import ESP32FailOutputBridge
 from .frame_selection import RotationPhaseGate, SharpFrameSampler
 from .inspector_factory import inspector_for_model
+from .camera_phase import CameraPhaseSequencer
 from .trainer import InspectionResult
 from .tao_training import run_visual_changenet_task
 from .yolo_tracking import SUPPORTED_COMPLETION_MODES, RotatingPartInspector, TrackedPart, YoloByteTrackDetector
@@ -128,11 +130,9 @@ class TrainWorker(QThread):
             output = self.inspector.train(
                 self.model, progress_callback=lambda update: self.progress.emit(update.format())
             )
-            tao_production = (
-                self.model.production_algorithm != "patchcore_geometry"
-                and self.model.algorithm == "nvidia_tao"
-            )
-            action = "CALIBRATED" if tao_production else "TRAINED"
+            phase_calibration = self.model.production_algorithm == "phase_locked_structural"
+            tao_production = self.model.production_algorithm != "patchcore_geometry" and self.model.algorithm == "nvidia_tao"
+            action = "GOLDEN CALIBRATED" if phase_calibration else ("CALIBRATED" if tao_production else "TRAINED")
             self.finished_ok.emit(f"{action} {self.model.id}: {output}")
         except Exception as exc:
             self.failed.emit(f"TRAINING FAILED {self.model.id}: {exc}")
@@ -142,17 +142,23 @@ class InspectionWorker(QThread):
     finished_result = pyqtSignal(int, object, float)
     failed = pyqtSignal(str)
 
-    def __init__(self, inspector, model: PartModelConfig, track_id: int, frame) -> None:
+    def __init__(self, inspector, model: PartModelConfig, track_id: int, frame,
+                 *, phase_angle: int | None = None, burst_frames=None) -> None:
         super().__init__()
         self.inspector = inspector
         self.model = model
         self.track_id = track_id
         self.frame = frame.copy()
+        self.phase_angle = phase_angle
+        self.burst_frames = [item.copy() for item in burst_frames] if burst_frames else None
 
     def run(self) -> None:
         start = time.perf_counter()
         try:
-            result = self.inspector.inspect(self.model, self.frame, save_outputs=False, crop_to_component=False)
+            kwargs = {"save_outputs": False, "crop_to_component": False}
+            if self.phase_angle is not None:
+                kwargs.update(phase_angle=self.phase_angle, burst_frames=self.burst_frames)
+            result = self.inspector.inspect(self.model, self.frame, **kwargs)
         except Exception as exc:
             self.failed.emit(str(exc))
             return
@@ -212,7 +218,10 @@ class InspectionWindow(QWidget):
         self.tolerance_percent = 5.0
         self.frame_sampler: SharpFrameSampler | None = None
         self.rotation_phase_gate: RotationPhaseGate | None = None
+        self.camera_phase_sequencer: CameraPhaseSequencer | None = None
+        self.pending_phase_bursts = deque()
         self.pending_sharp_frames = {}
+        self.pending_phase_bursts.clear()
         self.active_fail_asserted = False
         self.daily_statistics = DailyStatistics(memory_only=active_model.runtime_storage_mode == "memory")
         self.stats = self.daily_statistics.counts()
@@ -323,6 +332,13 @@ class InspectionWindow(QWidget):
         self.manual_tolerance.valueChanged.connect(self.set_tolerance)
         tolerance_grid.addWidget(self.manual_tolerance, 1, 2, 1, 2)
         layout.addLayout(tolerance_grid)
+        layout.addWidget(QLabel("IGNORE STRUCTURAL REGIONS SMALLER THAN"))
+        self.pixel_ignore = QSpinBox()
+        self.pixel_ignore.setRange(2, 1000)
+        self.pixel_ignore.setSuffix(" px")
+        self.pixel_ignore.setValue(self.selected_model().structural_min_region_area_px)
+        self.pixel_ignore.setToolTip("Connected structural regions below this area cannot become defect candidates")
+        layout.addWidget(self.pixel_ignore)
         layout.addSpacing(25)
         layout.addWidget(self._section("SURFACE SPEED"))
         self.speed_value = QLabel("1.0")
@@ -340,7 +356,7 @@ class InspectionWindow(QWidget):
             export.setObjectName("train")
             export.clicked.connect(self.export_selected)
             layout.addWidget(export)
-            train = QPushButton("◆   TRAIN PATCHCORE MODEL")
+            train = QPushButton("◆   CALIBRATE GOLDEN MODEL")
             train.setObjectName("train")
             train.clicked.connect(self.train_selected)
             layout.addWidget(train)
@@ -359,7 +375,7 @@ class InspectionWindow(QWidget):
         layout.addWidget(self.viewer, 1)
         bottom = QFrame(objectName="bottomPanel")
         bottom_layout = QHBoxLayout(bottom)
-        bottom_layout.addWidget(QLabel("ANOMALY SCORE"))
+        bottom_layout.addWidget(QLabel("STRUCTURAL EVIDENCE"))
         self.score_slider = QSlider(Qt.Orientation.Horizontal)
         self.score_slider.setEnabled(False)
         self.score_slider.setRange(0, 1000)
@@ -380,6 +396,15 @@ class InspectionWindow(QWidget):
         self.status_badge.setObjectName("statusStandby")
         layout.addWidget(self.status_badge)
         layout.addSpacing(20)
+        layout.addWidget(self._section("PHASE-LOCKED INSPECTION"))
+        self.phase_state = QLabel(
+            "STATE: IDLE\nPHASE: - / 6    ANGLE: -\n"
+            "BURST: 0 / 7    QUALIFIED: 0\nREGISTRATION: -    FITMENT: -"
+        )
+        self.phase_state.setFont(QFont("Consolas", 10, QFont.Weight.Bold))
+        self.phase_state.setStyleSheet("color:#00d9ff; padding:8px; border:1px solid #0b314a;")
+        layout.addWidget(self.phase_state)
+        layout.addSpacing(12)
         layout.addWidget(self._section("SESSION STATISTICS"))
         stats_grid = QGridLayout()
         self.inspected_value = self._metric_card("INSPECTED", "0")
@@ -393,7 +418,7 @@ class InspectionWindow(QWidget):
         layout.addLayout(stats_grid)
         layout.addSpacing(25)
         layout.addWidget(self._section("LAST RESULT"))
-        self.last_result = QLabel("FRAME:  -\nSCORE:  -\nCOVERAGE:  -\nLATENCY:  -")
+        self.last_result = QLabel("PHASE:  -\nSTRUCTURE:  -\nREASON:  -\nLATENCY:  -")
         self.last_result.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
         layout.addWidget(self.last_result)
         layout.addSpacing(25)
@@ -434,6 +459,7 @@ class InspectionWindow(QWidget):
             model,
             min_defect_area_px=tolerance_area,
             max_bad_sector_ratio=max(0.0001, self.tolerance_percent / 100.0),
+            structural_min_region_area_px=self.pixel_ignore.value(),
         )
 
     def _refresh_models(self, selected_id: str | None = None) -> None:
@@ -458,6 +484,8 @@ class InspectionWindow(QWidget):
         model = self.selected_model()
         self.inspector = inspector_for_model(model)
         self.camera = USBCamera(width=model.camera_width, height=model.camera_height, fps=model.camera_fps)
+        if getattr(self, "pixel_ignore", None) is not None:
+            self.pixel_ignore.setValue(model.structural_min_region_area_px)
 
     def load_image(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Load inspection image", str(Path.cwd()), "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)")
@@ -600,6 +628,16 @@ class InspectionWindow(QWidget):
                 model.minimum_rotation_descriptor_distance,
                 maximum_history=max(24, model.minimum_rotation_views * 2),
             )
+            if model.production_algorithm == "phase_locked_structural":
+                self.camera_phase_sequencer = CameraPhaseSequencer(
+                    angles=model.inspection_angles,
+                    settle_delay_ms=model.settle_delay_ms,
+                    burst_frame_count=model.burst_frame_count,
+                    motion_threshold=model.camera_motion_threshold,
+                    motion_flow_threshold=model.camera_motion_flow_threshold,
+                    moving_confirmation_frames=model.camera_moving_confirmation_frames,
+                    stationary_confirmation_frames=model.camera_stationary_confirmation_frames,
+                )
             self.camera.open()
             if model.lock_roi_after_confirmation and not self._confirm_and_lock_roi(model):
                 self.camera.close()
@@ -706,17 +744,30 @@ class InspectionWindow(QWidget):
             return []
         model = self.selected_model()
         self.locked_presence_poll += 1
+        camera_cycle_active = (
+            self.camera_phase_sequencer is not None
+            and (self.camera_phase_sequencer.state != "INDEXED INSPECTION COMPLETE"
+                 or bool(self.pending_phase_bursts)
+                 or self.inference_worker is not None)
+        )
         # Keep the crop immutable but periodically ask YOLO whether a blower is
         # still present. Polling once per burst avoids adding detector latency to
         # every camera frame.
-        if self.locked_presence_poll == 1 or self.locked_presence_poll % model.capture_burst_frames == 0:
+        # During the indexed cycle, presence is already guaranteed by the
+        # operator-approved locked ROI. Synchronous YOLO polling used to reduce
+        # acquisition to ~2 FPS and made it impossible to collect a one-second
+        # stationary burst. Resume presence polling only after all six stops.
+        if not camera_cycle_active and (
+            self.locked_presence_poll == 1
+            or self.locked_presence_poll % max(model.camera_fps, model.capture_burst_frames) == 0
+        ):
             try:
                 assert self.part_detector is not None
                 detection = self.part_detector.detect_best(raw_frame)
                 self.locked_last_yolo_present = detection.confidence >= model.yolo_presence_confidence
             except ValueError:
                 self.locked_last_yolo_present = False
-        yolo_present = self.locked_last_yolo_present
+        yolo_present = True if camera_cycle_active else self.locked_last_yolo_present
         if yolo_present:
             if not self.locked_part_present:
                 self.locked_track_id += 1
@@ -793,6 +844,25 @@ class InspectionWindow(QWidget):
             if track_id in active_ids
         }
         for part in tracks:
+            if self.camera_phase_sequencer is not None:
+                roi = crop_bounds(raw_frame, part.bounds)
+                roi = cv2.resize(
+                    roi,
+                    (self.selected_model().phase_input_width, self.selected_model().phase_input_height),
+                    interpolation=cv2.INTER_AREA,
+                )
+                update = self.camera_phase_sequencer.offer(roi)
+                phase_number = (self.selected_model().inspection_angles.index(update.angle) + 1
+                                if update.angle in self.selected_model().inspection_angles else 0)
+                self.phase_state.setText(
+                    f"STATE: {update.state}\nPHASE: {phase_number or '-'} / 6    ANGLE: {update.angle or '-'}\n"
+                    f"BURST: {update.burst_count} / {self.selected_model().burst_frame_count}    QUALIFIED: -\n"
+                    "REGISTRATION: -    FITMENT: CAMERA MOTION"
+                )
+                if update.burst and update.angle is not None:
+                    self.pending_phase_bursts.append((part.track_id, update.angle, update.burst))
+                    self._start_next_phase_burst()
+                return
             selected = self.frame_sampler.offer(
                 part.track_id, crop_bounds(raw_frame, part.bounds)
             )
@@ -895,13 +965,26 @@ class InspectionWindow(QWidget):
             self.latest_annotated_frame = result.display_image
             self.show_frame(result.display_image)
         reason_text = ", ".join(result.reason_codes) or "NORMAL"
+        if self.selected_model().production_algorithm == "phase_locked_structural":
+            phase_text = "WAITING FOR PLC PHASE" if "PLC_PHASE_REQUIRED" in result.reason_codes else result.status
+            angle = result.reference_index
+            phase_number = (self.selected_model().inspection_angles.index(angle) + 1
+                            if angle in self.selected_model().inspection_angles else "-")
+            self.phase_state.setText(
+                f"STATE: {phase_text}\nPHASE: {phase_number} / 6    ANGLE: {angle or '-'}\n"
+                f"BURST: {self.selected_model().burst_frame_count} / {self.selected_model().burst_frame_count}    "
+                f"QUALIFIED: {round((result.view_quality_score or 0) * self.selected_model().burst_frame_count)}\n"
+                f"REGISTRATION: {'OK' if result.view_valid else 'INVALID'}    FITMENT: CAMERA MOTION"
+            )
         geometry_components = result.geometry_components
         geometry_detail = (f"PITCH: {geometry_components.get('pitch', 0):.2f}   "
                            f"CONT: {geometry_components.get('continuity', 0):.2f}   "
                            f"BROKEN: {geometry_components.get('broken', 0):.2f}")
+        authority_label = ("STRUCTURAL" if self.selected_model().production_algorithm == "phase_locked_structural"
+                           else "PATCHCORE")
         self.last_result.setText(
             f"TRACK: {track_id}   VIEW SCORE: {result.anomaly_score:.2f}\n"
-            f"PATCHCORE: {result.anomaly_score:.2f}   GEOMETRY: {result.geometry_score or 0:.2f}\n"
+            f"{authority_label}: {result.anomaly_score:.2f}   GEOMETRY: {result.geometry_score or 0:.2f}\n"
             f"GLARE: {result.glare_score or 0:.2f}   REGISTRATION: {result.registration_score or 0:.2f}\n"
             f"VIEW QUALITY: {result.view_quality_score if result.view_quality_score is not None else 1.0:.2f}\n"
             f"{geometry_detail}\n"
@@ -999,6 +1082,21 @@ class InspectionWindow(QWidget):
         if self.inference_worker is not None:
             self.inference_worker.deleteLater()
             self.inference_worker = None
+        QTimer.singleShot(0, self._start_next_phase_burst)
+
+    def _start_next_phase_burst(self) -> None:
+        """Drain phase bursts asynchronously so camera acquisition never waits for analysis."""
+        if self.inference_worker is not None or not self.pending_phase_bursts or not self.inspection_running:
+            return
+        track_id, angle, burst = self.pending_phase_bursts.popleft()
+        self.inference_worker = InspectionWorker(
+            self.inspector, self.inspection_model(), track_id,
+            burst[-1], phase_angle=angle, burst_frames=list(burst),
+        )
+        self.inference_worker.finished_result.connect(self._handle_inspection_result)
+        self.inference_worker.failed.connect(lambda message: self._handle_live_error(f"Inspection error: {message}"))
+        self.inference_worker.finished.connect(self._clear_inference_worker)
+        self.inference_worker.start()
 
     def _handle_live_error(self, message: str) -> None:
         if not self.inspection_running:
@@ -1052,7 +1150,8 @@ class InspectionWindow(QWidget):
             QMessageBox.warning(self, "Permission denied", "Training is available to admin users only.")
             return
         model = self.selected_model()
-        tao_production = model.production_algorithm != "patchcore_geometry" and model.algorithm == "nvidia_tao"
+        phase_calibration = model.production_algorithm == "phase_locked_structural"
+        tao_production = not phase_calibration and model.production_algorithm != "patchcore_geometry" and model.algorithm == "nvidia_tao"
         if tao_production and not model.model_file.is_file():
             path, _ = QFileDialog.getOpenFileName(
                 self,
@@ -1072,7 +1171,7 @@ class InspectionWindow(QWidget):
             model = self.registry.update_model_settings(model.id, model_file=Path(path).resolve())
             self._refresh_models(selected_id=model.id)
             self.inspector = inspector_for_model(model)
-        operation = "TAO CALIBRATION" if tao_production else "PATCHCORE TRAINING"
+        operation = "PHASE GOLDEN CALIBRATION" if phase_calibration else ("TAO CALIBRATION" if tao_production else "PATCHCORE TRAINING")
         self.log.addItem(f"{operation} STARTED {model.id}")
         self.train_worker = TrainWorker(self.inspector, model)
         self.train_worker.finished_ok.connect(lambda message: self.log.addItem(message))
@@ -1124,6 +1223,8 @@ class InspectionWindow(QWidget):
         if self.rotation_phase_gate is not None:
             self.rotation_phase_gate.clear()
         self.rotation_phase_gate = None
+        self.camera_phase_sequencer = None
+        self.pending_phase_bursts.clear()
         self.viewer.clear()
         self.viewer.setText("NO CAMERA FRAME")
         self.fps_top.setText("FPS:  -")
