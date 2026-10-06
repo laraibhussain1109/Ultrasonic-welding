@@ -128,11 +128,9 @@ class TrainWorker(QThread):
             output = self.inspector.train(
                 self.model, progress_callback=lambda update: self.progress.emit(update.format())
             )
-            tao_production = (
-                self.model.production_algorithm != "patchcore_geometry"
-                and self.model.algorithm == "nvidia_tao"
-            )
-            action = "CALIBRATED" if tao_production else "TRAINED"
+            phase_calibration = self.model.production_algorithm == "phase_locked_structural"
+            tao_production = self.model.production_algorithm != "patchcore_geometry" and self.model.algorithm == "nvidia_tao"
+            action = "GOLDEN CALIBRATED" if phase_calibration else ("CALIBRATED" if tao_production else "TRAINED")
             self.finished_ok.emit(f"{action} {self.model.id}: {output}")
         except Exception as exc:
             self.failed.emit(f"TRAINING FAILED {self.model.id}: {exc}")
@@ -340,7 +338,7 @@ class InspectionWindow(QWidget):
             export.setObjectName("train")
             export.clicked.connect(self.export_selected)
             layout.addWidget(export)
-            train = QPushButton("◆   TRAIN PATCHCORE MODEL")
+            train = QPushButton("◆   CALIBRATE GOLDEN MODEL")
             train.setObjectName("train")
             train.clicked.connect(self.train_selected)
             layout.addWidget(train)
@@ -359,7 +357,7 @@ class InspectionWindow(QWidget):
         layout.addWidget(self.viewer, 1)
         bottom = QFrame(objectName="bottomPanel")
         bottom_layout = QHBoxLayout(bottom)
-        bottom_layout.addWidget(QLabel("ANOMALY SCORE"))
+        bottom_layout.addWidget(QLabel("STRUCTURAL EVIDENCE"))
         self.score_slider = QSlider(Qt.Orientation.Horizontal)
         self.score_slider.setEnabled(False)
         self.score_slider.setRange(0, 1000)
@@ -380,6 +378,15 @@ class InspectionWindow(QWidget):
         self.status_badge.setObjectName("statusStandby")
         layout.addWidget(self.status_badge)
         layout.addSpacing(20)
+        layout.addWidget(self._section("PHASE-LOCKED INSPECTION"))
+        self.phase_state = QLabel(
+            "STATE: IDLE\nPHASE: - / 6    ANGLE: -\n"
+            "BURST: 0 / 7    QUALIFIED: 0\nREGISTRATION: -    FITMENT: -"
+        )
+        self.phase_state.setFont(QFont("Consolas", 10, QFont.Weight.Bold))
+        self.phase_state.setStyleSheet("color:#00d9ff; padding:8px; border:1px solid #0b314a;")
+        layout.addWidget(self.phase_state)
+        layout.addSpacing(12)
         layout.addWidget(self._section("SESSION STATISTICS"))
         stats_grid = QGridLayout()
         self.inspected_value = self._metric_card("INSPECTED", "0")
@@ -393,7 +400,7 @@ class InspectionWindow(QWidget):
         layout.addLayout(stats_grid)
         layout.addSpacing(25)
         layout.addWidget(self._section("LAST RESULT"))
-        self.last_result = QLabel("FRAME:  -\nSCORE:  -\nCOVERAGE:  -\nLATENCY:  -")
+        self.last_result = QLabel("PHASE:  -\nSTRUCTURE:  -\nREASON:  -\nLATENCY:  -")
         self.last_result.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
         layout.addWidget(self.last_result)
         layout.addSpacing(25)
@@ -1052,7 +1059,8 @@ class InspectionWindow(QWidget):
             QMessageBox.warning(self, "Permission denied", "Training is available to admin users only.")
             return
         model = self.selected_model()
-        tao_production = model.production_algorithm != "patchcore_geometry" and model.algorithm == "nvidia_tao"
+        phase_calibration = model.production_algorithm == "phase_locked_structural"
+        tao_production = not phase_calibration and model.production_algorithm != "patchcore_geometry" and model.algorithm == "nvidia_tao"
         if tao_production and not model.model_file.is_file():
             path, _ = QFileDialog.getOpenFileName(
                 self,
@@ -1072,7 +1080,7 @@ class InspectionWindow(QWidget):
             model = self.registry.update_model_settings(model.id, model_file=Path(path).resolve())
             self._refresh_models(selected_id=model.id)
             self.inspector = inspector_for_model(model)
-        operation = "TAO CALIBRATION" if tao_production else "PATCHCORE TRAINING"
+        operation = "PHASE GOLDEN CALIBRATION" if phase_calibration else ("TAO CALIBRATION" if tao_production else "PATCHCORE TRAINING")
         self.log.addItem(f"{operation} STARTED {model.id}")
         self.train_worker = TrainWorker(self.inspector, model)
         self.train_worker.finished_ok.connect(lambda message: self.log.addItem(message))
