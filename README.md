@@ -1,5 +1,26 @@
 # NeuroIris Blower Fan Industrial Vision Inspection
 
+## Fixed six-view PatchCore workflow
+
+The default desktop now uses **stopped 60° positions → quality-selected burst →
+YOLOv12 ROI → consistent letterbox → original PatchCore heatmap → component
+filtering → pixel/percentage tolerances → six independent view decisions**.
+All six valid views are required before final PASS. Engineering, settings,
+cached-heatmap tuning, and labeled tolerance calibration are included.
+
+Read [the complete fixed-view operating guide](docs/fixed_patchcore.md) for your
+Windows YOLO path, training, defaults, PLC event mapping, evidence storage, and
+validation. Quick commands from the repository root:
+
+```bash
+python -m blower_inspection.cli train-fixed --settings config/fixed_inspection.json
+blower-inspection-ui
+```
+
+The previous UI and training path described below are preserved. Use
+`blower-inspection-ui --legacy` to run that UI. The new spatial checkpoint is
+stored separately from earlier PatchCore checkpoints.
+
 Python/PyQt6 inspection software for ultrasonic-welded blower fan parts. The
 default production decision uses **PatchCore + structural fin geometry +
 multi-view confirmation**. NVIDIA TAO VisualChangeNet remains available for

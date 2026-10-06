@@ -133,6 +133,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from .fixed_cli import COMMANDS, main as fixed_main
+    arguments = sys.argv[1:] if argv is None else argv
+    if arguments and arguments[0] in COMMANDS:
+        return fixed_main(arguments)
     args = build_parser().parse_args(argv)
     registry = ModelRegistry(args.models)
     ensure_model_folders(registry)

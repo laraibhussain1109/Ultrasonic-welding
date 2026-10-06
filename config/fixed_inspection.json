@@ -1,0 +1,82 @@
+{
+  "camera": {
+    "index": 0,
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "exposure": -6.0,
+    "gain": 0.0,
+    "burst_frames": 15
+  },
+  "quality": {
+    "minimum_blur_score": 60.0,
+    "maximum_dark_percent": 55.0,
+    "maximum_saturated_percent": 12.0,
+    "minimum_mean_intensity": 10.0,
+    "maximum_mean_intensity": 245.0,
+    "blur_weight": 1.0,
+    "exposure_penalty": 1.0
+  },
+  "yolo": {
+    "model_path": "data/models/yolo/best.pt",
+    "confidence": 0.7,
+    "iou": 0.45,
+    "padding_x_percent": 4.0,
+    "padding_y_percent": 4.0,
+    "class_id": -1,
+    "show_roi": true
+  },
+  "patchcore": {
+    "model_path": "data/models/BF-001/patchcore_fixed.pt",
+    "normal_image_dir": "data/training/BF-001/normal",
+    "input_width": 640,
+    "input_height": 256,
+    "backbone": "wide_resnet50_2",
+    "embedding_layers": [
+      "layer2",
+      "layer3"
+    ],
+    "memory_bank_size": 8192,
+    "coreset_ratio": 0.08,
+    "max_training_images": 300,
+    "angle_specific": false,
+    "angle_model_paths": {},
+    "alignment_enabled": false,
+    "alignment_max_translation_percent": 2.0,
+    "alignment_min_correlation": 0.8,
+    "heatmap_display_max": 1.0
+  },
+  "tolerance": {
+    "heatmap_threshold": 0.43,
+    "minimum_component_pixels": 500,
+    "pixel_threshold": 2500,
+    "percentage_threshold": 0.15,
+    "decision_mode": "BOTH",
+    "ignore_top_percent": 5.0,
+    "ignore_bottom_percent": 5.0,
+    "ignore_left_percent": 5.0,
+    "ignore_right_percent": 5.0,
+    "opening_kernel": 0,
+    "closing_kernel": 0
+  },
+  "machine": {
+    "views": 6,
+    "angle_step": 60,
+    "settle_delay_s": 0.15,
+    "acquisition_time_s": 0.65,
+    "minimum_burst_frames": 10,
+    "position_timeout_s": 2.0,
+    "cycle_timeout_s": 60.0,
+    "signal_timeout_s": 1.0,
+    "interface": "manual",
+    "host": "127.0.0.1",
+    "port": 8765,
+    "output_enabled": false
+  },
+  "storage": {
+    "results_dir": "data/results/fixed_inspection",
+    "save_pass_images": false,
+    "save_fail_images": true,
+    "save_heatmaps": true
+  }
+}

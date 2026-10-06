@@ -1169,6 +1169,10 @@ class InspectionWindow(QWidget):
 
 
 def main() -> None:
+    if "--legacy" not in sys.argv:
+        from .fixed_view_app import main as fixed_main
+        fixed_main()
+        return
     app = QApplication(sys.argv)
     app.setStyleSheet(QSS)
     auth = AuthStore()
