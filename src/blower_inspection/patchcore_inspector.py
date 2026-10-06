@@ -20,7 +20,7 @@ from .anomaly_models import HybridPatchcorePadimInspector, HybridTrainingSetting
 from .config import PartModelConfig
 from .frame_quality import FrameQualityAnalyzer
 from .geometry_inspector import GeometryEvidence, FinGeometryInspector, glare_evidence, inspection_band_mask, support_rib_mask
-from .inspection_fusion import fuse_patchcore_geometry
+from .heatmap_area import evaluate_heatmap_area
 from .roi_stabilizer import CanonicalROI, ROIStabilizer
 from .trainer import InspectionResult, inspection_overlay, list_images
 from .yolo_tracking import YoloByteTrackDetector
@@ -337,42 +337,42 @@ class PatchCoreInspector(HybridPatchcorePadimInspector):
         if config.support_rib_mask_enabled:
             margin = max(1, round(raw.shape[1] * config.support_rib_margin_ratio))
             ribs = cv2.dilate(ribs.astype(np.uint8), np.ones((1, margin * 2 + 1), np.uint8)).astype(bool)
-        valid = band & ~ribs
-        authority = edge_authority_mask(raw.shape, config.patchcore_edge_ignore_ratio)
+        else:
+            ribs = np.zeros_like(band)
+        content = self._content_mask(canonical)
+        authority = edge_authority_mask(raw.shape, config.patchcore_edge_ignore_ratio, content)
+        valid = band & content & ~ribs & (authority >= 1.0)
         glare = glare_evidence(roi, raw.shape, top=config.inspection_band_top_ratio,
                                bottom=config.inspection_band_bottom_ratio)
-        weighted = raw * authority * valid * (1.0 - .75 * glare.mask.astype(np.float32))
         thresholds = calibration["thresholds"]
-        candidate, fail = config.patchcore_candidate_threshold or thresholds["candidate"], config.patchcore_fail_threshold or thresholds["fail"]
-        mask = (weighted >= thresholds["patch_p999"]) & valid
-        image_score = float(np.quantile(weighted[valid], .995)) if np.any(valid) else 0.0
-        section_scores = tuple(float(np.quantile(part[part > 0], .995)) if np.any(part > 0) else 0.0
-                               for part in np.array_split(weighted, config.patchcore_section_count, axis=1))
-        candidate_sections = tuple(index for index, score in enumerate(section_scores) if score >= candidate)
+        fail = config.patchcore_fail_threshold or thresholds["fail"]
         geometry_started = time.perf_counter()
         geometry = self._inspect_geometry(roi, config, geometry_calibrations)
-        decision = fuse_patchcore_geometry(image_score, mask, geometry, glare_score=glare.score,
-                                           candidate_threshold=candidate, fail_threshold=fail,
-                                           geometry_candidate_threshold=config.geometry_candidate_threshold,
-                                           geometry_fail_threshold=config.geometry_fail_threshold,
-                                           glare_threshold=config.glare_threshold)
-        # Geometry can be the sole reason for a failure. Include every
-        # longitudinal section touched by the final confirmed mask rather than
-        # reporting PatchCore-only candidate locations.
-        for index, section in enumerate(np.array_split(decision.confirmed_mask, config.patchcore_section_count, axis=1)):
-            if np.any(section):
-                candidate_sections += (index,)
-        candidate_sections = tuple(sorted(set(candidate_sections)))
-        display, boxes = inspection_overlay(roi, weighted, decision.confirmed_mask, status=decision.status,
+        reflection = glare.mask if config.glare_rejection_enabled else np.zeros_like(valid)
+        scoring_pixels = valid & ~(reflection & ~(geometry.defect_mask & (geometry.score >= config.geometry_candidate_threshold)))
+        image_score = float(np.quantile(raw[scoring_pixels], .995)) if np.any(scoring_pixels) else 0.0
+        area = evaluate_heatmap_area(
+            raw, valid, reflection, geometry.defect_mask,
+            patch_threshold=thresholds["patch_p999"], image_score=image_score, fail_threshold=fail,
+            geometry_score=geometry.score, geometry_threshold=config.geometry_candidate_threshold,
+            tolerance_percent=config.heatmap_tolerance_percent,
+            min_component_px=config.min_defect_area_px, section_count=config.patchcore_section_count,
+            scratch_max_width_px=config.scratch_max_width_px, scratch_min_aspect=config.scratch_min_aspect,
+        )
+        decision = area.decision
+        candidate_sections = area.sections if decision.status in {"FAIL", "CANDIDATE"} else ()
+        display, boxes = inspection_overlay(roi, raw * area.valid_mask, decision.confirmed_mask, status=decision.status,
                                              anomaly_score=image_score, min_box_area_px=config.min_defect_area_px,
                                              score_normalizer=max(fail, 1e-6))
         total_ms = (time.perf_counter() - started) * 1000
-        return InspectionResult(decision.status, image_score, int(decision.confirmed_mask.sum()), 0, [],
+        return InspectionResult(decision.status, image_score, area.area_px, area.percentage / 100, list(candidate_sections),
                                 display_image=display, defect_boxes=boxes, geometry_score=geometry.score,
                                 periodicity_score=geometry.periodicity_score, glare_score=glare.score,
                                 hybrid_score=max(image_score / max(fail, 1e-6), geometry.score),
-                                reason_codes=decision.reason_codes, view_valid=True,
+                                reason_codes=decision.reason_codes, view_valid=decision.status != "VIEW INVALID",
                                 candidate_sections=candidate_sections,
+                                raw_heatmap=raw.copy(), filtered_anomaly_mask=area.mask.copy(),
+                                valid_area_px=area.valid_area_px, anomaly_percentage=area.percentage,
                                 view_quality_score=quality.sharpness,
                                 latencies_ms={"frame_quality": quality_ms,
                                               "patchcore": (geometry_started - patch_started) * 1000,

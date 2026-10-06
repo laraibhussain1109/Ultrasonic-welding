@@ -1,8 +1,13 @@
-# Fixed six-view PatchCore inspection
+# Optional spatial PatchCore tools
 
-The default desktop now uses the stationary six-view workflow. The earlier
-application, training code, hardware bridge, and experimental backends are
-retained. Launch the earlier UI with `blower-inspection-ui --legacy`.
+The production desktop uses the original `main` UI and its hybrid
+PatchCore/geometry checkpoint. See [stationary hybrid inspection](stationary_hybrid.md).
+The separate spatial model, CLI tools, and experimental window described below
+are optional engineering utilities. Launch that window explicitly with
+`python -m blower_inspection.fixed_view_app`.
+
+These tools use a separate spatial checkpoint and explicit PLC event adapter.
+They are not the default production desktop or its camera-based capture path.
 
 ## Pipeline and machine sequence
 
@@ -53,14 +58,14 @@ already has a virtual environment. On Windows, create/activate one if needed:
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[industrial,dev]"
-blower-inspection-ui
+python -m blower_inspection.fixed_view_app
 ```
 
 On Linux:
 
 ```bash
 source .venv/bin/activate
-blower-inspection-ui
+python -m blower_inspection.fixed_view_app
 ```
 
 In **SETTINGS / YOLO / model path**, select your actual trained detector:
@@ -339,8 +344,8 @@ Created:
 - `tests/test_fixed_gui_workers.py`
 - `docs/fixed_patchcore.md`
 
-Modified: `src/blower_inspection/app.py` (default UI dispatch with `--legacy`),
-`src/blower_inspection/cli.py` (new-command dispatch), and `README.md` (entry guide).
-Old model registries, source implementations, tests, firmware, and weight files
-remain available. A pre-change backup is retained outside the checkout at
+The optional CLI commands are exposed through `src/blower_inspection/cli.py`.
+The production desktop entry remains `src/blower_inspection/app.py` and uses
+the original UI with the stationary hybrid backend described separately.
+Firmware and weight files remain unchanged. A pre-change backup is retained outside the checkout at
 `/workspace/backups/Ultrasonic-welding-before-fixed-views.tar.gz`.

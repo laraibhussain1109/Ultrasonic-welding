@@ -116,6 +116,14 @@ class PartModelConfig:
     hard_good_dir: Path | None = None
     patchcore_model_file: Path | None = None
     runtime_storage_mode: str = "memory"
+    stationary_six_view_capture: bool = True
+    stationary_settle_ms: int = 200
+    stationary_motion_threshold: float = 2.5
+    stationary_flow_threshold: float = 0.35
+    skip_initial_fit_rotation: bool = True
+    heatmap_tolerance_percent: float = 5.0
+    scratch_max_width_px: float = 2.0
+    scratch_min_aspect: float = 8.0
 
 
 class ModelRegistry:
@@ -286,6 +294,14 @@ class ModelRegistry:
             hard_good_dir=Path(entry["hard_good_dir"]) if entry.get("hard_good_dir") else None,
             patchcore_model_file=Path(entry["patchcore_model_file"]) if entry.get("patchcore_model_file") else None,
             runtime_storage_mode=str(entry.get("runtime_storage_mode", "memory")),
+            stationary_six_view_capture=bool(entry.get("stationary_six_view_capture", True)),
+            stationary_settle_ms=max(0, int(entry.get("stationary_settle_ms", 200))),
+            stationary_motion_threshold=max(.1, float(entry.get("stationary_motion_threshold", 2.5))),
+            stationary_flow_threshold=max(.01, float(entry.get("stationary_flow_threshold", .35))),
+            skip_initial_fit_rotation=bool(entry.get("skip_initial_fit_rotation", True)),
+            heatmap_tolerance_percent=min(100., max(0., float(entry.get("heatmap_tolerance_percent", 5.)))),
+            scratch_max_width_px=max(0., float(entry.get("scratch_max_width_px", 2.))),
+            scratch_min_aspect=max(1., float(entry.get("scratch_min_aspect", 8.))),
         )
 
 

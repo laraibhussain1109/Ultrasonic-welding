@@ -27,7 +27,7 @@
       "camera_width": 1920,
       "camera_height": 1080,
       "camera_fps": 30,
-      "capture_burst_frames": 5,
+      "capture_burst_frames": 15,
       "minimum_sharpness": 60.0,
       "minimum_rotation_views": 6,
       "visible_surface_arc_degrees": 60.0,
@@ -89,7 +89,15 @@
       "patchcore_model_file": "data/models/BF-001/patchcore_primary.pt",
       "tao_model_file": "data/models/BF-001/visual_changenet.onnx",
       "runtime_storage_mode": "memory",
-      "yolo_presence_confidence": 0.95
+      "yolo_presence_confidence": 0.95,
+      "stationary_six_view_capture": true,
+      "stationary_settle_ms": 200,
+      "stationary_motion_threshold": 2.5,
+      "stationary_flow_threshold": 0.35,
+      "skip_initial_fit_rotation": true,
+      "heatmap_tolerance_percent": 5.0,
+      "scratch_max_width_px": 2.0,
+      "scratch_min_aspect": 8.0
     },
     {
       "id": "BF-002",
@@ -117,7 +125,7 @@
       "camera_width": 1920,
       "camera_height": 1080,
       "camera_fps": 30,
-      "capture_burst_frames": 5,
+      "capture_burst_frames": 15,
       "minimum_sharpness": 60.0,
       "minimum_rotation_views": 6,
       "visible_surface_arc_degrees": 60.0,
@@ -179,7 +187,15 @@
       "patchcore_model_file": "data/models/BF-002/patchcore_primary.pt",
       "tao_model_file": "data/models/BF-002/visual_changenet.onnx",
       "runtime_storage_mode": "memory",
-      "yolo_presence_confidence": 0.95
+      "yolo_presence_confidence": 0.95,
+      "stationary_six_view_capture": true,
+      "stationary_settle_ms": 200,
+      "stationary_motion_threshold": 2.5,
+      "stationary_flow_threshold": 0.35,
+      "skip_initial_fit_rotation": true,
+      "heatmap_tolerance_percent": 5.0,
+      "scratch_max_width_px": 2.0,
+      "scratch_min_aspect": 8.0
     },
     {
       "id": "BF-003",
@@ -207,7 +223,7 @@
       "camera_width": 1920,
       "camera_height": 1080,
       "camera_fps": 30,
-      "capture_burst_frames": 5,
+      "capture_burst_frames": 15,
       "minimum_sharpness": 60.0,
       "minimum_rotation_views": 6,
       "visible_surface_arc_degrees": 60.0,
@@ -269,7 +285,15 @@
       "patchcore_model_file": "data/models/BF-003/patchcore_primary.pt",
       "tao_model_file": "data/models/BF-003/visual_changenet.onnx",
       "runtime_storage_mode": "memory",
-      "yolo_presence_confidence": 0.95
+      "yolo_presence_confidence": 0.95,
+      "stationary_six_view_capture": true,
+      "stationary_settle_ms": 200,
+      "stationary_motion_threshold": 2.5,
+      "stationary_flow_threshold": 0.35,
+      "skip_initial_fit_rotation": true,
+      "heatmap_tolerance_percent": 5.0,
+      "scratch_max_width_px": 2.0,
+      "scratch_min_aspect": 8.0
     },
     {
       "id": "BF-004",
@@ -297,7 +321,7 @@
       "camera_width": 1920,
       "camera_height": 1080,
       "camera_fps": 30,
-      "capture_burst_frames": 5,
+      "capture_burst_frames": 15,
       "minimum_sharpness": 60.0,
       "minimum_rotation_views": 6,
       "visible_surface_arc_degrees": 60.0,
@@ -359,7 +383,15 @@
       "patchcore_model_file": "data/models/BF-004/patchcore_primary.pt",
       "tao_model_file": "data/models/BF-004/visual_changenet.onnx",
       "runtime_storage_mode": "memory",
-      "yolo_presence_confidence": 0.95
+      "yolo_presence_confidence": 0.95,
+      "stationary_six_view_capture": true,
+      "stationary_settle_ms": 200,
+      "stationary_motion_threshold": 2.5,
+      "stationary_flow_threshold": 0.35,
+      "skip_initial_fit_rotation": true,
+      "heatmap_tolerance_percent": 5.0,
+      "scratch_max_width_px": 2.0,
+      "scratch_min_aspect": 8.0
     }
   ]
 }

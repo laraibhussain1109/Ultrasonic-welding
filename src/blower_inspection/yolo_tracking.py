@@ -129,6 +129,11 @@ class RotatingPartSession:
     last_candidate_sections: set[int] = field(default_factory=set)
     confirmed_defect_sections: set[int] = field(default_factory=set)
     reason_codes: set[str] = field(default_factory=set)
+    inspected_angles: set[int] = field(default_factory=set)
+    valid_angles: set[int] = field(default_factory=set)
+    section_candidate_counts: dict[int, int] = field(default_factory=dict)
+    candidate_section_angles: dict[int, set[int]] = field(default_factory=dict)
+    confirmed_section_angles: dict[int, set[int]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -139,6 +144,8 @@ class CompletedPart:
     worst_score: float
     valid_views: int = 0
     reason_codes: tuple[str, ...] = ()
+    defect_sections: tuple[int, ...] = ()
+    failed_angles: tuple[int, ...] = ()
 
 
 class RotatingPartInspector:
@@ -159,6 +166,7 @@ class RotatingPartInspector:
         weak_candidate_required_views: int = 2,
         completion_mode: str = "counting_line",
         counting_axis: str = "x",
+        fixed_view_angles: tuple[int, ...] | None = None,
     ) -> None:
         if not 0.0 < counting_line_ratio < 1.0:
             raise ValueError("counting_line_ratio must be between 0 and 1")
@@ -177,6 +185,9 @@ class RotatingPartInspector:
         self.minimum_rotation_views = max(1, int(minimum_rotation_views))
         self.weak_candidate_required_views = max(1, int(weak_candidate_required_views))
         self.completion_mode = completion_mode
+        self.fixed_view_angles = fixed_view_angles
+        if fixed_view_angles:
+            self.minimum_rotation_views = len(fixed_view_angles)
         self.sessions: dict[int, RotatingPartSession] = {}
         self.track_to_part: dict[int, int] = {}
         self.completed_tracker_ids: set[int] = set()
@@ -184,10 +195,12 @@ class RotatingPartInspector:
         # the table. Retain its longitudinal locations until YOLO confirms that
         # tracker has left so the operator can rotate back to the defect.
         self.completed_defect_sections: dict[int, frozenset[int]] = {}
+        self.completed_section_angles: dict[int, dict[int, tuple[int, ...]]] = {}
 
     def observe_tracks(
         self, tracks: list[TrackedPart], frame_width: int, now: float | None = None,
         frame_height: int | None = None,
+        pending_track_ids: set[int] | None = None,
     ) -> list[CompletedPart]:
         now = time.monotonic() if now is None else now
         active_ids = {track.track_id for track in tracks}
@@ -196,6 +209,8 @@ class RotatingPartInspector:
             track_id: sections for track_id, sections in self.completed_defect_sections.items()
             if track_id in active_ids
         }
+        self.completed_section_angles = {track_id: locations for track_id, locations in self.completed_section_angles.items()
+                                         if track_id in active_ids}
         for track in tracks:
             if track.track_id in self.completed_tracker_ids:
                 continue
@@ -225,6 +240,7 @@ class RotatingPartInspector:
             lost = [
                 session for session in self.sessions.values()
                 if not (session.tracker_ids & active_ids)
+                and not (session.tracker_ids & (pending_track_ids or set()))
                 and now - session.last_seen >= self.lost_timeout_s
             ]
             for session in lost:
@@ -237,10 +253,19 @@ class RotatingPartInspector:
         provisional_candidate: bool = False, geometry_score: float = 0.0,
         tao_score: float | None = None, reason_codes: tuple[str, ...] | list[str] = (),
         candidate_sections: tuple[int, ...] | list[int] = (),
+        view_angle: int | None = None,
     ) -> CompletedPart | None:
         session = self._session_for_track(track_id)
         if session is None:
             return None
+        if self.fixed_view_angles:
+            if view_angle not in self.fixed_view_angles:
+                raise ValueError("Inspection requires a captured 60-degree stop angle")
+            if view_angle in session.inspected_angles:
+                return None
+            session.inspected_angles.add(view_angle)
+            if view_valid:
+                session.valid_angles.add(view_angle)
         session.frames_inspected += 1
         if not view_valid:
             session.invalid_registration_views += 1
@@ -261,6 +286,18 @@ class RotatingPartInspector:
             else:
                 session.persistent_candidate_count = 1
             session.last_candidate_sections = sections
+            if self.fixed_view_angles:
+                for section in sections:
+                    session.section_candidate_counts[section] = session.section_candidate_counts.get(section, 0) + 1
+                    session.candidate_section_angles.setdefault(section, set()).add(view_angle)
+                persistent_sections = {
+                    section for section, count in session.section_candidate_counts.items()
+                    if count >= self.weak_candidate_required_views
+                }
+                session.has_failure |= bool(persistent_sections)
+                session.confirmed_defect_sections.update(persistent_sections)
+                for section in persistent_sections:
+                    session.confirmed_section_angles.setdefault(section, set()).update(session.candidate_section_angles[section])
         else:
             session.persistent_candidate_count = 0
             session.last_candidate_sections.clear()
@@ -273,12 +310,17 @@ class RotatingPartInspector:
             session.glare_rejected_views += 1
         if severe:
             session.confirmed_defect_views += 1
-        session.has_failure |= severe or session.persistent_candidate_count >= self.weak_candidate_required_views
-        if severe or session.persistent_candidate_count >= self.weak_candidate_required_views:
+        legacy_persistent = (self.fixed_view_angles is None
+                             and session.persistent_candidate_count >= self.weak_candidate_required_views)
+        session.has_failure |= severe or legacy_persistent
+        if severe or legacy_persistent:
             # Sections run along the cylinder axis, so their screen x-position
             # remains useful even after the defective circumference rotates out
             # of sight. Preserve every confirmed location for the whole part.
             session.confirmed_defect_sections.update(candidate_sections)
+            if view_angle is not None:
+                for section in candidate_sections:
+                    session.confirmed_section_angles.setdefault(section, set()).add(view_angle)
         session.worst_score = max(session.worst_score, anomaly_score)
         session.worst_geometry_score = max(session.worst_geometry_score, geometry_score)
         session.worst_tao_score = max(session.worst_tao_score, tao_score if tao_score is not None else anomaly_score)
@@ -289,6 +331,8 @@ class RotatingPartInspector:
         enough_valid = session.valid_views >= self.minimum_rotation_views
         quality_exhausted = session.frames_inspected >= self.minimum_rotation_views * 2
         if completion_triggered and (enough_valid or quality_exhausted):
+            return self._finish(session)
+        if self.fixed_view_angles and session.inspected_angles == set(self.fixed_view_angles):
             return self._finish(session)
         return None
 
@@ -302,6 +346,13 @@ class RotatingPartInspector:
         if session is not None:
             return tuple(sorted(session.confirmed_defect_sections))
         return tuple(sorted(self.completed_defect_sections.get(track_id, ())))
+
+    def defect_section_angles(self, track_id: int) -> dict[int, tuple[int, ...]]:
+        """Remember the stopped side where each confirmed section was seen."""
+        session = self._session_for_track(track_id)
+        if session is not None:
+            return {section: tuple(sorted(angles)) for section, angles in session.confirmed_section_angles.items()}
+        return dict(self.completed_section_angles.get(track_id, {}))
 
     def needs_initial_inspection(self, track_id: int) -> bool:
         session = self._session_for_track(track_id)
@@ -341,12 +392,14 @@ class RotatingPartInspector:
         self.track_to_part.clear()
         self.completed_tracker_ids.clear()
         self.completed_defect_sections.clear()
+        self.completed_section_angles.clear()
         return completed
 
     def _reattach_or_start(self, track: TrackedPart, center_ratio: float, now: float) -> int | None:
         candidates = [
             session for session in self.sessions.values()
             if not session.crossed_counting_line
+            and self.fixed_view_angles is None
             and self._iou(session.last_bounds, track.bounds) >= 0.30
         ]
         if candidates:
@@ -366,6 +419,9 @@ class RotatingPartInspector:
             self.completed_tracker_ids.add(tracker_id)
             if session.confirmed_defect_sections:
                 self.completed_defect_sections[tracker_id] = frozenset(session.confirmed_defect_sections)
+                self.completed_section_angles[tracker_id] = {
+                    section: tuple(sorted(angles)) for section, angles in session.confirmed_section_angles.items()
+                }
         return completed
 
     def _session_for_track(self, track_id: int) -> RotatingPartSession | None:
@@ -403,5 +459,8 @@ class RotatingPartInspector:
         if insufficient:
             reasons.add("INSUFFICIENT_VALID_VIEWS")
             reasons.add("INSUFFICIENT_VIEW_QUALITY")  # legacy storage/API compatibility
+        failed_angles = set().union(*session.confirmed_section_angles.values()) if session.confirmed_section_angles else set()
+        failed_angles.update(session.inspected_angles - session.valid_angles)
         return CompletedPart(session.part_id, "FAIL" if session.has_failure or insufficient else "PASS",
-                             session.frames_inspected, session.worst_score, session.valid_views, tuple(sorted(reasons)))
+                             session.frames_inspected, session.worst_score, session.valid_views, tuple(sorted(reasons)),
+                             tuple(sorted(session.confirmed_defect_sections)), tuple(sorted(failed_angles)))
