@@ -30,8 +30,11 @@ class StationaryViewCapture:
     def __init__(self, *, burst_frames: int = 15, settle_ms: int = 200,
                  motion_threshold: float = 2.5, flow_threshold: float = .35,
                  skip_fit_rotation: bool = True,
+                 minimum_burst_frames: int = 3, burst_window_ms: int = 350,
                  quality: FrameQualityAnalyzer | None = None) -> None:
         self.burst_frames = min(30, max(10, burst_frames))
+        self.minimum_burst_frames = min(self.burst_frames, max(2, minimum_burst_frames))
+        self.burst_window_s = max(0, burst_window_ms) / 1000
         self.settle_s = max(0, settle_ms) / 1000
         self.motion_threshold = motion_threshold
         self.flow_threshold = flow_threshold
@@ -46,6 +49,7 @@ class StationaryViewCapture:
         self._next_index = 0
         self._angle: int | None = None
         self._stopped_at = 0.0
+        self._burst_started_at = 0.0
         self._burst: list[tuple[np.ndarray, FrameQuality]] = []
 
     @staticmethod
@@ -54,7 +58,8 @@ class StationaryViewCapture:
         # Use the fin band, excluding stationary background around the fixture.
         h, w = gray.shape
         gray = gray[round(h * .18):max(round(h * .82), round(h * .18) + 1)]
-        return cv2.resize(gray, (min(320, max(80, w)), 64), interpolation=cv2.INTER_AREA)
+        reduced = cv2.resize(gray, (min(320, max(80, w)), 64), interpolation=cv2.INTER_AREA)
+        return cv2.GaussianBlur(reduced, (3, 3), 0)
 
     def _moving(self, current: np.ndarray) -> bool:
         if self._previous is None or current.shape != self._previous.shape:
@@ -69,15 +74,17 @@ class StationaryViewCapture:
         movement = float(np.quantile(cv2.magnitude(flow[..., 0], flow[..., 1]), .80))
         return difference >= self.motion_threshold or movement >= self.flow_threshold
 
-    def _select(self, *, incomplete: bool = False) -> StationaryCapture:
+    def _select(self) -> StationaryCapture:
         assert self._angle is not None and self._burst
         eligible = [(frame, quality) for frame, quality in self._burst if quality.valid]
         frame, quality = max(eligible or self._burst, key=lambda item: item[1].sharpness)
-        reasons = (("INCOMPLETE_STOP_BURST",) if incomplete else quality.reasons)
-        result = StationaryCapture(self._angle, frame.copy(), bool(eligible) and not incomplete,
+        enough = len(eligible) >= self.minimum_burst_frames
+        reasons = (() if enough else tuple(dict.fromkeys(("INSUFFICIENT_STATIONARY_FRAMES",) + quality.reasons)))
+        result = StationaryCapture(self._angle, frame.copy(), enough,
                                    quality.sharpness, reasons, len(self._burst))
         self._burst.clear()
         self._angle = None
+        self._burst_started_at = 0.0
         self.state = "SIX STOPS CAPTURED" if self._next_index == 6 else "WAITING FOR ROTATION"
         return result
 
@@ -91,19 +98,25 @@ class StationaryViewCapture:
                 return None
             interrupted = None
             if self._angle is not None:
-                if not self._burst:
-                    self._burst.append((frame.copy(), self.quality.analyze(frame)))
-                interrupted = self._select(incomplete=True)
+                if self._burst:
+                    # Only stopped, settled frames already buffered are eligible.
+                    # The current moving frame must never become the selected still.
+                    interrupted = self._select()
+                else:
+                    interrupted = StationaryCapture(self._angle, frame.copy(), False, 0.0,
+                                                   ("NO_SETTLED_STATIONARY_FRAMES",), 0)
+                    self._angle = None
             self._motion_seen = True
             self.state = "FIT ROTATION" if not self._home else "ROTATING"
             return interrupted
         self._moving_frames = 0
         self._stopped_frames += 1
+        if self._stopped_frames == 1:
+            self._stopped_at = now
         if self._stopped_frames < 3:
             return None
         if self._motion_seen:
             self._motion_seen = False
-            self._stopped_at = now
             if not self._home:
                 self._home = True
                 self.state = "HOME — WAITING FOR 60°"
@@ -115,7 +128,12 @@ class StationaryViewCapture:
         if self._angle is None or now - self._stopped_at < self.settle_s:
             return None
         self.state = f"CAPTURING {self._angle}°"
+        if not self._burst:
+            self._burst_started_at = now
         self._burst.append((frame.copy(), self.quality.analyze(frame)))
-        if len(self._burst) >= self.burst_frames:
+        if len(self._burst) >= self.burst_frames or (
+            now - self._burst_started_at >= self.burst_window_s
+            and sum(quality.valid for _frame, quality in self._burst) >= self.minimum_burst_frames
+        ):
             return self._select()
         return None

@@ -67,13 +67,67 @@ def test_burst_quality_selects_sharpest_qualified_still_and_does_not_infer_blurr
 
 
 def test_interrupted_stop_is_invalid_and_does_not_relabel_the_next_stop(monkeypatch):
-    capture = StationaryViewCapture(skip_fit_rotation=False, settle_ms=0, burst_frames=10)
+    capture = StationaryViewCapture(skip_fit_rotation=False, settle_ms=0, burst_frames=10,
+                                    minimum_burst_frames=4)
     image = surface()
     motion = iter([False] + [True] * 3 + [False] * 5 + [True] * 3 + [False] * 20)
     monkeypatch.setattr(capture, "_moving", lambda _image: next(motion))
     packets = [packet for i in range(32) if (packet := capture.offer(image, now=i / 30))]
     assert [(packet.angle, packet.valid) for packet in packets] == [(60, False), (120, True)]
-    assert packets[0].reasons == ("INCOMPLETE_STOP_BURST",)
+    assert packets[0].reasons == ("INSUFFICIENT_STATIONARY_FRAMES",)
+
+
+def test_short_stop_uses_buffered_qualified_stills_without_selecting_moving_frame(monkeypatch):
+    capture = StationaryViewCapture(skip_fit_rotation=False, settle_ms=0, burst_frames=15)
+    image = surface()
+    moving = image.copy()
+    moving[:, ::2] = 230
+    motion = iter([False] + [True] * 3 + [False] * 7 + [True] * 2)
+    monkeypatch.setattr(capture, "_moving", lambda _image: next(motion))
+    packets = []
+    for index in range(13):
+        packet = capture.offer(moving if index in (11, 12) else image, now=index / 30)
+        if packet:
+            packets.append(packet)
+    assert len(packets) == 1 and packets[0].angle == 60
+    assert packets[0].valid and 3 <= packets[0].burst_frames < 15
+    np.testing.assert_array_equal(packets[0].frame, image)
+
+
+def test_qualified_short_burst_finishes_within_time_window_while_motor_remains_stopped(monkeypatch):
+    capture = StationaryViewCapture(skip_fit_rotation=False, settle_ms=200, burst_frames=15,
+                                    burst_window_ms=350)
+    image = surface()
+    motion = iter([False] + [True] * 3 + [False] * 15)
+    monkeypatch.setattr(capture, "_moving", lambda _image: next(motion))
+    packets = [packet for index in range(19) if (packet := capture.offer(image, now=index / 10))]
+    assert len(packets) == 1 and packets[0].valid
+    assert 3 <= packets[0].burst_frames < 15
+
+
+def test_three_blurred_stills_and_two_sharp_stills_do_not_pass_minimum_evidence(monkeypatch):
+    capture = StationaryViewCapture(skip_fit_rotation=False, settle_ms=0, burst_frames=15)
+    image = surface()
+    motion = iter([False] + [True] * 3 + [False] * 7 + [True] * 2)
+    monkeypatch.setattr(capture, "_moving", lambda _image: next(motion))
+    packets = []
+    for index in range(13):
+        frame = image if index in (6, 7) else np.full_like(image, 100)
+        packet = capture.offer(frame, now=index / 30)
+        if packet:
+            packets.append(packet)
+    assert len(packets) == 1 and not packets[0].valid
+    assert packets[0].reasons == ("INSUFFICIENT_STATIONARY_FRAMES",)
+
+
+def test_stop_with_no_settled_frame_never_uses_the_first_moving_frame(monkeypatch):
+    capture = StationaryViewCapture(skip_fit_rotation=False, settle_ms=500)
+    image = surface()
+    motion = iter([False] + [True] * 3 + [False] * 3 + [True] * 2)
+    monkeypatch.setattr(capture, "_moving", lambda _image: next(motion))
+    packets = [packet for index in range(9) if (packet := capture.offer(image, now=index / 30))]
+    assert len(packets) == 1 and not packets[0].valid and packets[0].burst_frames == 0
+    assert packets[0].reasons == ("NO_SETTLED_STATIONARY_FRAMES",)
 
 
 def area_result(raw, *, tolerance=5, valid=None, reflection=None, geometry=None, **kwargs):

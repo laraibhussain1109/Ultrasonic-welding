@@ -97,7 +97,9 @@
       "skip_initial_fit_rotation": true,
       "heatmap_tolerance_percent": 5.0,
       "scratch_max_width_px": 2.0,
-      "scratch_min_aspect": 8.0
+      "scratch_min_aspect": 8.0,
+      "stationary_min_burst_frames": 3,
+      "stationary_burst_window_ms": 350
     },
     {
       "id": "BF-002",
@@ -195,7 +197,9 @@
       "skip_initial_fit_rotation": true,
       "heatmap_tolerance_percent": 5.0,
       "scratch_max_width_px": 2.0,
-      "scratch_min_aspect": 8.0
+      "scratch_min_aspect": 8.0,
+      "stationary_min_burst_frames": 3,
+      "stationary_burst_window_ms": 350
     },
     {
       "id": "BF-003",
@@ -293,7 +297,9 @@
       "skip_initial_fit_rotation": true,
       "heatmap_tolerance_percent": 5.0,
       "scratch_max_width_px": 2.0,
-      "scratch_min_aspect": 8.0
+      "scratch_min_aspect": 8.0,
+      "stationary_min_burst_frames": 3,
+      "stationary_burst_window_ms": 350
     },
     {
       "id": "BF-004",
@@ -391,7 +397,9 @@
       "skip_initial_fit_rotation": true,
       "heatmap_tolerance_percent": 5.0,
       "scratch_max_width_px": 2.0,
-      "scratch_min_aspect": 8.0
+      "scratch_min_aspect": 8.0,
+      "stationary_min_burst_frames": 3,
+      "stationary_burst_window_ms": 350
     }
   ]
 }

@@ -59,3 +59,30 @@ def test_model_calibration_mismatch_is_still_rejected(backend):
     config.patchcore_calibration_file.write_text(json.dumps(calibration))
     with pytest.raises(RuntimeError, match="Stale PatchCore calibration"):
         inspector.inspect(config, image, crop_to_component=False)
+
+
+def test_readiness_reports_exact_missing_checkpoint_before_capture(backend):
+    inspector, config, _image = backend
+    with pytest.raises(FileNotFoundError, match="PatchCore checkpoint not found") as error:
+        inspector.validate_ready(config)
+    assert str(config.model_file.resolve()) in str(error.value)
+
+
+def test_readiness_reports_missing_calibration_before_loading_model(backend):
+    inspector, config, _image = backend
+    config.model_file.touch()
+    config.patchcore_calibration_file.unlink()
+    with pytest.raises(FileNotFoundError, match="PatchCore calibration not found") as error:
+        inspector.validate_ready(config)
+    assert str(config.patchcore_calibration_file.resolve()) in str(error.value)
+
+
+def test_readiness_validates_existing_checkpoint_and_calibration(backend):
+    inspector, config, _image = backend
+    config.model_file.touch()
+    inspector.validate_ready(config)
+    calibration = json.loads(config.patchcore_calibration_file.read_text())
+    calibration["thresholds"]["patch_p999"] = float("nan")
+    config.patchcore_calibration_file.write_text(json.dumps(calibration))
+    with pytest.raises(ValueError, match="patch_p999 threshold"):
+        inspector.validate_ready(config)

@@ -22,18 +22,31 @@ are assigned 60°, 120°, 180°, 240°, 300°, and 360° in that order. Set
 without the separate initial fitting revolution; the first observed indexed
 movement then leads to the 60° capture.
 
+Camera acquisition and motion/burst processing run in a dedicated worker. The UI
+reads the latest preview while a separate worker periodically checks YOLO presence;
+neither slow YOLO nor PatchCore inference can block camera acquisition. The FPS
+label reports acquired frames rather than UI refreshes.
+
 Motion evidence combines exposure-adjusted frame differences and optical flow
-in the fin band. At each stop, the software confirms three stationary frames,
-waits `stationary_settle_ms` (200 ms), collects `capture_burst_frames` (15; limited
-to 10–30), and selects the sharpest frame passing blur, exposure, and glare
-quality checks. The camera stream is used for capture; defect inference runs
-only on the selected still. Similar-looking fins never prevent a new stop from
-being counted. A long dwell cannot create multiple views of the same stop.
+in the fin band. At each stop, the software confirms three stationary frames and
+waits `stationary_settle_ms` (200 ms, measured from the first stationary frame).
+`capture_burst_frames` (15; limited to 10–30) is the target burst size. A shorter
+burst is accepted when it contains at least `stationary_min_burst_frames` (3)
+qualified, settled frames. It selects the sharpest qualifying still when the target
+is reached, the `stationary_burst_window_ms` (350 ms) window ends, or confirmed
+rotation resumes. The last case selects only stationary frames already buffered,
+never the new moving frame. Blur, exposure, and glare quality thresholds still apply.
+
+The camera stream is used for capture; defect inference runs only on the selected
+still. Similar-looking fins never prevent a new stop from being counted. A long
+dwell cannot create multiple views of the same stop.
 
 Each side is queued independently while the preceding still is being processed.
 Slow inference cannot overwrite an earlier queued side. Duplicate angles cannot
-increase coverage. An interrupted burst or invalid image consumes that physical
-stop as an invalid attempt; it cannot shift the next angle or become a good view.
+increase coverage. A stop with too few qualified stationary frames reports
+`INSUFFICIENT_STATIONARY_FRAMES`; a stop ending before any settled frame reports
+`NO_SETTLED_STATIONARY_FRAMES`. These consume that physical stop as an invalid
+attempt; they cannot shift the next angle or become a good view.
 All six qualified stops are required for PASS. Six attempts with missing quality,
 or premature part removal, finish as FAIL. The queue is drained before a departed
 part is finalized.
@@ -43,6 +56,9 @@ Camera counting therefore assumes the commissioned machine really makes these
 60° steps and that the camera observes every transition. It does not measure an
 absolute shaft angle or prove an unseen/reversed step. The visible, usable camera
 arc must actually cover 60°; six captures alone cannot recover hidden surface.
+If acquisition itself remains at 2 FPS, a one-second dwell may still provide too
+few settled frames. Check the camera's negotiated settings and measured acquisition
+rate using the existing CAMERA FPS / RESOLUTION control on the production machine.
 
 ## Heatmap area tolerance and hybrid checks
 
@@ -99,15 +115,19 @@ and output calls using synthetic images. Production accuracy and motion threshol
 still require the actual camera, existing model assets, and labeled GOOD/NG parts
 on the Windows machine.
 
+Starting inspection now validates the PatchCore checkpoint, calibration path,
+section count, model/calibration pairing, and thresholds before opening the camera.
+A missing file reports its full path instead of surfacing a generic file error
+after the first captured view.
+
 The companion gap detector now counts separate interrupted fins rather than
 gradient rows, so one genuine break is retained. Broad reflections are masked
 through their connected bright boundary to prevent that boundary from becoming
 false broken-fin evidence. Requalify geometry calibration and area settings with
 the real GOOD/NG set after updating.
 
-Validation for this revision: 23 new regression tests pass, and the three existing
-fin-gap/glare regressions now pass. Full suite: 242 passed, 9 pre-existing failures,
-251 executed, no skips. The remaining failures concern legacy checkpoint loading,
-ROI/presence helpers, dataset error text, and optional TAO expectations. Test details
-were saved to `/workspace/onboarding/stationary-hybrid-tests.xml` in the cloud
-workspace; this generated report is not a repository artifact.
+Regression coverage includes six short stops during a blocked YOLO check, bounded
+burst capture, moving/blurred frame rejection, thread shutdown, model readiness,
+heatmap area tolerances, unique angle coverage, retained defect locations, and
+final output gating. Test reports are generated outside the checkout in the cloud
+workspace and are not repository artifacts.

@@ -110,6 +110,28 @@ class PatchCoreInspector(HybridPatchcorePadimInspector):
                                   mode=config.roi_mode, smoothing_frames=config.roi_smoothing_frames,
                                   padding_ratio=config.roi_padding_ratio)
 
+    def validate_ready(self, config: PartModelConfig) -> None:
+        """Report missing production assets before the motor starts capturing."""
+        model_path = self._model_path(config)
+        calibration_path = config.patchcore_calibration_file or model_path.with_suffix(".calibration.json")
+        for label, path in (("PatchCore checkpoint", model_path), ("PatchCore calibration", calibration_path)):
+            if not path.is_file():
+                raise FileNotFoundError(f"{label} not found: {path.resolve()}. Select/train this model before starting inspection.")
+        self._configure(config)
+        torch = require_module("torch")
+        checkpoint = self._load_runtime_checkpoint(torch, model_path)
+        if checkpoint.get("algorithm") != "patchcore_primary" or checkpoint.get("version") != PATCHCORE_MODEL_VERSION:
+            raise ValueError("PatchCore checkpoint requires calibrated fin geometry; retrain the selected model")
+        if len(checkpoint.get("geometry_calibrations", [])) != config.patchcore_section_count:
+            raise ValueError("PatchCore geometry section calibration does not match the selected model")
+        calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
+        if calibration.get("memory_bank_hash") != checkpoint.get("memory_bank_hash") or calibration.get("embedding_layers") != list(self.settings.embedding_layers):
+            raise RuntimeError("Stale PatchCore calibration: model/settings do not match")
+        for name in ("patch_p999", "candidate", "fail"):
+            value = calibration.get("thresholds", {}).get(name)
+            if value is None or not np.isfinite(value) or value <= 0:
+                raise ValueError(f"PatchCore calibration has no valid {name} threshold")
+
     def _canonical(self, frame: np.ndarray, config: PartModelConfig,
                    detector: YoloByteTrackDetector | None = None) -> CanonicalROI:
         assert self._roi is not None

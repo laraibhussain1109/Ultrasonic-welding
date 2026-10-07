@@ -148,3 +148,61 @@ def test_result_from_previous_inspection_session_is_discarded(window):
     worker.finished.callback()
     assert calls == [] and view.stats["inspected"] == 0
     assert view.rotating_parts.view_progress(1) == (0, 0, 6)
+
+
+def test_fast_acquisition_snapshot_replaces_blocking_gui_camera_read(window, monkeypatch):
+    import time
+    from blower_inspection.stationary_workers import CameraSnapshot
+    view, _calls = window
+    frame = np.full((80, 200, 3), 100, np.uint8)
+    queued = [(1, StationaryCapture(60, frame[:40, :120], True, 100, burst_frames=5))]
+    snapshot = CameraSnapshot(17, time.monotonic(), frame, "CAPTURING 120°", 30)
+    acquisition = SimpleNamespace(snapshot=lambda: snapshot, take_captures=lambda: queued.copy())
+    view.camera_worker = acquisition
+    view.live_roi_bounds = (0, 0, 120, 40)
+    view.part_detector = object()
+    view.inference_worker = SimpleNamespace(track_id=1)
+    def forbidden_read():
+        raise AssertionError("The GUI must not read the camera owned by the acquisition worker")
+    monkeypatch.setattr(view.camera, "read", forbidden_read)
+    monkeypatch.setattr(view, "_locked_roi_tracks", lambda _frame: [TrackedPart(1, (0, 0, 120, 40), .99)])
+    try:
+        view._process_live_frame()
+        assert view.camera_sequence == 17 and len(view.stationary_queue) == 1
+        assert view.stationary_queue[0][1].burst_frames == 5
+        view._tick()
+        assert "30.0" in view.fps_top.text()
+    finally:
+        view.camera_worker = None
+        view.inference_worker = None
+
+
+def test_missing_patchcore_asset_is_reported_before_camera_open(window, monkeypatch):
+    from dataclasses import replace
+    view, _calls = window
+    view.inspection_running = False
+    model = replace(view.selected_model(), yolo_model_path=view.selected_model().model_file.with_name("yolo.pt"))
+    messages = []
+    monkeypatch.setattr(view, "selected_model", lambda: model)
+    monkeypatch.setattr(view, "_apply_selected_camera_settings", lambda: None)
+    monkeypatch.setattr(ui.QMessageBox, "critical", lambda _window, title, message: messages.append((title, message)))
+    monkeypatch.setattr(view.camera, "open", lambda: pytest.fail("Camera opened before missing assets were reported"))
+    view.start_inspection()
+    assert messages[0][0] == "PatchCore model not ready"
+    assert "PatchCore checkpoint not found" in messages[0][1]
+    assert not view.inspection_running
+
+
+def test_capture_packet_waits_for_first_snapshot_before_dispatch(window, monkeypatch):
+    view, _calls = window
+    frame = np.full((40, 120, 3), 100, np.uint8)
+    packet = StationaryCapture(60, frame, True, 100, burst_frames=4)
+    view.camera_worker = SimpleNamespace(snapshot=lambda: None, take_captures=lambda: [(1, packet)])
+    dispatched = []
+    monkeypatch.setattr(view, "_dispatch_stationary_view", lambda: dispatched.append(True))
+    try:
+        view._process_live_frame()
+        assert not dispatched
+        assert len(view.stationary_queue) == 1
+    finally:
+        view.camera_worker = None

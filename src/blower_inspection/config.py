@@ -118,6 +118,8 @@ class PartModelConfig:
     runtime_storage_mode: str = "memory"
     stationary_six_view_capture: bool = True
     stationary_settle_ms: int = 200
+    stationary_min_burst_frames: int = 3
+    stationary_burst_window_ms: int = 350
     stationary_motion_threshold: float = 2.5
     stationary_flow_threshold: float = 0.35
     skip_initial_fit_rotation: bool = True
@@ -296,6 +298,8 @@ class ModelRegistry:
             runtime_storage_mode=str(entry.get("runtime_storage_mode", "memory")),
             stationary_six_view_capture=bool(entry.get("stationary_six_view_capture", True)),
             stationary_settle_ms=max(0, int(entry.get("stationary_settle_ms", 200))),
+            stationary_min_burst_frames=max(2, int(entry.get("stationary_min_burst_frames", 3))),
+            stationary_burst_window_ms=max(0, int(entry.get("stationary_burst_window_ms", 350))),
             stationary_motion_threshold=max(.1, float(entry.get("stationary_motion_threshold", 2.5))),
             stationary_flow_threshold=max(.01, float(entry.get("stationary_flow_threshold", .35))),
             skip_initial_fit_rotation=bool(entry.get("skip_initial_fit_rotation", True)),
