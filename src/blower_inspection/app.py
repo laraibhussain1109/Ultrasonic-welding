@@ -714,7 +714,10 @@ class InspectionWindow(QWidget):
             assert raw_frame is not None
             self.raw_frame = raw_frame
             try:
-                detected = self.part_detector.detect_best(raw_frame)
+                if hasattr(self.inspector, "detect_inspection_roi"):
+                    detected = self.inspector.detect_inspection_roi(raw_frame, model, self.part_detector)
+                else:
+                    detected = self.part_detector.detect_best(raw_frame)
             except ValueError as exc:
                 choice = QMessageBox.warning(
                     self, "ROI not found", f"{exc}\n\nRetry the camera frame?",
@@ -1262,6 +1265,12 @@ class InspectionWindow(QWidget):
         if not self.user.is_admin:
             QMessageBox.warning(self, "Permission denied", "Training is available to admin users only.")
             return
+        if self.inspection_running:
+            QMessageBox.warning(self, "Inspection active", "Stop inspection before training this model.")
+            return
+        if self.train_worker is not None and self.train_worker.isRunning():
+            QMessageBox.information(self, "Training active", "PatchCore training is already running.")
+            return
         model = self.selected_model()
         tao_production = model.production_algorithm != "patchcore_geometry" and model.algorithm == "nvidia_tao"
         if tao_production and not model.model_file.is_file():
@@ -1285,7 +1294,7 @@ class InspectionWindow(QWidget):
             self.inspector = inspector_for_model(model)
         operation = "TAO CALIBRATION" if tao_production else "PATCHCORE TRAINING"
         self.log.addItem(f"{operation} STARTED {model.id}")
-        self.train_worker = TrainWorker(self.inspector, model)
+        self.train_worker = TrainWorker(inspector_for_model(model), model)
         self.train_worker.finished_ok.connect(lambda message: self.log.addItem(message))
         self.train_worker.progress.connect(self._show_training_progress)
         self.train_worker.failed.connect(lambda message: QMessageBox.critical(self, "Training failed", message))

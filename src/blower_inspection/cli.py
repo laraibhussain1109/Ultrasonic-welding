@@ -146,6 +146,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Imported CLI: {package_file}")
         print(f"Model registry: {Path(args.models).resolve()}")
         print("Supported PatchCore algorithms: hybrid_patchcore_geometry, patchcore_geometry, patchcore_primary")
+        print("Production training: train MODEL_ID or train-fixed (default)")
+        print("Import a completed spatial checkpoint: import-fixed MODEL_ID --settings config/fixed_inspection.json")
+        print("Engineering-only spatial training: train-fixed --spatial-only")
         print(f"Supported completion modes: {', '.join(sorted(SUPPORTED_COMPLETION_MODES))}")
         failed = False
         for model in registry.all():
@@ -154,10 +157,12 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as exc:
                 backend = f"ERROR: {exc}"
                 failed = True
+            model_path = model.patchcore_model_file or model.model_file
+            calibration_path = model.patchcore_calibration_file or model_path.with_suffix(".calibration.json")
             print(
                 f"{model.id}: algorithm={model.algorithm}, "
                 f"production_algorithm={model.production_algorithm}, backend={backend}, "
-                f"model={model.patchcore_model_file or model.model_file}"
+                f"model={model_path}, calibration={calibration_path}"
             )
             if model.inspection_completion_mode not in SUPPORTED_COMPLETION_MODES:
                 print(f"  ERROR: unsupported completion mode {model.inspection_completion_mode!r}")

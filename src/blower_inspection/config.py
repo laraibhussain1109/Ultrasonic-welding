@@ -160,6 +160,7 @@ class ModelRegistry:
         camera_fps: int | None = None,
         yolo_model_path: str | Path | None = None,
         model_file: str | Path | None = None,
+        patchcore_settings: dict | None = None,
     ) -> PartModelConfig:
         for entry in self._data.get("models", []):
             if entry.get("id") != model_id:
@@ -176,6 +177,15 @@ class ModelRegistry:
                 entry["yolo_model_path"] = str(yolo_model_path)
             if model_file is not None:
                 entry["model_file"] = str(model_file)
+            if patchcore_settings is not None:
+                allowed = {"normal_image_dir", "image_size", "patchcore_embedding_layers", "patchcore_memory_bank_size",
+                           "patchcore_coreset_ratio", "roi_padding_ratio", "patchcore_model_file", "patchcore_calibration_file",
+                           "training_min_sharpness", "inference_min_sharpness", "max_saturation_ratio", "yolo_confidence",
+                           "production_algorithm", "algorithm", "patchcore_primary", "padim_enabled", "distillation_enabled"}
+                unknown = set(patchcore_settings) - allowed
+                if unknown:
+                    raise ValueError(f"Unsupported PatchCore settings: {sorted(unknown)}")
+                entry.update(patchcore_settings)
             self._save()
             self._data = self._load()
             return self.get(model_id)

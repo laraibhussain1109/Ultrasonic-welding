@@ -108,6 +108,18 @@ quality rejection, and duplicate reduction; source images are not modified.
 
 ### Command-line method
 
+If a previous `train-fixed` run produced `patchcore_fixed.pt`, reuse that bank
+and its saved GOOD-image manifests to generate the desktop's missing assets:
+
+```powershell
+python -m blower_inspection.cli import-fixed BF-001 --settings config/fixed_inspection.json
+```
+
+Keep the original training settings and GOOD images accessible. This preserves
+the source model and writes `patchcore_primary.pt`, `patchcore_calibration.json`,
+and a production training report. Default `train-fixed` now trains those same
+production artifacts; the separate engineering path requires `--spatial-only`.
+
 1. Activate the virtual environment and run from the repository root.
 2. Start training for the selected model:
 

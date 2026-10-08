@@ -206,3 +206,33 @@ def test_capture_packet_waits_for_first_snapshot_before_dispatch(window, monkeyp
         assert len(view.stationary_queue) == 1
     finally:
         view.camera_worker = None
+
+
+def test_training_cannot_mutate_the_backend_during_inspection(window, monkeypatch):
+    view, _calls = window
+    messages = []
+    monkeypatch.setattr(ui.QMessageBox, "warning", lambda *_args: messages.append(_args[1]))
+    monkeypatch.setattr(ui, "TrainWorker", lambda *_args: pytest.fail("Training started during inspection"))
+    view.train_selected()
+    assert messages == ["Inspection active"]
+    assert view.train_worker is None
+
+
+def test_training_button_uses_a_separate_production_backend(window, monkeypatch):
+    view, _calls = window
+    view.inspection_running = False
+    workers = []
+    class Signal:
+        def connect(self, _callback): pass
+    class Worker:
+        def __init__(self, inspector, model):
+            self.inspector, self.model = inspector, model
+            self.finished_ok, self.progress, self.failed = Signal(), Signal(), Signal()
+            workers.append(self)
+        def start(self): pass
+    monkeypatch.setattr(ui, "TrainWorker", Worker)
+    view.train_selected()
+    assert len(workers) == 1
+    assert type(workers[0].inspector).__name__ == "PatchCoreInspector"
+    assert workers[0].inspector is not view.inspector
+    assert workers[0].model == view.selected_model()

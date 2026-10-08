@@ -9,9 +9,46 @@ production Windows PC, the supplied path is:
 C:\Users\Gigabyte\Downloads\AMBER ULTRASONIC PART.v1i.yolov12\runs\detect\train\weights\best.pt
 ```
 
-The existing PatchCore-primary checkpoint and its geometry calibration remain
-the production model. This change does not require a different checkpoint
-format or route production through the separate `train-fixed` tools.
+The desktop loads the selected model's production checkpoint and paired
+calibration from `config/models.json`. The BF-001 defaults are:
+
+```text
+data/models/BF-001/patchcore_primary.pt
+data/models/BF-001/patchcore_calibration.json
+data/models/BF-001/patchcore_primary.training_report.json
+```
+
+The **TRAIN PATCHCORE MODEL** button and `train BF-001` use that production
+trainer. `train-fixed` now also uses it by default, reading GOOD/YOLO settings
+from `config/fixed_inspection.json` and updating the selected desktop profile
+after training succeeds:
+
+Production destinations come from the selected `config/models.json` profile.
+The fixed settings' `patchcore.model_path` names the engineering checkpoint and
+the default `import-fixed` source; it is not the desktop output path.
+
+```powershell
+python -m blower_inspection.cli train-fixed --model-id BF-001 --settings config/fixed_inspection.json
+```
+
+For an already completed `patchcore_fixed.pt`, add the missing production
+geometry and GOOD distance calibration without rebuilding its feature bank:
+
+```powershell
+python -m blower_inspection.cli import-fixed BF-001 --settings config/fixed_inspection.json
+```
+
+An explicit `--checkpoint "C:\path\to\patchcore_fixed.pt"` overrides the source
+path. Preserve the settings used for that training and keep its reviewed GOOD
+images accessible. Import prepares only the checkpoint's saved training and
+calibration manifests, reuses its exact bank and frozen weights, preserves its
+rectangular preprocessing, and writes the production files above. The source
+checkpoint is preserved. Shared models without translation alignment are
+supported; aligned/angle-specific models remain engineering tools.
+
+`train-fixed --spatial-only` explicitly creates the separate engineering
+checkpoint. Renaming that file or its report cannot supply production geometry
+or thresholds. `doctor` prints the imported checkout and both desktop asset paths.
 
 ## Training large image folders
 
@@ -30,9 +67,16 @@ All source images are still quality-checked. The existing duplicate rules and
 evenly spaced selection across the whole dataset remain in place, including later
 rotational views. Only the configured subset (300 images by default) enters
 training/calibration, and their manifests remain disjoint. The seeded coreset
-sampler and existing checkpoint formats are unchanged. Retraining after this fix
-uses the same command/settings as before; an interrupted quality-gating run starts
-again from the first source image.
+sampler are unchanged. New production checkpoints also save their frozen
+backbone, feature settings, and canonical dimensions; a fresh desktop restores
+them before inference without downloading new backbone weights. Previously
+trained primary checkpoints remain supported. An interrupted quality-gating run
+starts again from the first source image.
+
+The approved live ROI includes the same padding as training. Its cropped still
+and a full-camera image therefore normalize to the same canonical image. Training
+uses a separate backend instance and requires inspection to be stopped. Geometry
+and distance calibration finish before previous production assets are replaced.
 
 ## Capture and completion
 

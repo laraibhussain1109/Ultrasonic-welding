@@ -6,6 +6,11 @@ The separate spatial model, CLI tools, and experimental window described below
 are optional engineering utilities. Launch that window explicitly with
 `python -m blower_inspection.fixed_view_app`.
 
+For the normal desktop, `train-fixed` now writes the production checkpoint and
+calibration. Use `import-fixed BF-001` to reuse an already trained spatial model;
+see [production training and import](stationary_hybrid.md). All raw spatial
+training examples in this engineering guide require `--spatial-only`.
+
 These tools use a separate spatial checkpoint and explicit PLC event adapter.
 They are not the default production desktop or its camera-based capture path.
 
@@ -89,7 +94,7 @@ the same fixture, lighting, camera settings, and detector as inference.
 Save settings, then train:
 
 ```bash
-python -m blower_inspection.cli train-fixed --settings config/fixed_inspection.json
+python -m blower_inspection.cli train-fixed --spatial-only --settings config/fixed_inspection.json
 ```
 
 Training and inference share `YoloROI`, letterboxing, RGB conversion, ImageNet
@@ -118,9 +123,10 @@ changing ROI preprocessing, detector weights/settings, alignment, or input
 dimensions requires restoring the training settings or retraining.
 
 Existing `patchcore_primary.pt` and hybrid checkpoints are left untouched. Their
-old preprocessing and combined decision rules differ, so they remain usable via
-the legacy application rather than being silently loaded with new normalization.
-Training the new checkpoint does not overwrite them.
+preprocessing and combined decision rules differ. The original NeuroIris desktop
+uses those production artifacts. Explicit spatial-only training leaves them
+untouched; `import-fixed` generates paired production assets from the spatial
+bank with its matching frozen features and new geometry/threshold calibration.
 
 The shared model is the default; six models are optional. To use angle-specific
 models, set `angle_specific=true`, configure all six `angle_model_paths`, and put
@@ -128,12 +134,13 @@ GOOD source images under `normal_image_dir/view_60`, `view_120`, ..., `view_360`
 Train each configured angle with:
 
 ```bash
-python -m blower_inspection.cli train-fixed --angle 60 --settings config/fixed_inspection.json
+python -m blower_inspection.cli train-fixed --spatial-only --angle 60 --settings config/fixed_inspection.json
 ```
 
 Repeat for 120, 180, 240, 300, and 360. A missing angle checkpoint never falls
-back silently to the shared model. The old `train BF-001` command is retained
-for the old workflow; `train-fixed` is the new spatial workflow.
+back silently to the shared model. `train BF-001` and default `train-fixed`
+train the original desktop's production model. Only `train-fixed --spatial-only`
+trains the raw spatial workflow described here.
 
 ## Production and machine integration
 
