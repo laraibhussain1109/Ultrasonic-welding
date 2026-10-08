@@ -13,6 +13,27 @@ The existing PatchCore-primary checkpoint and its geometry calibration remain
 the production model. This change does not require a different checkpoint
 format or route production through the separate `train-fixed` tools.
 
+## Training large image folders
+
+The training crash reporting `Unable to allocate 63.3 MiB` at the Laplacian
+variance check is fixed. Quality analysis now computes the same native-resolution
+sharpness, exposure, and glare measurements in strips with overlapping filter
+neighborhoods. It does not resize photographs or relax quality thresholds.
+
+`train-fixed` releases each source photo after preparing its canonical ROI rather
+than retaining a full-resolution copy of every GOOD image. Both training paths
+cache qualified, distinct crops and unsampled patch embeddings in the system
+temporary directory. These files are removed on success or failure. Allow space
+on that drive for the canonical crops and features during training.
+
+All source images are still quality-checked. The existing duplicate rules and
+evenly spaced selection across the whole dataset remain in place, including later
+rotational views. Only the configured subset (300 images by default) enters
+training/calibration, and their manifests remain disjoint. The seeded coreset
+sampler and existing checkpoint formats are unchanged. Retraining after this fix
+uses the same command/settings as before; an interrupted quality-gating run starts
+again from the first source image.
+
 ## Capture and completion
 
 After the initial continuous fitting revolution, the first stopped image locks

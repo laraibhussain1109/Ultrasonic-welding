@@ -237,6 +237,22 @@ def test_yolo_normalization_letterboxes_and_passes_iou():
     assert model.options["iou"] == settings.yolo.iou
 
 
+def test_training_yolo_roi_can_release_original_without_changing_canonical_image():
+    frame = np.full((100, 100, 3), 100, np.uint8)
+    frame[::4] = 200
+    detector = YoloROI(InspectionSettings(), FakeYolo((10, 10, 90, 90)))
+    inspection = detector.prepare(frame)
+    training = detector.prepare(frame, retain_original=False)
+
+    assert inspection.original is not frame
+    assert np.array_equal(inspection.original, frame)
+    assert training.original is None
+    assert np.array_equal(training.image, inspection.image)
+    assert np.array_equal(training.content_mask, inspection.content_mask)
+    assert training.bounds == inspection.bounds
+    assert training.quality == inspection.quality
+
+
 def test_pipeline_uses_best_frame_and_spatial_map_not_huge_image_score():
     settings = InspectionSettings()
     frame = np.full((100, 100, 3), 100, np.uint8)

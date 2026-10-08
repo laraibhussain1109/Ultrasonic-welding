@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 import time
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ from .geometry_inspector import GeometryEvidence, FinGeometryInspector, glare_ev
 from .heatmap_area import evaluate_heatmap_area
 from .roi_stabilizer import CanonicalROI, ROIStabilizer
 from .trainer import InspectionResult, inspection_overlay, list_images
+from .training_cache import DiskPatchEmbeddings
 from .yolo_tracking import YoloByteTrackDetector
 
 PATCHCORE_MODEL_VERSION = 3
@@ -53,9 +55,8 @@ def edge_authority_mask(shape: tuple[int, int], ratio: float, object_mask: np.nd
     return np.clip(distance / ramp, 0, 1).astype(np.float32)
 
 
-def filter_duplicate_images(images: list[np.ndarray], threshold: float = .99995,
-                            pixel_mae_threshold: float = .002) -> list[int]:
-    """Return indices after removing only genuinely redundant photographs.
+class DuplicateImageFilter:
+    """Remove redundant crops while retaining only small comparison thumbnails.
 
     A repetitive blower legitimately produces descriptors with cosine similarity
     above .98 at different rotational phases. Cosine similarity alone therefore
@@ -63,22 +64,31 @@ def filter_duplicate_images(images: list[np.ndarray], threshold: float = .99995,
     only when both its illumination-normalized descriptor *and* its actual
     thumbnail pixels are nearly identical.
     """
-    kept, descriptors, thumbnails = [], [], []
-    for index, image in enumerate(images):
+    def __init__(self, threshold: float = .99995, pixel_mae_threshold: float = .002) -> None:
+        self.threshold = threshold
+        self.pixel_mae_threshold = pixel_mae_threshold
+        self.descriptors, self.thumbnails = [], []
+
+    def accept(self, image: np.ndarray) -> bool:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
         small = cv2.resize(gray, (64, 24), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
         descriptor = (small - small.mean()).ravel()
         descriptor /= np.linalg.norm(descriptor) + 1e-6
         duplicate = any(
-            float(descriptor @ old_descriptor) >= threshold
-            and float(np.mean(np.abs(small - old_thumbnail))) <= pixel_mae_threshold
-            for old_descriptor, old_thumbnail in zip(descriptors, thumbnails)
+            float(descriptor @ old_descriptor) >= self.threshold
+            and float(np.mean(np.abs(small - old_thumbnail))) <= self.pixel_mae_threshold
+            for old_descriptor, old_thumbnail in zip(self.descriptors, self.thumbnails)
         )
         if not duplicate:
-            kept.append(index)
-            descriptors.append(descriptor)
-            thumbnails.append(small)
-    return kept
+            self.descriptors.append(descriptor)
+            self.thumbnails.append(small)
+        return not duplicate
+
+
+def filter_duplicate_images(images: list[np.ndarray], threshold: float = .99995,
+                            pixel_mae_threshold: float = .002) -> list[int]:
+    duplicate_filter = DuplicateImageFilter(threshold, pixel_mae_threshold)
+    return [index for index, image in enumerate(images) if duplicate_filter.accept(image)]
 
 
 def evenly_limit_indices(count: int, limit: int) -> list[int]:
@@ -214,7 +224,13 @@ class PatchCoreInspector(HybridPatchcorePadimInspector):
         detector = YoloByteTrackDetector(config.yolo_model_path, config.yolo_confidence)
         quality = FrameQualityAnalyzer(config.training_min_sharpness, config.max_glare_ratio,
                                        config.max_saturation_ratio)
+        with tempfile.TemporaryDirectory(prefix="patchcore-training-") as directory:
+            return self._train_cached(config, paths, detector, quality, Path(directory), progress_callback)
+
+    def _train_cached(self, config, paths, detector, quality, cache_dir, progress_callback):
         accepted, accepted_paths, rejection_counts = [], [], {}
+        duplicate_filter = DuplicateImageFilter()
+        qualified_count = 0
         rejected_examples: dict[str, list[str]] = {}
         started = time.monotonic()
         for i, path in enumerate(paths, 1):
@@ -232,13 +248,15 @@ class PatchCoreInspector(HybridPatchcorePadimInspector):
                     if len(examples) < 10:
                         examples.append(str(path))
             else:
-                accepted.append(canonical.image); accepted_paths.append(path)
+                qualified_count += 1
+                if duplicate_filter.accept(canonical.image):
+                    cached = cache_dir / f"roi_{i}.npy"
+                    np.save(cached, canonical.image, allow_pickle=False)
+                    accepted.append(cached)
+                    accepted_paths.append(path)
             if progress_callback:
                 from .training_progress import TrainingProgress
                 progress_callback(TrainingProgress("Quality-gating YOLO crops", i, len(paths), time.monotonic() - started))
-        qualified_count = len(accepted)
-        keep = filter_duplicate_images(accepted)
-        accepted = [accepted[i] for i in keep]; accepted_paths = [accepted_paths[i] for i in keep]
         nonduplicate_count = len(accepted)
         limited = evenly_limit_indices(nonduplicate_count, self.settings.max_training_images)
         accepted = [accepted[i] for i in limited]; accepted_paths = [accepted_paths[i] for i in limited]
@@ -262,18 +280,20 @@ class PatchCoreInspector(HybridPatchcorePadimInspector):
                 f"{nonduplicate_count - len(accepted)}. Rejections: {reason_summary}. "
                 f"Details: {report_path}"
             )
+        # Only the configured, evenly spaced subset is loaded for geometry and
+        # calibration, rather than every accepted crop in the source directory.
+        accepted = [np.load(path, allow_pickle=False) for path in accepted]
+        del frame, canonical, duplicate_filter
         # Calibration is disjoint and never enters the memory bank.
         split = max(3, len(accepted) // 5)
         calibration_images, calibration_paths = accepted[-split:], accepted_paths[-split:]
         training_images, training_paths = accepted[:-split], accepted_paths[:-split]
-        tensors = [self._preprocess_image(image) for image in training_images]
         torch = require_module("torch")
-        embeddings = []
-        for tensor in tensors:
-            fmap, grid = self._extract_embeddings_from_tensor(tensor)
-            embeddings.append(fmap.flatten(2).permute(0, 2, 1).reshape(-1, fmap.shape[1]).cpu())
-        all_embeddings = torch.cat(embeddings)
-        memory, candidates = self._build_patchcore_memory(all_embeddings, torch)
+        with DiskPatchEmbeddings(cache_dir / "patches.bin") as embeddings:
+            for image in training_images:
+                fmap, grid = self._extract_embeddings_from_tensor(self._preprocess_image(image))
+                embeddings.append(fmap.flatten(2).permute(0, 2, 1).reshape(-1, fmap.shape[1]))
+            memory, candidates = embeddings.build_memory(self, torch)
         bank_hash = hashlib.sha256(memory.numpy().tobytes()).hexdigest()
         geometry_calibrations = self._calibrate_geometry(training_images, config)
         model_path = self._model_path(config)

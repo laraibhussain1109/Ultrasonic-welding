@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 import time
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import cv2
@@ -16,9 +17,10 @@ import numpy as np
 
 from .anomaly_models import HybridPatchcorePadimInspector, HybridTrainingSettings, _FeatureHook, require_module
 from .fixed_settings import InspectionSettings
-from .patchcore_inspector import filter_duplicate_images, evenly_limit_indices
-from .stationary_roi import InvalidView, PreparedROI, YoloROI
+from .patchcore_inspector import DuplicateImageFilter, evenly_limit_indices
+from .stationary_roi import InvalidView, PreparedROI, QualityEvidence, YoloROI
 from .trainer import list_images
+from .training_cache import DiskPatchEmbeddings
 from .training_progress import TrainingProgress
 
 
@@ -28,6 +30,20 @@ def file_digest(path: str | Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+@dataclass(frozen=True)
+class _CachedROI:
+    path: Path
+    source: Path
+    bounds: tuple[int, int, int, int]
+    yolo_confidence: float
+    quality: QualityEvidence
+
+    def load(self) -> PreparedROI:
+        with np.load(self.path, allow_pickle=False) as stored:
+            return PreparedROI(None, stored["image"], stored["mask"], self.bounds,
+                               self.yolo_confidence, self.quality)
 
 
 class SpatialPatchCore(HybridPatchcorePadimInspector):
@@ -171,8 +187,15 @@ class SpatialPatchCore(HybridPatchcorePadimInspector):
         paths = list_images(directory)
         if len(paths) < 20:
             raise ValueError(f"At least 20 GOOD source images are required in {directory}")
+        with tempfile.TemporaryDirectory(prefix="patchcore-training-") as cache:
+            return self._train_cached(paths, Path(cache), angle, progress_callback)
+
+    def _train_cached(self, paths, cache_dir, angle, progress_callback):
+        p = self.config.patchcore
         detector = YoloROI(self.config)
-        accepted, accepted_paths, rejected = [], [], []
+        accepted, rejected = [], []
+        duplicate_filter = DuplicateImageFilter()
+        qualified_count = 0
         started = time.monotonic()
         reference = None
         def progress(stage, completed, total):
@@ -181,33 +204,38 @@ class SpatialPatchCore(HybridPatchcorePadimInspector):
         for index, path in enumerate(paths, 1):
             frame = cv2.imread(str(path))
             try:
-                roi = detector.prepare(frame)
+                roi = detector.prepare(frame, retain_original=False)
                 if reference is None:
                     reference = roi
                 roi = self._align(roi, reference.image, reference.content_mask)
-                accepted.append(roi)
-                accepted_paths.append(path)
+                qualified_count += 1
+                if duplicate_filter.accept(roi.image):
+                    cached = cache_dir / f"roi_{index}.npz"
+                    np.savez_compressed(cached, image=roi.image, mask=roi.content_mask)
+                    accepted.append(_CachedROI(cached, path, roi.bounds, roi.yolo_confidence, roi.quality))
             except InvalidView as exc:
                 rejected.append({"image": str(path), "reason": str(exc)})
             progress("Quality and YOLO ROI", index, len(paths))
-        keep = filter_duplicate_images([r.image for r in accepted])
-        keep = [keep[i] for i in evenly_limit_indices(len(keep), p.max_training_images)]
-        accepted, accepted_paths = [accepted[i] for i in keep], [accepted_paths[i] for i in keep]
+        nonduplicate_count = len(accepted)
+        accepted = [accepted[i] for i in evenly_limit_indices(len(accepted), p.max_training_images)]
+        accepted_paths = [roi.source for roi in accepted]
         if len(accepted) < 10:
             raise ValueError(f"Only {len(accepted)} distinct qualified GOOD images remain; need at least 10. Rejections: {rejected[:5]}")
+        del frame, roi, duplicate_filter
         split = max(3, len(accepted) // 5)
         train, calibration = accepted[:-split], accepted[-split:]
         torch = require_module("torch")
-        features = []
-        for index, roi in enumerate(train, 1):
-            fmap, _ = self._extract_embeddings_from_tensor(self._preprocess_image(roi.image))
-            # Exclude letterbox patches from the GOOD memory bank.
-            mask = cv2.resize(roi.content_mask.astype(np.uint8), (fmap.shape[-1], fmap.shape[-2]), interpolation=cv2.INTER_NEAREST).astype(bool)
-            rows = fmap.flatten(2).permute(0, 2, 1).reshape(-1, fmap.shape[1]).cpu()
-            features.append(rows[torch.from_numpy(mask.ravel())])
-            progress("PatchCore features", index, len(train))
-        progress("PatchCore coreset", 0, 1)
-        memory, count = self._build_patchcore_memory(torch.cat(features), torch)
+        with DiskPatchEmbeddings(cache_dir / "patches.bin") as features:
+            for index, cached in enumerate(train, 1):
+                roi = cached.load()
+                fmap, _ = self._extract_embeddings_from_tensor(self._preprocess_image(roi.image))
+                # Exclude letterbox patches from the GOOD memory bank.
+                mask = cv2.resize(roi.content_mask.astype(np.uint8), (fmap.shape[-1], fmap.shape[-2]), interpolation=cv2.INTER_NEAREST).astype(bool)
+                rows = fmap.flatten(2).permute(0, 2, 1).reshape(-1, fmap.shape[1]).cpu()
+                features.append(rows[torch.from_numpy(mask.ravel())])
+                progress("PatchCore features", index, len(train))
+            progress("PatchCore coreset", 0, 1)
+            memory, count = features.build_memory(self, torch)
         backbone, _, _ = self._build_backbone()
         path = p.path_for_angle(angle or 60)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -223,8 +251,15 @@ class SpatialPatchCore(HybridPatchcorePadimInspector):
         torch.save(checkpoint, temp)
         temp.replace(path)
         self._loaded_stamp = None
-        calibration_maps = [self.infer(roi, angle or 60)[0][roi.content_mask] for roi in calibration]
+        calibration_maps = []
+        for cached in calibration:
+            roi = cached.load()
+            heatmap, _, aligned = self.infer(roi, angle or 60)
+            calibration_maps.append(heatmap[aligned.content_mask])
         report = {"model": str(path), "angle": angle, "source_count": len(paths), "qualified_distinct_count": len(accepted),
+                  "quality_accepted_images": qualified_count, "nonduplicate_images": nonduplicate_count,
+                  "duplicates_removed": qualified_count - nonduplicate_count,
+                  "training_limit_removed": nonduplicate_count - len(accepted),
                   "training_count": len(train), "calibration_count": len(calibration), "memory_candidates": count,
                   "memory_patches": len(memory), "rejected": rejected, "preprocessing": self.signature(),
                   "GOOD_distance_p999": float(np.quantile(np.concatenate(calibration_maps), .999)),

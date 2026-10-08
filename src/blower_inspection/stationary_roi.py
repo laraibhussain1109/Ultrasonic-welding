@@ -34,7 +34,7 @@ def assess_quality(frame: np.ndarray, settings: QualitySettings, mask=None) -> Q
                                   max_saturation_ratio=settings.maximum_saturated_percent / 100,
                                   max_dark_ratio=settings.maximum_dark_percent / 100).analyze(frame, mask)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    mean = float(gray.mean() if mask is None else gray[mask].mean())
+    mean = cv2.mean(gray, mask=None if mask is None else np.asarray(mask, dtype=np.uint8))[0]
     reasons = list(result.reasons)
     if mean < settings.minimum_mean_intensity:
         reasons.append("UNDEREXPOSED MEAN")
@@ -62,7 +62,7 @@ def select_best_frame(frames: list[np.ndarray], settings: QualitySettings) -> tu
 
 @dataclass(frozen=True)
 class PreparedROI:
-    original: np.ndarray
+    original: np.ndarray | None
     image: np.ndarray
     content_mask: np.ndarray
     bounds: tuple[int, int, int, int]
@@ -80,7 +80,7 @@ class YoloROI:
     def ready(self) -> None:
         self.loader._load()
 
-    def prepare(self, frame: np.ndarray) -> PreparedROI:
+    def prepare(self, frame: np.ndarray, *, retain_original: bool = True) -> PreparedROI:
         s = self.settings
         quality = assess_quality(frame, s.quality)
         if not quality.valid:
@@ -120,4 +120,4 @@ class YoloROI:
         crop_quality = assess_quality(canonical.image, s.quality, mask)
         if not crop_quality.valid:
             raise InvalidView("ROI IMAGE QUALITY FAILED: " + ", ".join(crop_quality.reasons))
-        return PreparedROI(frame.copy(), canonical.image, mask, bounds, confidence, crop_quality)
+        return PreparedROI(frame.copy() if retain_original else None, canonical.image, mask, bounds, confidence, crop_quality)
