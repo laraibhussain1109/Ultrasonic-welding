@@ -11,6 +11,8 @@ import threading
 import cv2
 import numpy as np
 
+from .camera_modes import choose_mode, configure_capture
+
 
 def _preferred_capture_backend() -> int:
     """Return an OpenCV backend suitable for the current operating system."""
@@ -284,13 +286,11 @@ class USBCamera:
         self.width = width
         self.height = height
         self.fps = fps
+        self.requested_size = (width, height)
         self.capture: cv2.VideoCapture | None = None
         self._owner: int | None = None
         self.format_info: dict = {}
         self.property_set_accepted: dict = {}
-
-    def _set(self, name, prop, value):
-        self.property_set_accepted[name] = bool(self.capture.set(prop, value))
 
     def _check_owner(self) -> None:
         if self._owner is not None and self._owner != threading.get_ident():
@@ -302,23 +302,21 @@ class USBCamera:
             return
         self._owner = threading.get_ident()
         self.property_set_accepted = {}
-        self.capture = cv2.VideoCapture(self.index, _preferred_capture_backend())
+        backend = _preferred_capture_backend()
+        compression = os.environ.get("NEUROIRIS_CAMERA_FOURCC", "MJPG").upper()
+        exposure = os.environ.get("NEUROIRIS_CAMERA_AUTO_EXPOSURE")
+        exposure = float(exposure) if exposure is not None else None
+        probes, selected = [], None
+        if sys.platform.startswith("win") and os.environ.get("NEUROIRIS_CAMERA_AUTOSELECT", "1") != "0":
+            selected, probes = choose_mode(self.index, *self.requested_size, self.fps, exposure)
+            backend = {"DSHOW": cv2.CAP_DSHOW, "MSMF": cv2.CAP_MSMF, "ANY": cv2.CAP_ANY}[selected["probe_backend"]]
+            compression = selected["probe_fourcc"]
+            exposure = selected["probe_auto_exposure"]
+        self.capture = cv2.VideoCapture(self.index, backend)
         if not self.capture.isOpened():
             raise RuntimeError(f"Unable to open camera index {self.index}")
-        if hasattr(cv2, "CAP_PROP_FOURCC"):
-            compression = os.environ.get("NEUROIRIS_CAMERA_FOURCC", "MJPG").upper()
-            if compression != "DEFAULT":
-                if len(compression) != 4:
-                    raise ValueError("NEUROIRIS_CAMERA_FOURCC must be DEFAULT or four characters, such as MJPG")
-                self._set("fourcc", cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*compression))
-        if hasattr(cv2, "CAP_PROP_HW_ACCELERATION") and hasattr(cv2, "VIDEO_ACCELERATION_ANY"):
-            self._set("hw_acceleration", cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY)
-        self._set("width", cv2.CAP_PROP_FRAME_WIDTH, self.width)
-        self._set("height", cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-        self._set("fps", cv2.CAP_PROP_FPS, self.fps)
-        if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
-            self._set("buffer", cv2.CAP_PROP_BUFFERSIZE, 1)
-        self._set("auto_exposure", cv2.CAP_PROP_AUTO_EXPOSURE, 0)
+        self.property_set_accepted = configure_capture(self.capture, *self.requested_size, self.fps,
+                                                       compression, exposure)
         actual_width = int(round(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH)))
         actual_height = int(round(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT)))
         reported_fps = self.capture.get(cv2.CAP_PROP_FPS)
@@ -336,7 +334,9 @@ class USBCamera:
                             "reported_fps": reported_fps if reported_fps > 0 else None,
                             "property_set_accepted": dict(self.property_set_accepted),
                             "exposure": self.capture.get(cv2.CAP_PROP_EXPOSURE),
-                            "auto_exposure": self.capture.get(cv2.CAP_PROP_AUTO_EXPOSURE)}
+                            "auto_exposure": self.capture.get(cv2.CAP_PROP_AUTO_EXPOSURE),
+                            "mode_probes": probes,
+                            "startup_delivered_fps": selected["delivered_fps"] if selected else None}
 
     def read(self) -> np.ndarray:
         self._check_owner()
@@ -346,6 +346,9 @@ class USBCamera:
         ok, frame = self.capture.read()
         if not ok or frame is None:
             raise RuntimeError("Camera frame capture failed")
+        if (frame.shape[1], frame.shape[0]) != self.requested_size:
+            raise RuntimeError(f"Camera reopened at {frame.shape[1]}x{frame.shape[0]}, expected "
+                               f"{self.requested_size[0]}x{self.requested_size[1]}; inspection inhibited")
         self.width, self.height = frame.shape[1], frame.shape[0]
         self.format_info.update(width=self.width, height=self.height)
         return frame

@@ -34,6 +34,15 @@ class ProcessingFrame:
     bounds: tuple[int, int, int, int]
 
 
+@dataclass(frozen=True)
+class VideoEvidence:
+    """Supplementary unlabelled native image; never counts as an angle."""
+    track_id: int
+    frame: np.ndarray
+    captured_at: float
+    sharpness: float = 0.0
+
+
 class PendingQuality:
     def __init__(self):
         self.future = Future()
@@ -114,6 +123,12 @@ class StationaryCameraWorker(QThread):
         self._processing_track = None
         self._processing_pending: dict[int, int] = {}
         self._quality_pending: dict[int, int] = {}
+        self._video_pending: VideoEvidence | None = None
+        self._video_ready: VideoEvidence | None = None
+        self._video_quality_track = None
+        self._video_sample_at = float("-inf")
+        self.video_overwritten = 0
+        self.video_qualified = 0
 
     def set_bounds(self, bounds) -> None:
         with self._lock:
@@ -128,6 +143,8 @@ class StationaryCameraWorker(QThread):
             pending = set(self._processing_pending) | set(self._quality_pending)
             if self._processing_track is not None:
                 pending.add(self._processing_track)
+            if self._video_quality_track is not None:
+                pending.add(self._video_quality_track)
         return pending | {track for track, _capture in self._captures}
 
     def performance(self) -> dict:
@@ -136,11 +153,34 @@ class StationaryCameraWorker(QThread):
                 "preview_overwritten": self.preview_overwritten, "evidence_dropped": self.evidence_dropped,
                 "processing_queue": len(self._processing), "processing_queue_peak": self._processing.high_water,
                 "quality_queue": len(self._quality_jobs), "quality_queue_peak": self._quality_jobs.high_water,
-                "inspection_queue": len(self._captures), "format": dict(getattr(self.camera, "format_info", {}))}
+                "inspection_queue": len(self._captures), "video_qualified": self.video_qualified,
+                "video_overwritten": self.video_overwritten,
+                "video_pending": int(self._video_pending is not None),
+                "video_ready": int(self._video_ready is not None),
+                "format": dict(getattr(self.camera, "format_info", {}))}
 
     def set_part(self, track_id: int, present: bool) -> None:
         with self._lock:
+            changed = self._part[0] != track_id
             self._part = (track_id, present)
+            if not present or changed:
+                self._video_pending = self._video_ready = None
+
+    def take_video_evidence(self):
+        with self._lock:
+            evidence, self._video_ready = self._video_ready, None
+        return evidence
+
+    def _publish_video(self, evidence, quality):
+        if not quality.valid:
+            return
+        with self._lock:
+            if self._part != (evidence.track_id, True):
+                return
+            if self._video_ready is not None:
+                self.video_overwritten += 1
+            self._video_ready = replace(evidence, sharpness=quality.sharpness)
+            self.video_qualified += 1
 
     def snapshot(self) -> CameraSnapshot | None:
         with self._lock:
@@ -194,6 +234,20 @@ class StationaryCameraWorker(QThread):
                 try:
                     job = self._quality_jobs.popleft()
                 except IndexError:
+                    # Required stop evidence has priority. Continuous video has
+                    # one latest input and one latest qualified output; a slow
+                    # model never accumulates video images or blocks the reader.
+                    with self._lock:
+                        video, self._video_pending = self._video_pending, None
+                        self._video_quality_track = video.track_id if video else None
+                    if video is not None:
+                        started = time.monotonic()
+                        quality = analyzer.analyze(video.frame)
+                        self.quality_meter.record(time.monotonic() - started)
+                        self._publish_video(video, quality)
+                        with self._lock:
+                            self._video_quality_track = None
+                        continue
                     if self._motion_done.is_set():
                         break
                     self._quality_available.wait(.02)
@@ -201,8 +255,11 @@ class StationaryCameraWorker(QThread):
                     continue
                 if isinstance(job, QualityJob):
                     started = time.monotonic()
-                    job.pending.future.set_result(analyzer.analyze(job.frame))
+                    quality = analyzer.analyze(job.frame)
+                    job.pending.future.set_result(quality)
                     self.quality_meter.record(time.monotonic() - started)
+                    # Reuse quality work already needed for stationary evidence.
+                    self._publish_video(VideoEvidence(job.track_id, job.frame, time.monotonic()), quality)
                 elif isinstance(job, BurstJob):
                     # The FIFO guarantees all this burst's quality jobs finished.
                     burst = [(frame, quality.future.result()) for frame, quality in job.burst]
@@ -256,7 +313,19 @@ class StationaryCameraWorker(QThread):
                         return result
                     controller._moving = measured_motion
                 started = time.monotonic()
-                selected = controller.offer(crop_bounds(packet.frame, packet.bounds, copy=False), now=packet.captured_at) if packet.present else None
+                roi = crop_bounds(packet.frame, packet.bounds, copy=False)
+                selected = controller.offer(roi, now=packet.captured_at) if packet.present else None
+                # Inspection continues even if no strong rotation is observed.
+                # At most 5 extra quality checks/s; selected-stop quality is
+                # unchanged and has queue priority. These retain native pixels.
+                if (packet.present and not controller.state.startswith("CAPTURING")
+                        and packet.captured_at - self._video_sample_at >= .2):
+                    self._video_sample_at = packet.captured_at
+                    with self._lock:
+                        if self._video_pending is not None:
+                            self.video_overwritten += 1
+                        self._video_pending = VideoEvidence(packet.track_id, roi, packet.captured_at)
+                    self._quality_available.set()
                 self.processing_meter.record(time.monotonic() - started)
                 with self._lock:
                     self._state = controller.state if packet.present else "NO PART"
@@ -323,6 +392,8 @@ class StationaryCameraWorker(QThread):
             quality_processor.join()
             self._processing.clear()
             self._quality_jobs.clear()
+            with self._lock:
+                self._video_pending = None
 
 
 class YoloPresenceWorker(QThread):

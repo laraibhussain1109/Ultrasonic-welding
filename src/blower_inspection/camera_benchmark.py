@@ -15,6 +15,8 @@ import time
 import cv2
 import numpy as np
 
+from .camera_modes import configure_capture
+
 
 def fourcc_name(value):
     code = int(value)
@@ -31,17 +33,7 @@ def benchmark_case(index, backend, width, height, fourcc, fps=30, duration=10,
         capture = factory(index, {"DSHOW": cv2.CAP_DSHOW, "MSMF": cv2.CAP_MSMF, "ANY": cv2.CAP_ANY}[backend])
         if not capture.isOpened():
             raise RuntimeError("Camera/backend did not open")
-        properties = []
-        if fourcc != "DEFAULT":
-            properties.append(("fourcc", cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc)))
-        if hasattr(cv2, "CAP_PROP_HW_ACCELERATION") and hasattr(cv2, "VIDEO_ACCELERATION_ANY"):
-            properties.append(("hw_acceleration", cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY))
-        properties.extend((("width", cv2.CAP_PROP_FRAME_WIDTH, width),
-                           ("height", cv2.CAP_PROP_FRAME_HEIGHT, height), ("fps", cv2.CAP_PROP_FPS, fps),
-                           ("buffer", cv2.CAP_PROP_BUFFERSIZE, 1)))
-        if auto_exposure is not None:
-            properties.append(("auto_exposure", cv2.CAP_PROP_AUTO_EXPOSURE, auto_exposure))
-        report["property_set_accepted"] = {name: bool(capture.set(prop, value)) for name, prop, value in properties}
+        report["property_set_accepted"] = configure_capture(capture, width, height, fps, fourcc, auto_exposure)
         for _ in range(warmup):
             ok, frame = capture.read()
             if not ok or frame is None:
@@ -140,7 +132,7 @@ def main(argv=None):
     parser.add_argument("--seconds", type=float, default=10)
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--timeout", type=float, default=45)
-    parser.add_argument("--auto-exposure", type=float, default=None, help="Leave driver default unless specified; production currently requests 0")
+    parser.add_argument("--auto-exposure", type=float, default=None, help="Leave driver setting untouched unless specified")
     parser.add_argument("--output", type=Path, default=Path("camera-benchmark.json"))
     args = parser.parse_args(argv)
     if args.fps <= 0 or args.seconds <= 0 or args.timeout <= 0 or args.warmup < 0:
@@ -163,7 +155,7 @@ def main(argv=None):
                 kwargs = dict(index=args.index, backend=backend, width=width, height=height,
                               fourcc=fmt, fps=args.fps, duration=args.seconds, warmup=args.warmup,
                               auto_exposure=args.auto_exposure)
-                report = isolated_case(kwargs, max(args.timeout, args.seconds + 15))
+                report = isolated_case(kwargs, max(args.timeout, args.seconds + 1))
                 reports.append(report)
                 actual = report.get("actual", {})
                 measured_fps = f"{report['delivered_fps']:.2f}" if "delivered_fps" in report else "unmeasured"

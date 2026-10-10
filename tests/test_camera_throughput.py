@@ -176,6 +176,37 @@ def test_raw_queue_overflow_faults_without_blocking_reader(app, tmp_path, monkey
     assert camera.closed
 
 
+def test_continuous_video_qualifies_native_images_when_no_rotation_is_detected(app, tmp_path):
+    image = np.random.default_rng(271).integers(40, 180, (100, 320, 3), dtype=np.uint8)
+    camera = PacedCamera([image] * 35)
+    worker = StationaryCameraWorker(camera, settings(tmp_path), (20, 20, 280, 60), 1)
+    camera.worker = worker
+    worker.start()
+    assert worker.wait(3000)
+    assert worker.error_message is None and worker.take_captures() == []
+    evidence = worker.take_video_evidence()
+    assert evidence is not None and evidence.track_id == 1 and evidence.sharpness > 24
+    np.testing.assert_array_equal(evidence.frame, image[20:80, 20:300])
+    assert worker.video_qualified >= 3 and worker.video_overwritten >= 2
+    assert worker.take_video_evidence() is None and worker.read_meter.count == 35
+    assert len(set(camera.threads)) == 1
+
+
+def test_continuous_video_rejects_bad_quality_and_clears_evidence_on_departure(app, tmp_path):
+    image = np.full((100, 320, 3), 255, np.uint8)
+    camera = PacedCamera([image] * 12)
+    worker = StationaryCameraWorker(camera, settings(tmp_path), (0, 0, 320, 100), 1)
+    camera.worker = worker
+    worker.start()
+    assert worker.wait(2000)
+    assert worker.error_message is None and worker.take_video_evidence() is None
+    assert worker.video_qualified == 0 and worker.read_meter.count == 12
+    from blower_inspection.stationary_workers import VideoEvidence
+    worker._video_ready = worker._video_pending = VideoEvidence(1, image, 0)
+    worker.set_part(1, False)
+    assert worker.take_video_evidence() is None and worker._video_pending is None
+
+
 def test_benchmark_counts_delivered_fps_and_reports_negotiation_mismatch_and_drop_evidence():
     class Clock:
         value = 0.0
@@ -210,6 +241,7 @@ def test_benchmark_counts_delivered_fps_and_reports_negotiation_mismatch_and_dro
 
 
 def test_camera_rejects_cross_thread_read_and_release(monkeypatch):
+    monkeypatch.setenv("NEUROIRIS_CAMERA_AUTOSELECT", "0")
     calls = []
     class Capture:
         def __init__(self, *_args): calls.append(("open", threading.get_ident()))
@@ -222,7 +254,7 @@ def test_camera_rejects_cross_thread_read_and_release(monkeypatch):
             return True, np.zeros((40, 120, 3), np.uint8)
         def release(self): calls.append(("release", threading.get_ident()))
     monkeypatch.setattr(cv2, "VideoCapture", Capture)
-    camera = USBCamera()
+    camera = USBCamera(width=120, height=40)
     camera.open()
     errors = []
     def unsafe():
@@ -324,3 +356,34 @@ def test_pipeline_audit_saves_all_six_native_stills_and_metrics_without_machine_
     for angle in INSPECTION_ANGLES:
         np.testing.assert_array_equal(cv2.imread(str(destination / f"{angle:03d}.png")), image)
     assert camera.closed and report["inference_device"] == "inference disabled"
+
+
+def test_pipeline_audit_records_video_checks_separately_and_rejects_missing_stops(app, tmp_path, monkeypatch):
+    from blower_inspection import camera_pipeline_benchmark as audit
+    from blower_inspection.trainer import InspectionResult
+    import json
+    image = np.random.default_rng(51).integers(40, 180, (80, 240, 3), dtype=np.uint8)
+    class Camera(PacedCamera):
+        def read(self):
+            time.sleep(.01)
+            self.reads += 1
+            return image
+    class Inspector:
+        def validate_ready(self, _model): pass
+        def inspect(self, _model, frame, **_kwargs):
+            time.sleep(.03)
+            np.testing.assert_array_equal(frame, image)
+            return InspectionResult("PASS", .1, 0, 0, [])
+        def runtime_device_name(self): return "test CPU inspector"
+    camera = Camera([])
+    monkeypatch.setattr(audit, "USBCamera", lambda *_args: camera)
+    monkeypatch.setattr(audit, "ModelRegistry", lambda: SimpleNamespace(get=lambda _id: settings(tmp_path)))
+    monkeypatch.setattr("blower_inspection.inspector_factory.inspector_for_model", lambda _model: Inspector())
+    destination = tmp_path / "video-audit"
+    result = audit.main(["--roi", "0", "0", "240", "80", "--width", "240", "--height", "80",
+                         "--seconds", ".6", "--inference", "--continuous", "--output", str(destination)])
+    report = json.loads((destination / "report.json").read_text())
+    assert result == 1 and not report["six_valid_views"] and report["inference_complete"]
+    assert report["captures"] == [] and report["inspections"] == [] and report["video_checks"]
+    assert all(result["angle"] is None for result in report["video_checks"])
+    assert report["final"]["raw"]["count"] > len(report["video_checks"]) and camera.closed

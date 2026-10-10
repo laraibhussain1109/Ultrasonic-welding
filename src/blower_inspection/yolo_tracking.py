@@ -134,6 +134,7 @@ class RotatingPartSession:
     section_candidate_counts: dict[int, int] = field(default_factory=dict)
     candidate_section_angles: dict[int, set[int]] = field(default_factory=dict)
     confirmed_section_angles: dict[int, set[int]] = field(default_factory=dict)
+    video_frames_inspected: int = 0
 
 
 @dataclass(frozen=True)
@@ -340,6 +341,27 @@ class RotatingPartInspector:
         session = self._session_for_track(track_id)
         return bool(session and session.has_failure)
 
+    def record_video_evidence(self, track_id, *, view_valid, immediate_failure,
+                              anomaly_score, geometry_score=0.0, candidate_sections=(), reason_codes=()):
+        """Latch established video defects without inventing mechanical coverage.
+
+        Repeated unlabelled candidates cannot stand in for independent 60° views.
+        The existing calibrated hybrid decision must already be FAIL to latch.
+        """
+        session = self._session_for_track(track_id)
+        if session is None or not self.accepts_inspection(track_id):
+            return
+        session.video_frames_inspected += 1
+        if not view_valid:
+            return
+        session.worst_score = max(session.worst_score, anomaly_score)
+        session.worst_geometry_score = max(session.worst_geometry_score, geometry_score)
+        if immediate_failure:
+            session.has_failure = True
+            session.confirmed_defect_views += 1
+            session.confirmed_defect_sections.update(candidate_sections)
+            session.reason_codes.update(reason_codes)
+
     def defect_sections(self, track_id: int) -> tuple[int, ...]:
         """Return latched longitudinal defect locations for operator guidance."""
         session = self._session_for_track(track_id)
@@ -380,12 +402,13 @@ class RotatingPartInspector:
         return session.frames_inspected, session.valid_views, self.minimum_rotation_views
 
     def flush(self) -> list[CompletedPart]:
-        """Clear unfinished sessions without counting parts that never crossed."""
+        """Fail unfinished fixed-view attempts; retain legacy conveyor eligibility."""
         completed = [
             self._complete(session)
             for session in self.sessions.values()
             if (self.completion_mode in {"minimum_views", "part_departure"} or session.crossed_counting_line)
-            and (session.valid_views >= self.minimum_rotation_views
+            and ((self.fixed_view_angles and (session.frames_inspected or session.video_frames_inspected))
+                 or session.valid_views >= self.minimum_rotation_views
                  or session.frames_inspected >= self.minimum_rotation_views * 2)
         ]
         self.sessions.clear()

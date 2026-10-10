@@ -10,6 +10,14 @@ fitting revolution, the camera selects one qualified still from each of six
 checks run separately from the UI and inference. Every side is queued, and six
 valid views are required before a final PASS pulse.
 
+Qualified native images are also inspected continuously between those selected
+stills, so a missed/subtle rotation cannot disable defect detection. Video FAIL
+evidence latches the affected sections; repeated video images never substitute
+for six valid stop views. Windows startup measures camera formats/backends at
+the selected resolution, reasserts MJPEG after size/FPS changes, and compares
+automatic exposure if retained driver settings deliver a slow stream. See
+[camera recovery and physical verification](docs/camera_recovery.md).
+
 The tolerance percentage compares filtered anomalous heatmap pixels with
 inspectable area. Borders, padding, support ribs, reflections, small components,
 and thin uncorroborated scratches are filtered. Confirmed longitudinal sections

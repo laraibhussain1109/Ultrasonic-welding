@@ -1,6 +1,6 @@
 """Record six native stationary stills and stage metrics without the desktop.
 
-Uses the selected production profile's unchanged quality/motion/settling rules.
+Uses the selected production profile's quality thresholds and settling rules.
 Optional production inference runs on its own thread. No machine outputs are sent.
 Run camera_benchmark first to establish the raw driver baseline.
 """
@@ -28,8 +28,11 @@ def main(argv=None):
     parser.add_argument("--height", type=int, default=2160)
     parser.add_argument("--seconds", type=float, default=60)
     parser.add_argument("--inference", action="store_true")
+    parser.add_argument("--continuous", action="store_true", help="Also inspect qualified video frames between required stills")
     parser.add_argument("--output", type=Path, default=Path("camera-pipeline-audit"))
     args = parser.parse_args(argv)
+    if args.continuous and not args.inference:
+        parser.error("--continuous requires --inference")
     if args.seconds <= 0 or min(args.width, args.height, args.roi[2], args.roi[3]) <= 0:
         parser.error("Duration, resolution and ROI dimensions must be positive")
     if min(args.roi[:2]) < 0 or args.roi[0] + args.roi[2] > args.width or args.roi[1] + args.roi[3] > args.height:
@@ -44,16 +47,25 @@ def main(argv=None):
         inspector.validate_ready(model)
     args.output.mkdir(parents=True, exist_ok=True)
     worker = StationaryCameraWorker(USBCamera(args.index, args.width, args.height, model.camera_fps), model, tuple(args.roi), 1)
-    captures, inspections, samples, inference_workers = [], [], [], []
+    captures, inspections, samples, inference_workers, video_checks = [], [], [], [], []
     pending = EvidenceQueue(max_items=12)
     errors = []
     worker.failed.connect(errors.append)
-    started, sampled = time.monotonic(), 0.0
+    started, sampled, acquisition_started = time.monotonic(), 0.0, None
     worker.start()
     try:
-        while time.monotonic() - started < args.seconds and not errors and not worker.error_message:
+        while not errors and not worker.error_message:
             application.processEvents()
             snapshot = worker.snapshot()
+            now = time.monotonic()
+            if snapshot and acquisition_started is None:
+                acquisition_started = now
+                print("Camera ready: start the fit/home rotation, then six inspection stops", flush=True)
+            if acquisition_started is None and now - started > 150:
+                errors.append("Camera mode testing/startup exceeded 150 seconds")
+                break
+            if acquisition_started is not None and now - acquisition_started >= args.seconds:
+                break
             if snapshot and (snapshot.frame.shape[1], snapshot.frame.shape[0]) != (args.width, args.height):
                 errors.append("Negotiated resolution differs from requested resolution; remeasure and use matching native ROI")
                 break
@@ -72,15 +84,23 @@ def main(argv=None):
                     pending.append((1, capture))
             if inspector and inference is not None and not inference.isRunning():
                 inference = None
-            if inspector and inference is None and pending:
-                track, capture = pending.popleft()
-                inference = InspectionWorker(inspector, model, track, capture.frame, capture.angle)
-                inference_workers.append(inference)
-                inference.finished_result.connect(lambda _track, result, latency: inspections.append(
-                    {"angle": result.view_angle, "status": result.status, "valid": result.view_valid,
-                     "latency_ms": latency, "reasons": result.reason_codes}))
-                inference.failed.connect(errors.append)
-                inference.start()
+            if inspector and inference is None:
+                video = None
+                if pending:
+                    track, capture = pending.popleft()
+                    inference = InspectionWorker(inspector, model, track, capture.frame, capture.angle)
+                elif args.continuous and len(captures) < 6:
+                    video = worker.take_video_evidence()
+                    if video is not None:
+                        inference = InspectionWorker(inspector, model, video.track_id, video.frame)
+                if inference is not None:
+                    results = video_checks if video is not None else inspections
+                    inference_workers.append(inference)
+                    inference.finished_result.connect(lambda _track, result, latency, results=results: results.append(
+                        {"angle": result.view_angle, "status": result.status, "valid": result.view_valid,
+                         "latency_ms": latency, "reasons": result.reason_codes}))
+                    inference.failed.connect(errors.append)
+                    inference.start()
             now = time.monotonic()
             if now - sampled >= 1:
                 samples.append({"elapsed_s": now - started, **worker.performance()})
@@ -104,7 +124,8 @@ def main(argv=None):
                   "thresholds": {"settle_ms": model.stationary_settle_ms, "minimum_frames": model.stationary_min_burst_frames,
                                  "minimum_sharpness": max(model.minimum_sharpness, model.inference_min_sharpness),
                                  "max_glare_ratio": model.max_glare_ratio, "max_saturation_ratio": model.max_saturation_ratio},
-                  "captures": captures, "inspections": inspections, "samples": samples,
+                  "captures": captures, "inspections": inspections, "video_checks": video_checks, "samples": samples,
+                  "startup_seconds": acquisition_started - started if acquisition_started else None,
                   "final": worker.performance(), "errors": errors,
                   "inference_device": inspector.runtime_device_name() if inspector else "inference disabled"}
         report["six_valid_views"] = (len(captures) == 6 and all(c["valid"] for c in captures) and not errors)

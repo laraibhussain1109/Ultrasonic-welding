@@ -155,6 +155,7 @@ class InspectionWorker(QThread):
         self.track_id = track_id
         self.frame = frame.copy()
         self.view_angle = view_angle
+        self.video_evidence = False
 
     def run(self) -> None:
         start = time.perf_counter()
@@ -633,6 +634,7 @@ class InspectionWindow(QWidget):
             worker = StationaryCameraWorker(self.camera, model, None, self.locked_track_id)
             self.camera_worker = worker
             worker.finished.connect(lambda: self._release_camera_worker(worker))
+            self.log.addItem("STARTING CAMERA | measuring native delivery modes; startup remains responsive")
             worker.start()
             self._fresh_camera_frame()
             if model.lock_roi_after_confirmation and not self._confirm_and_lock_roi(model):
@@ -691,6 +693,13 @@ class InspectionWindow(QWidget):
             f"CAMERA {self.camera.width}x{self.camera.height} reported FPS={self.camera.format_info.get('reported_fps') or 'unknown'} | DEVICE {device_name} | {esp32_status}"
         )
         self.log.addItem(runtime_summary)
+        measured = self.camera.format_info.get("startup_delivered_fps")
+        if measured is not None:
+            self.log.addItem(f"CAMERA RAW MODE TEST | {measured:.1f} delivered FPS | "
+                             f"{self.camera.format_info.get('fourcc')} {self.camera.format_info.get('backend')}")
+            if measured < 6:
+                self.log.addItem("CAMERA TOO SLOW FOR RELIABLE ONE-SECOND STOPS | "
+                                 "video defect checks active; missing views remain invalid")
         generation = self.inspection_generation
         worker.failed.connect(lambda message: self._handle_live_error(message)
                               if generation == self.inspection_generation else None)
@@ -710,7 +719,7 @@ class InspectionWindow(QWidget):
             raise RuntimeError("Camera acquisition thread is not running")
         previous = worker.snapshot()
         sequence = previous.sequence if previous else 0
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + 150
         while time.monotonic() < deadline:
             if worker.error_message:
                 raise RuntimeError(worker.error_message)
@@ -720,7 +729,7 @@ class InspectionWindow(QWidget):
             current = worker.wait_snapshot(sequence, .02)
             if current is not None and current.sequence > sequence:
                 return current.frame
-        raise RuntimeError("No fresh camera frame delivered within 15 seconds")
+        raise RuntimeError("Camera mode tests/startup did not deliver a fresh frame within 150 seconds")
 
     def _release_camera_worker(self, worker) -> None:
         if self.camera_worker is worker:
@@ -1048,7 +1057,19 @@ class InspectionWindow(QWidget):
                                     if track_id in retained}
 
     def _dispatch_stationary_view(self) -> None:
-        if self.inference_worker is not None or not self.stationary_queue:
+        if self.inference_worker is not None:
+            return
+        if not self.stationary_queue:
+            acquisition = self.camera_worker
+            if acquisition is None or not hasattr(acquisition, "take_video_evidence"):
+                return
+            evidence = acquisition.take_video_evidence()
+            if evidence is None or not self.rotating_parts.accepts_inspection(evidence.track_id):
+                return
+            self.inference_worker = InspectionWorker(self.inspector, self.inspection_model(), evidence.track_id,
+                                                    evidence.frame)
+            self.inference_worker.video_evidence = True
+            self._start_inference_worker(self.inference_worker)
             return
         track_id, selected = self.stationary_queue.popleft()
         if not self.rotating_parts.accepts_inspection(track_id):
@@ -1066,7 +1087,8 @@ class InspectionWindow(QWidget):
     def _start_inference_worker(self, worker: InspectionWorker) -> None:
         generation = self.inspection_generation
         worker.finished_result.connect(
-            lambda track_id, result, latency: self._handle_inspection_result(track_id, result, latency)
+            lambda track_id, result, latency: self._handle_inspection_result(track_id, result, latency,
+                                             video_evidence=getattr(worker, "video_evidence", False))
             if generation == self.inspection_generation else None
         )
         worker.failed.connect(
@@ -1076,15 +1098,16 @@ class InspectionWindow(QWidget):
         worker.finished.connect(lambda: self._clear_inference_worker(worker))
         worker.start()
 
-    def _handle_inspection_result(self, track_id: int, result, latency_ms: float) -> None:
+    def _handle_inspection_result(self, track_id: int, result, latency_ms: float, *, video_evidence=False) -> None:
         if not self.inspection_running:
             return
-        self.inference_latency_ms = latency_ms
+        if latency_ms > 0:
+            self.inference_latency_ms = latency_ms
         if result.is_no_part:
             self._handle_no_part_result(result, latency_ms)
             return
         completed_part = None
-        latched_failure = result.status == "FAIL"
+        latched_failure = result.status == "FAIL" and (not video_evidence or result.view_valid)
         view_progress = (0, 0, self.selected_model().minimum_rotation_views)
         if self.rotating_parts is not None:
             section_count = self.selected_model().patchcore_section_count
@@ -1101,15 +1124,22 @@ class InspectionWindow(QWidget):
                     # Highlight the full component rather than lose the latched
                     # warning while it rotates.
                     defect_sections = tuple(range(section_count))
-            completed_part = self.rotating_parts.record_inspection(
-                track_id, is_pass=result.is_pass, anomaly_score=result.anomaly_score,
-                view_valid=result.view_valid, immediate_failure=result.status == "FAIL",
-                provisional_candidate=result.status == "CANDIDATE",
-                geometry_score=result.geometry_score or 0.0,
-                tao_score=result.tao_score, reason_codes=result.reason_codes,
-                candidate_sections=defect_sections,
-                view_angle=result.view_angle,
-            )
+            if video_evidence:
+                self.rotating_parts.record_video_evidence(
+                    track_id, view_valid=result.view_valid, immediate_failure=latched_failure,
+                    anomaly_score=result.anomaly_score, geometry_score=result.geometry_score or 0.0,
+                    candidate_sections=defect_sections, reason_codes=result.reason_codes,
+                )
+            else:
+                completed_part = self.rotating_parts.record_inspection(
+                    track_id, is_pass=result.is_pass, anomaly_score=result.anomaly_score,
+                    view_valid=result.view_valid, immediate_failure=result.status == "FAIL",
+                    provisional_candidate=result.status == "CANDIDATE",
+                    geometry_score=result.geometry_score or 0.0,
+                    tao_score=result.tao_score, reason_codes=result.reason_codes,
+                    candidate_sections=defect_sections,
+                    view_angle=result.view_angle,
+                )
             latched_failure = self.rotating_parts.latched_failure(track_id) or latched_failure
             if latched_failure and not self.active_fail_asserted:
                 self.fail_output.send_result(True)
@@ -1121,6 +1151,8 @@ class InspectionWindow(QWidget):
         self.score_label.setText(f"{result.anomaly_score:.3f}")
         if latched_failure:
             badge_object, badge_text = "statusFail", "FAIL LATCHED"
+        elif video_evidence:
+            badge_object, badge_text = "statusStandby", "VIDEO — CHECKING"
         elif result.status == "PASS":
             # A good view is provisional until YOLO confirms part departure.
             # Do not show the final green PASS treatment while the part remains.
@@ -1137,6 +1169,8 @@ class InspectionWindow(QWidget):
             self.latest_annotated_frame = result.display_image
             self.show_frame(result.display_image)
         reason_text = ", ".join(result.reason_codes) or "NORMAL"
+        if video_evidence:
+            reason_text = "VIDEO EVIDENCE; 360° COVERAGE UNCONFIRMED | " + reason_text
         geometry_components = result.geometry_components
         geometry_detail = (f"PITCH: {geometry_components.get('pitch', 0):.2f}   "
                            f"CONT: {geometry_components.get('continuity', 0):.2f}   "
@@ -1153,7 +1187,8 @@ class InspectionWindow(QWidget):
             f"REASON: {reason_text}\nLATENCY: {latency_ms:.1f} ms"
         )
         self.latency_top.setText(f"LATENCY:  {latency_ms:.0f} ms")
-        self.log.addItem(f"VIEW {result.status} | track={track_id} | angle={result.view_angle}° | score={result.anomaly_score:.3f}")
+        self.log.addItem(f"{'VIDEO' if video_evidence else 'VIEW'} {result.status} | track={track_id} | "
+                         f"angle={result.view_angle}° | score={result.anomaly_score:.3f}")
         if completed_part is not None:
             self._handle_completed_part(completed_part)
 

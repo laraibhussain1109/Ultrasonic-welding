@@ -81,7 +81,7 @@ and distance calibration finish before previous production assets are replaced.
 ## Capture and completion
 
 After the initial continuous fitting revolution, the first stopped image locks
-HOME without running defect inference. The next six moving/stopped transitions
+HOME without counting an inspection angle. The next six moving/stopped transitions
 are assigned 60°, 120°, 180°, 240°, 300°, and 360° in that order. Set
 `skip_initial_fit_rotation: false` in `config/models.json` only for machines
 without the separate initial fitting revolution; the first observed indexed
@@ -102,8 +102,11 @@ is reached, the `stationary_burst_window_ms` (350 ms) window ends, or confirmed
 rotation resumes. The last case selects only stationary frames already buffered,
 never the new moving frame. Blur, exposure, and glare quality thresholds still apply.
 
-The camera stream is used for capture; defect inference runs only on the selected
-still. Similar-looking fins never prevent a new stop from being counted. A long
+The camera stream supplies selected stills plus qualified supplementary video
+images. Inference runs on native images in its own worker; video defects can latch
+even when a rotation transition is missed. Unlabelled video results never count
+as angles or permit final PASS. See [camera recovery](camera_recovery.md).
+Localized coherent motion can recognize subtle changes in similar-looking fins. A long
 dwell cannot create multiple views of the same stop.
 
 Each side is queued independently while the preceding still is being processed.

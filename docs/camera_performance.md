@@ -2,8 +2,11 @@
 
 The production camera demonstrates 3840×2160 at 30 FPS in Windows Camera.
 The reported NeuroIris rate before this change was approximately 1.2 FPS.
-Those are operator observations, not raw OpenCV measurements. **Production
-OpenCV baseline and post-change FPS remain unmeasured.** The cloud has no
+Those are operator observations, not raw OpenCV measurements. A later production
+GUI shows RAW 2.0 FPS, READ 499.4 ms, INFER 0.0 ms and 1920×1080 YUY2 DSHOW.
+See [camera recovery](camera_recovery.md) for measured startup mode selection,
+exposure comparison and continuous inspection of subtle-motion footage.
+**Standalone raw OpenCV baseline and post-recovery FPS remain unmeasured.** The cloud has no
 physical camera and uses CPU-only PyTorch; synthetic tests cannot certify the
 Windows driver, USB link, exposure timing, mechanical stops or RTX 5070.
 
@@ -38,7 +41,7 @@ processing references; it does no ROI copy, motion, quality, inference or Qt wor
 
 A motion thread crops by reference, reduces the fin band to at most 320×64,
 converts that thumbnail to grayscale and applies the existing flow/difference
-thresholds. A separate quality thread checks only stopped, settled candidates
+thresholds plus localized corner tracking. A separate quality thread checks stopped, settled candidates and supplemental video
 at native ROI resolution. Candidate copies are shared by the pending quality
 check and burst. Quality futures never count as qualified until completed.
 Final selection uses the same sharpest-qualified-still rule in synchronous
@@ -93,10 +96,10 @@ resolution or format is not evidence of support for the requested combination.
 Unknown FOURCC remains unknown. Each probe runs in a separate process, with a
 timeout for unsupported formats that hang inside the driver.
 
-The first run leaves exposure at driver default. The second reproduces the
-production request for auto-exposure=0. Exposure values/accepted properties are
+The first run leaves exposure untouched. The second reproduces the previous
+production request for auto-exposure=0 for comparison. Exposure values/accepted properties are
 reported because backend-specific manual/default exposure can limit frame rate.
-This change does not alter the production exposure request or model calibration.
+Recovery no longer forces that setting; model calibration remains unchanged.
 If these two runs differ, inspect the camera's driver settings and measure again
 before choosing an operating mode.
 
@@ -113,7 +116,7 @@ cannot prove the camera is exposing fresh frames; verify with a moving target.
 Repeat the winning matched mode for a longer sample, for example:
 
 ```powershell
-python -m blower_inspection.camera_benchmark --backends DSHOW --formats MJPG --resolutions 3840x2160 --seconds 30 --auto-exposure 0 --output camera-raw-4k.json
+python -m blower_inspection.camera_benchmark --backends MSMF --formats MJPG --resolutions 3840x2160 --seconds 30 --output camera-raw-4k.json
 ```
 
 Use the existing **CAMERA FPS / RESOLUTION** control to select the desired native
@@ -159,7 +162,7 @@ The raw benchmark imports neither PyTorch nor Qt and does not require CUDA.
 ## 3. Audit physical six-stop capture, then the full GUI
 
 Start the diagnostic before the fitting revolution, using the same native ROI.
-Run the machine's existing fit/home plus six 60° stops, each with its one-second
+Wait for the diagnostic's “Camera ready” message, then run the machine's existing fit/home plus six 60° stops, each with its one-second
 pause:
 
 ```powershell
@@ -188,7 +191,7 @@ RESULT panel shows RAW, PROC and GUI rates, mean READ and INFER latency, dropped
 evidence, overwritten previews and actual resolution/compression/backend.
 Hover that panel or the FPS header for quality FPS/latency, motion latency,
 read p95, render latency and queue depth/peak details. PROC counts motion input
-frames; quality counts only stationary candidates. GUI counts frame updates,
+frames; quality counts stationary candidates and supplemental video. GUI counts frame updates,
 not monitor refreshes. INFER measures the entire production `inspect()` call,
 including PatchCore/registration/quality/geometry; it is not GPU kernel time.
 Rates use completed operations and wall-clock timestamps and decay during stalls.
@@ -207,7 +210,7 @@ confirm the unchanged ESP32 PASS/FAIL pulses on the physical station.
 The paired [cloud stage report](performance/camera-cloud-comparison.json) uses
 the same synthetic 4K still/native ROI, 30 iterations and one OpenCV thread:
 
-| Cloud CPU stage, mean ms | Previous path | Current path |
+| Cloud CPU stage, mean ms (initial throughput change) | Previous path | `92ba748` path |
 | --- | ---: | ---: |
 | ROI copy (standalone measurement) | 0.93 | 1.48 |
 | Motion preparation + flow | 12.37 | 21.78 |
@@ -236,5 +239,5 @@ ordering, bounded-byte/count overflow and reject behavior. Their camera is paced
 synthetic playback; no hardware FPS or production accuracy claim follows.
 
 ```powershell
-python -m pytest -q tests/test_camera_throughput.py tests/test_stationary_acquisition.py tests/test_stationary_hybrid.py tests/test_stationary_main_ui.py tests/test_app_source_contract.py tests/test_production_training_contract.py
+python -m pytest -q tests/test_camera_recovery.py tests/test_camera_throughput.py tests/test_stationary_acquisition.py tests/test_stationary_hybrid.py tests/test_stationary_main_ui.py tests/test_app_source_contract.py tests/test_production_training_contract.py
 ```

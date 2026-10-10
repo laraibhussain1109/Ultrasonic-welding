@@ -133,6 +133,40 @@ def test_invalid_stop_never_emits_pass_pulse(window):
     assert view.stats["failed"] == 1
 
 
+def test_video_inference_does_not_wait_for_a_rotation_event_or_emit_pass(window):
+    view, calls = window
+    for _frame in range(20):
+        view._handle_inspection_result(1, InspectionResult("PASS", .2, 0, 0, []), 15, video_evidence=True)
+    assert calls == [] and view.stats["inspected"] == 0
+    assert view.rotating_parts.view_progress(1) == (0, 0, 6)
+    assert "COVERAGE UNCONFIRMED" in view.last_result.text()
+    view._handle_inspection_result(1, InspectionResult("FAIL", 2, 300, .1, [],
+                                  candidate_sections=(3,)), 15, video_evidence=True)
+    assert calls == ["fail"] and view.rotating_parts.defect_sections(1) == (3,)
+    for angle in INSPECTION_ANGLES:
+        view._handle_inspection_result(1, InspectionResult("PASS", .1, 0, 0, [], view_angle=angle), 15)
+    assert "pass-pulse" not in calls and view.stats["failed"] == 1
+
+
+def test_video_dispatch_is_serial_and_required_stills_have_priority(window, monkeypatch):
+    from blower_inspection.stationary_workers import VideoEvidence
+    view, calls = window
+    image = np.random.default_rng(24).integers(40, 180, (40, 120, 3), dtype=np.uint8)
+    consumed, started = [], []
+    view.camera_worker = SimpleNamespace(take_video_evidence=lambda: consumed.append(1) or VideoEvidence(1, image, 0))
+    monkeypatch.setattr(view, "_start_inference_worker", lambda worker: started.append(worker))
+    view._dispatch_stationary_view()
+    assert len(started) == 1 and started[0].video_evidence and started[0].view_angle is None
+    view.stationary_queue.append((1, StationaryCapture(60, image, True, 100, burst_frames=3)))
+    view._dispatch_stationary_view()
+    assert len(started) == 1 and len(consumed) == 1 and len(view.stationary_queue) == 1
+    view.inference_worker = None
+    view._dispatch_stationary_view()
+    assert len(started) == 2 and started[1].view_angle == 60 and not started[1].video_evidence
+    assert len(consumed) == 1 and not calls
+    view.camera_worker = None
+
+
 def test_result_from_previous_inspection_session_is_discarded(window):
     view, calls = window
     class Signal:

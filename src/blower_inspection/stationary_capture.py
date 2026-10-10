@@ -6,6 +6,7 @@ Camera motion is evidence of moving/stopped transitions, not an encoder.
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import dataclass
 
 import cv2
@@ -53,6 +54,7 @@ class StationaryViewCapture:
         self.state = "WAITING FOR FIT ROTATION" if skip_fit_rotation else "WAITING FOR ROTATION"
         self._home = not skip_fit_rotation
         self._previous = None
+        self._motion_history = deque(maxlen=4)
         self._moving_frames = 0
         self._stopped_frames = 0
         self._motion_seen = False
@@ -75,15 +77,63 @@ class StationaryViewCapture:
     def _moving(self, current: np.ndarray) -> bool:
         if self._previous is None or current.shape != self._previous.shape:
             self._previous = current
+            self._motion_history.clear()
+            self._motion_history.append(current)
             return False
         before = self._previous
         self._previous = current
         # Global exposure drift alone must not invent a new stop.
         delta = current.astype(np.float32) - before.astype(np.float32)
         difference = float(np.mean(np.abs(delta - np.median(delta))))
-        flow = cv2.calcOpticalFlowFarneback(before, current, None, .5, 3, 15, 2, 5, 1.2, 0)
+        normalized = np.clip(current.astype(np.float32) - np.median(delta), 0, 255).astype(np.uint8)
+        anchor = self._motion_history[0]
+        self._motion_history.append(current)
+        if np.array_equal(before, normalized):
+            # Exact stills/uniform brightness drift need no optical flow. Keep
+            # the temporal baseline until a subtle step has fully stopped.
+            return self._localized_motion(anchor, current) if not np.array_equal(anchor, current) else False
+        flow = cv2.calcOpticalFlowFarneback(before, normalized, None, .5, 3, 15, 2, 5, 1.2, 0)
         movement = float(np.quantile(cv2.magnitude(flow[..., 0], flow[..., 1]), .80))
-        return difference >= self.motion_threshold or movement >= self.flow_threshold
+        # A blower may change only a small portion of its visible fin band. The
+        # old global 80th percentile misses that evidence. Follow corner tracks
+        # within individual axial sections, including a short temporal baseline
+        # so slow subpixel steps accumulate rather than being discarded.
+        return (difference >= self.motion_threshold or movement >= self.flow_threshold
+                or self._localized_motion(anchor, current))
+
+    def _localized_motion(self, before, current):
+        offset = np.median(current.astype(np.float32) - before.astype(np.float32))
+        normalized = np.clip(current.astype(np.float32) - offset, 0, 255).astype(np.uint8)
+        if np.array_equal(before, normalized):
+            return False
+        points = cv2.goodFeaturesToTrack(before, maxCorners=120, qualityLevel=.05, minDistance=4)
+        if points is None or len(points) < 4:
+            return False
+        following, status, error = cv2.calcOpticalFlowPyrLK(before, normalized, points, None,
+                                                          winSize=(15, 15), maxLevel=2)
+        if following is None:
+            return False
+        # Forward/backward agreement rejects disappearing highlights and bad
+        # matches. Brightness-only changes were removed before calculating flow.
+        back, reverse_status, _ = cv2.calcOpticalFlowPyrLK(normalized, before, following, None,
+                                                        winSize=(15, 15), maxLevel=2)
+        if back is None:
+            return False
+        keep = ((status.ravel() == 1) & (reverse_status.ravel() == 1)
+                & (error.ravel() < 12) & (np.linalg.norm((back - points).reshape(-1, 2), axis=1) < .5))
+        coordinates = points.reshape(-1, 2)[keep]
+        vectors = (following - points).reshape(-1, 2)[keep]
+        for section in range(6):
+            local = vectors[(coordinates[:, 0] >= section * before.shape[1] / 6)
+                            & (coordinates[:, 0] < (section + 1) * before.shape[1] / 6)]
+            if len(local) < 4:
+                continue
+            median = np.median(local, axis=0)
+            distance = float(np.linalg.norm(median))
+            coherent = np.mean(np.linalg.norm(local - median, axis=1) <= max(.15, distance * .5))
+            if distance >= self.flow_threshold and coherent >= .75:
+                return True
+        return False
 
     def _select(self) -> StationaryCapture:
         assert self._angle is not None and self._burst

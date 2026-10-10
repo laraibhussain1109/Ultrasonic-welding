@@ -23,12 +23,22 @@ def profile(frame, bounds, iterations=30, legacy=False, inspect=None):
     application = QApplication.instance() or QApplication([])
     roi = crop_bounds(frame, bounds)
     controller, quality = StationaryViewCapture(), FrameQualityAnalyzer()
+    previous = None
     def motion():
+        nonlocal previous
         if legacy:
             gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
             h, w = gray.shape
             band = gray[round(h * .18):max(round(h * .82), round(h * .18) + 1)]
             reduced = cv2.GaussianBlur(cv2.resize(band, (min(320, max(80, w)), 64), interpolation=cv2.INTER_AREA), (3, 3), 0)
+            before, previous = previous, reduced
+            if before is None:
+                return False
+            delta = reduced.astype(np.float32) - before.astype(np.float32)
+            difference = float(np.mean(np.abs(delta - np.median(delta))))
+            flow = cv2.calcOpticalFlowFarneback(before, reduced, None, .5, 3, 15, 2, 5, 1.2, 0)
+            movement = float(np.quantile(cv2.magnitude(flow[..., 0], flow[..., 1]), .80))
+            return difference >= controller.motion_threshold or movement >= controller.flow_threshold
         else:
             reduced = controller._motion_image(roi)
         return controller._moving(reduced)
