@@ -26,12 +26,21 @@ class StationaryCapture:
     burst_frames: int = 0
 
 
+def select_stationary_burst(angle, burst, minimum_burst_frames) -> StationaryCapture:
+    """Shared selection rule for synchronous and deferred native quality checks."""
+    eligible = [(frame, quality) for frame, quality in burst if quality.valid]
+    frame, quality = max(eligible or burst, key=lambda item: item[1].sharpness)
+    enough = len(eligible) >= minimum_burst_frames
+    reasons = (() if enough else tuple(dict.fromkeys(("INSUFFICIENT_STATIONARY_FRAMES",) + quality.reasons)))
+    return StationaryCapture(angle, frame.copy(), enough, quality.sharpness, reasons, len(burst))
+
+
 class StationaryViewCapture:
     def __init__(self, *, burst_frames: int = 15, settle_ms: int = 200,
                  motion_threshold: float = 2.5, flow_threshold: float = .35,
                  skip_fit_rotation: bool = True,
                  minimum_burst_frames: int = 3, burst_window_ms: int = 350,
-                 quality: FrameQualityAnalyzer | None = None) -> None:
+                 quality: FrameQualityAnalyzer | None = None, select_burst=None) -> None:
         self.burst_frames = min(30, max(10, burst_frames))
         self.minimum_burst_frames = min(self.burst_frames, max(2, minimum_burst_frames))
         self.burst_window_s = max(0, burst_window_ms) / 1000
@@ -40,6 +49,7 @@ class StationaryViewCapture:
         self.flow_threshold = flow_threshold
         self.skip_fit_rotation = skip_fit_rotation
         self.quality = quality or FrameQualityAnalyzer()
+        self.select_burst = select_burst or select_stationary_burst
         self.state = "WAITING FOR FIT ROTATION" if skip_fit_rotation else "WAITING FOR ROTATION"
         self._home = not skip_fit_rotation
         self._previous = None
@@ -54,11 +64,12 @@ class StationaryViewCapture:
 
     @staticmethod
     def _motion_image(frame: np.ndarray) -> np.ndarray:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
         # Use the fin band, excluding stationary background around the fixture.
-        h, w = gray.shape
-        gray = gray[round(h * .18):max(round(h * .82), round(h * .18) + 1)]
-        reduced = cv2.resize(gray, (min(320, max(80, w)), 64), interpolation=cv2.INTER_AREA)
+        h, w = frame.shape[:2]
+        band = frame[round(h * .18):max(round(h * .82), round(h * .18) + 1)]
+        reduced = cv2.resize(band, (min(320, max(80, w)), 64), interpolation=cv2.INTER_AREA)
+        if reduced.ndim == 3:
+            reduced = cv2.cvtColor(reduced, cv2.COLOR_BGR2GRAY)
         return cv2.GaussianBlur(reduced, (3, 3), 0)
 
     def _moving(self, current: np.ndarray) -> bool:
@@ -76,12 +87,7 @@ class StationaryViewCapture:
 
     def _select(self) -> StationaryCapture:
         assert self._angle is not None and self._burst
-        eligible = [(frame, quality) for frame, quality in self._burst if quality.valid]
-        frame, quality = max(eligible or self._burst, key=lambda item: item[1].sharpness)
-        enough = len(eligible) >= self.minimum_burst_frames
-        reasons = (() if enough else tuple(dict.fromkeys(("INSUFFICIENT_STATIONARY_FRAMES",) + quality.reasons)))
-        result = StationaryCapture(self._angle, frame.copy(), enough,
-                                   quality.sharpness, reasons, len(self._burst))
+        result = self.select_burst(self._angle, tuple(self._burst), self.minimum_burst_frames)
         self._burst.clear()
         self._angle = None
         self._burst_started_at = 0.0
@@ -130,7 +136,8 @@ class StationaryViewCapture:
         self.state = f"CAPTURING {self._angle}°"
         if not self._burst:
             self._burst_started_at = now
-        self._burst.append((frame.copy(), self.quality.analyze(frame)))
+        candidate = frame.copy()
+        self._burst.append((candidate, self.quality.analyze(candidate)))
         if len(self._burst) >= self.burst_frames or (
             now - self._burst_started_at >= self.burst_window_s
             and sum(quality.valid for _frame, quality in self._burst) >= self.minimum_burst_frames

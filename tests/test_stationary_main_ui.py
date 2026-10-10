@@ -218,6 +218,82 @@ def test_training_cannot_mutate_the_backend_during_inspection(window, monkeypatc
     assert view.train_worker is None
 
 
+def test_full_resolution_preview_is_resized_before_color_conversion(window, monkeypatch):
+    view, _calls = window
+    source = np.zeros((2160, 3840, 3), np.uint8)
+    converted = []
+    original = ui.cv2.cvtColor
+    def conversion(frame, *args, **kwargs):
+        converted.append(frame.shape)
+        return original(frame, *args, **kwargs)
+    monkeypatch.setattr(ui.cv2, "cvtColor", conversion)
+    view.show_frame(source)
+    assert converted and max(shape[1] for shape in converted) <= view.viewer.width()
+    assert max(shape[0] for shape in converted) <= view.viewer.height()
+    assert view.preview_meter.count == 1
+    assert source.shape == (2160, 3840, 3)
+
+
+def test_separate_stage_metrics_use_existing_panel_and_do_not_change_layout(window):
+    from blower_inspection.stationary_workers import CameraSnapshot
+    from blower_inspection.capture_performance import StageMeter
+    view, _calls = window
+    image = np.zeros((40, 120, 3), np.uint8)
+    meter = StageMeter().snapshot()
+    performance = dict(raw={**meter, "fps": 30, "mean_ms": 33.3}, processing={**meter, "fps": 29},
+                       quality=meter, motion=meter, evidence_dropped=0, preview_overwritten=7,
+                       format=dict(width=3840, height=2160, fourcc="MJPG", backend="DSHOW"))
+    view.camera_worker = SimpleNamespace(snapshot=lambda: CameraSnapshot(1, 0, image, "ROTATING", 30),
+                                         performance=lambda: performance)
+    view.inference_latency_ms = 75
+    try:
+        view._tick()
+        text = view.last_result.text()
+        for metric in ("RAW 30.0", "PROC 29.0", "GUI", "READ 33.3", "INFER 75.0", "DROP 0", "OVERWRITTEN 7", "3840x2160 MJPG DSHOW"):
+            assert metric in text
+        view._tick()
+        assert view.last_result.text().count("\nRAW ") == 1
+    finally:
+        view.camera_worker = None
+
+
+def test_evidence_queue_overflow_inhibits_inspection_without_dispatching_good_views(window, monkeypatch):
+    view, calls = window
+    image = np.zeros((40, 120, 3), np.uint8)
+    packet = StationaryCapture(60, image, True, 100)
+    for _ in range(view.stationary_queue.max_items):
+        view.stationary_queue.append((1, packet))
+    view.camera_worker = SimpleNamespace(snapshot=lambda: None, take_captures=lambda: [(1, packet)])
+    monkeypatch.setattr(view, "stop_camera", lambda: setattr(view, "inspection_running", False))
+    messages = []
+    monkeypatch.setattr(ui.QMessageBox, "critical", lambda *_args: messages.append(_args[-1]))
+    try:
+        view._process_live_frame()
+        assert calls == ["fail"] and view.status_badge.text() == "SYSTEM FAULT"
+        assert "queue full" in messages[0]
+        assert view.inference_worker is None
+    finally:
+        view.camera_worker = None
+
+
+def test_unlocked_tracking_keeps_existing_stationary_capture_fallback(window, monkeypatch):
+    from blower_inspection.stationary_workers import CameraSnapshot
+    import time
+    view, _calls = window
+    source = np.full((80, 200, 3), 100, np.uint8)
+    snapshot = CameraSnapshot(1, time.monotonic(), source, "STARTING CAMERA", 30)
+    view.camera_worker = SimpleNamespace(snapshot=lambda: snapshot, take_captures=lambda: [])
+    view.live_roi_bounds = None
+    view.part_detector = SimpleNamespace(track=lambda _frame: [TrackedPart(1, (0, 0, 120, 40), .99)])
+    offered = []
+    monkeypatch.setattr(view, "_capture_stationary_views", lambda frame, _tracks: offered.append(frame))
+    try:
+        view._process_live_frame()
+        assert len(offered) == 1 and offered[0] is source
+    finally:
+        view.camera_worker = None
+
+
 def test_training_button_uses_a_separate_production_backend(window, monkeypatch):
     view, _calls = window
     view.inspection_running = False

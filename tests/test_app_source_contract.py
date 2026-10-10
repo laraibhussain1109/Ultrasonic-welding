@@ -29,9 +29,10 @@ def test_app_exposes_visual_changenet_export_before_calibration():
 def test_app_validates_tao_readiness_before_opening_camera():
     source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
     validation = source.index("self.inspector.validate_ready(model)")
-    camera_open = source.index("self.camera.open()", validation)
+    camera_open = source.index("worker.start()", validation)
 
     assert validation < camera_open
+    assert "self.camera.open()" not in source
     assert '"TAO model not ready"' in source
 
 
@@ -39,7 +40,7 @@ def test_app_does_not_replace_the_inspector_after_readiness_validation():
     source = Path("src/blower_inspection/app.py").read_text(encoding="utf-8")
     start = source.index("def start_inspection")
     validation = source.index("self.inspector.validate_ready(model)", start)
-    camera_open = source.index("self.camera.open()", validation)
+    camera_open = source.index("worker.start()", validation)
 
     assert "self._apply_selected_camera_settings()" not in source[validation:camera_open]
 

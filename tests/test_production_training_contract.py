@@ -205,6 +205,11 @@ def test_original_desktop_startup_accepts_imported_artifacts_before_opening_came
     window = ui.InspectionWindow(User("admin", "admin"))
     opened, errors = [], []
     monkeypatch.setattr(ui.USBCamera, "open", lambda _camera: opened.append(True))
+    def camera_frame(_camera):
+        import time
+        time.sleep(.01)
+        return np.zeros((80, 240, 3), dtype=np.uint8)
+    monkeypatch.setattr(ui.USBCamera, "read", camera_frame)
     monkeypatch.setattr(window, "_confirm_and_lock_roi", lambda _model: False)
     monkeypatch.setattr(ui.QMessageBox, "critical", lambda *_args: errors.append(_args[2]))
     try:

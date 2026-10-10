@@ -105,6 +105,11 @@ import rather than a filename change.
 
 ## Inspection and diagnostics
 
+For low camera FPS, start with the raw DirectShow/Media Foundation benchmark,
+then the separate stage and six-stop audits in
+[Windows camera performance](docs/camera_performance.md). The existing GUI shows
+separate acquisition, processing and preview rates and read/inference latency.
+
 ```powershell
 python -m blower_inspection.cli doctor
 python -m blower_inspection.cli list-models
