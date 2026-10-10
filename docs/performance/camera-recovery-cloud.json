@@ -1,0 +1,90 @@
+{
+  "source": "synthetic 4K still; cloud CPU; one OpenCV thread; no physical camera or trained model",
+  "before": {
+    "pipeline": "legacy serial stages",
+    "image_resolution": [
+      3840,
+      2160
+    ],
+    "roi": [
+      307,
+      799,
+      2957,
+      475
+    ],
+    "iterations": 30,
+    "opencv_threads": 1,
+    "stages": {
+      "roi_copy": {
+        "mean_ms": 0.5806426032601545,
+        "p95_ms": 0.9917938557919113
+      },
+      "motion": {
+        "mean_ms": 9.199208698313063,
+        "p95_ms": 12.51668034819886
+      },
+      "quality": {
+        "mean_ms": 39.40700996899977,
+        "p95_ms": 50.84625672316178
+      },
+      "preview_qt": {
+        "mean_ms": 55.35187263546201,
+        "p95_ms": 79.6420853177551
+      }
+    },
+    "source": "synthetic; no physical camera",
+    "inference_device": "not measured (no production model supplied)"
+  },
+  "after": {
+    "pipeline": "separate stages; bounded threaded acquisition",
+    "image_resolution": [
+      3840,
+      2160
+    ],
+    "roi": [
+      307,
+      799,
+      2957,
+      475
+    ],
+    "iterations": 30,
+    "opencv_threads": 1,
+    "stages": {
+      "roi_copy": {
+        "mean_ms": 2.5496463970436403,
+        "p95_ms": 16.73515232978384
+      },
+      "motion": {
+        "mean_ms": 4.351223434787244,
+        "p95_ms": 4.997822828590869
+      },
+      "quality": {
+        "mean_ms": 36.72346973714108,
+        "p95_ms": 46.17997890454717
+      },
+      "preview_qt": {
+        "mean_ms": 10.32358206769762,
+        "p95_ms": 13.79790761566255
+      }
+    },
+    "source": "synthetic; no physical camera",
+    "inference_device": "not measured (no production model supplied)"
+  },
+  "production_observation_before": {
+    "source": "user screenshot of production GUI",
+    "resolution": [
+      1920,
+      1080
+    ],
+    "fourcc": "YUY2",
+    "backend": "DSHOW",
+    "raw_fps": 2.0,
+    "processing_fps": 2.0,
+    "gui_fps": 2.0,
+    "read_mean_ms": 499.4,
+    "inference_ms": 0.0
+  },
+  "production_after": {
+    "status": "not measured; physical Windows camera verification required"
+  }
+}

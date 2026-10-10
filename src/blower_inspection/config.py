@@ -116,6 +116,16 @@ class PartModelConfig:
     hard_good_dir: Path | None = None
     patchcore_model_file: Path | None = None
     runtime_storage_mode: str = "memory"
+    stationary_six_view_capture: bool = True
+    stationary_settle_ms: int = 200
+    stationary_min_burst_frames: int = 3
+    stationary_burst_window_ms: int = 350
+    stationary_motion_threshold: float = 2.5
+    stationary_flow_threshold: float = 0.35
+    skip_initial_fit_rotation: bool = True
+    heatmap_tolerance_percent: float = 5.0
+    scratch_max_width_px: float = 2.0
+    scratch_min_aspect: float = 8.0
 
 
 class ModelRegistry:
@@ -150,6 +160,7 @@ class ModelRegistry:
         camera_fps: int | None = None,
         yolo_model_path: str | Path | None = None,
         model_file: str | Path | None = None,
+        patchcore_settings: dict | None = None,
     ) -> PartModelConfig:
         for entry in self._data.get("models", []):
             if entry.get("id") != model_id:
@@ -166,6 +177,15 @@ class ModelRegistry:
                 entry["yolo_model_path"] = str(yolo_model_path)
             if model_file is not None:
                 entry["model_file"] = str(model_file)
+            if patchcore_settings is not None:
+                allowed = {"normal_image_dir", "image_size", "patchcore_embedding_layers", "patchcore_memory_bank_size",
+                           "patchcore_coreset_ratio", "roi_padding_ratio", "patchcore_model_file", "patchcore_calibration_file",
+                           "training_min_sharpness", "inference_min_sharpness", "max_saturation_ratio", "yolo_confidence",
+                           "production_algorithm", "algorithm", "patchcore_primary", "padim_enabled", "distillation_enabled"}
+                unknown = set(patchcore_settings) - allowed
+                if unknown:
+                    raise ValueError(f"Unsupported PatchCore settings: {sorted(unknown)}")
+                entry.update(patchcore_settings)
             self._save()
             self._data = self._load()
             return self.get(model_id)
@@ -286,6 +306,16 @@ class ModelRegistry:
             hard_good_dir=Path(entry["hard_good_dir"]) if entry.get("hard_good_dir") else None,
             patchcore_model_file=Path(entry["patchcore_model_file"]) if entry.get("patchcore_model_file") else None,
             runtime_storage_mode=str(entry.get("runtime_storage_mode", "memory")),
+            stationary_six_view_capture=bool(entry.get("stationary_six_view_capture", True)),
+            stationary_settle_ms=max(0, int(entry.get("stationary_settle_ms", 200))),
+            stationary_min_burst_frames=max(2, int(entry.get("stationary_min_burst_frames", 3))),
+            stationary_burst_window_ms=max(0, int(entry.get("stationary_burst_window_ms", 350))),
+            stationary_motion_threshold=max(.1, float(entry.get("stationary_motion_threshold", 2.5))),
+            stationary_flow_threshold=max(.01, float(entry.get("stationary_flow_threshold", .35))),
+            skip_initial_fit_rotation=bool(entry.get("skip_initial_fit_rotation", True)),
+            heatmap_tolerance_percent=min(100., max(0., float(entry.get("heatmap_tolerance_percent", 5.)))),
+            scratch_max_width_px=max(0., float(entry.get("scratch_max_width_px", 2.))),
+            scratch_min_aspect=max(1., float(entry.get("scratch_min_aspect", 8.))),
         )
 
 

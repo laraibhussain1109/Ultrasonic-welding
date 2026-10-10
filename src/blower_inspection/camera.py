@@ -5,13 +5,20 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 import sys
+import os
+import threading
 
 import cv2
 import numpy as np
 
+from .camera_modes import choose_mode, configure_capture
+
 
 def _preferred_capture_backend() -> int:
     """Return an OpenCV backend suitable for the current operating system."""
+    requested = os.environ.get("NEUROIRIS_CAMERA_BACKEND", "").upper()
+    if requested:
+        return {"DSHOW": cv2.CAP_DSHOW, "MSMF": cv2.CAP_MSMF, "ANY": cv2.CAP_ANY}[requested]
     if sys.platform.startswith("win") and hasattr(cv2, "CAP_DSHOW"):
         return cv2.CAP_DSHOW
     return cv2.CAP_ANY
@@ -113,7 +120,7 @@ def default_component_roi_bounds(image: np.ndarray) -> tuple[int, int, int, int]
     return roi_bounds_from_ratios(image, DEFAULT_COMPONENT_ROI_RATIOS)
 
 
-def crop_bounds(image: np.ndarray, bounds: tuple[int, int, int, int]) -> np.ndarray:
+def crop_bounds(image: np.ndarray, bounds: tuple[int, int, int, int], *, copy: bool = True) -> np.ndarray:
     """Crop ``image`` to already-computed ROI bounds."""
     height, width = image.shape[:2]
     x, y, w, h = bounds
@@ -121,7 +128,8 @@ def crop_bounds(image: np.ndarray, bounds: tuple[int, int, int, int]) -> np.ndar
     y0 = max(0, min(height - 1, int(y)))
     x1 = max(x0 + 1, min(width, x0 + int(w)))
     y1 = max(y0 + 1, min(height, y0 + int(h)))
-    return image[y0:y1, x0:x1].copy()
+    roi = image[y0:y1, x0:x1]
+    return roi.copy() if copy else roi
 
 
 def component_roi_bounds(
@@ -278,45 +286,79 @@ class USBCamera:
         self.width = width
         self.height = height
         self.fps = fps
+        self.requested_size = (width, height)
         self.capture: cv2.VideoCapture | None = None
+        self._owner: int | None = None
+        self.format_info: dict = {}
+        self.property_set_accepted: dict = {}
+
+    def _check_owner(self) -> None:
+        if self._owner is not None and self._owner != threading.get_ident():
+            raise RuntimeError("Camera open/read/release must use the same acquisition thread")
 
     def open(self) -> None:
-        self.capture = cv2.VideoCapture(self.index, _preferred_capture_backend())
+        self._check_owner()
+        if self.capture is not None:
+            return
+        self._owner = threading.get_ident()
+        self.property_set_accepted = {}
+        backend = _preferred_capture_backend()
+        compression = os.environ.get("NEUROIRIS_CAMERA_FOURCC", "MJPG").upper()
+        exposure = os.environ.get("NEUROIRIS_CAMERA_AUTO_EXPOSURE")
+        exposure = float(exposure) if exposure is not None else None
+        probes, selected = [], None
+        if sys.platform.startswith("win") and os.environ.get("NEUROIRIS_CAMERA_AUTOSELECT", "1") != "0":
+            selected, probes = choose_mode(self.index, *self.requested_size, self.fps, exposure)
+            backend = {"DSHOW": cv2.CAP_DSHOW, "MSMF": cv2.CAP_MSMF, "ANY": cv2.CAP_ANY}[selected["probe_backend"]]
+            compression = selected["probe_fourcc"]
+            exposure = selected["probe_auto_exposure"]
+        self.capture = cv2.VideoCapture(self.index, backend)
         if not self.capture.isOpened():
             raise RuntimeError(f"Unable to open camera index {self.index}")
-        if hasattr(cv2, "CAP_PROP_FOURCC"):
-            self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        if hasattr(cv2, "CAP_PROP_HW_ACCELERATION") and hasattr(cv2, "VIDEO_ACCELERATION_ANY"):
-            self.capture.set(cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY)
-        self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-        self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-        self.capture.set(cv2.CAP_PROP_FPS, self.fps)
-        if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
-            self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        self.capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0)
+        self.property_set_accepted = configure_capture(self.capture, *self.requested_size, self.fps,
+                                                       compression, exposure)
         actual_width = int(round(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH)))
         actual_height = int(round(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-        actual_fps = int(round(self.capture.get(cv2.CAP_PROP_FPS)))
+        reported_fps = self.capture.get(cv2.CAP_PROP_FPS)
+        actual_fps = int(round(reported_fps))
         if actual_width > 0:
             self.width = actual_width
         if actual_height > 0:
             self.height = actual_height
         if actual_fps > 0:
             self.fps = actual_fps
+        code = int(self.capture.get(cv2.CAP_PROP_FOURCC))
+        fourcc = "".join(chr((code >> (8 * i)) & 255) for i in range(4)).strip("\x00") or "unknown"
+        self.format_info = {"backend": self.capture.getBackendName(), "fourcc": fourcc,
+                            "width": self.width, "height": self.height,
+                            "reported_fps": reported_fps if reported_fps > 0 else None,
+                            "property_set_accepted": dict(self.property_set_accepted),
+                            "exposure": self.capture.get(cv2.CAP_PROP_EXPOSURE),
+                            "auto_exposure": self.capture.get(cv2.CAP_PROP_AUTO_EXPOSURE),
+                            "mode_probes": probes,
+                            "startup_delivered_fps": selected["delivered_fps"] if selected else None}
 
     def read(self) -> np.ndarray:
+        self._check_owner()
         if self.capture is None:
             self.open()
         assert self.capture is not None
         ok, frame = self.capture.read()
         if not ok or frame is None:
             raise RuntimeError("Camera frame capture failed")
+        if (frame.shape[1], frame.shape[0]) != self.requested_size:
+            raise RuntimeError(f"Camera reopened at {frame.shape[1]}x{frame.shape[0]}, expected "
+                               f"{self.requested_size[0]}x{self.requested_size[1]}; inspection inhibited")
+        self.width, self.height = frame.shape[1], frame.shape[0]
+        self.format_info.update(width=self.width, height=self.height)
         return frame
 
     def close(self) -> None:
+        self._check_owner()
         if self.capture is not None:
             self.capture.release()
             self.capture = None
+        self._owner = None
 
 
 def save_capture(image: np.ndarray, directory: str | Path, prefix: str = "capture") -> Path:

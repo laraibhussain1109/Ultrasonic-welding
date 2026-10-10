@@ -47,6 +47,11 @@ class InspectionResult:
     latencies_ms: dict[str, float] = field(default_factory=dict)
     geometry_components: dict[str, float] = field(default_factory=dict)
     candidate_sections: tuple[int, ...] = field(default_factory=tuple)
+    view_angle: int | None = None
+    raw_heatmap: np.ndarray | None = None
+    filtered_anomaly_mask: np.ndarray | None = None
+    valid_area_px: int = 0
+    anomaly_percentage: float = 0.0
 
     @property
     def is_pass(self) -> bool:
@@ -171,6 +176,15 @@ def smooth_reflection_mask(image: np.ndarray, output_shape: tuple[int, int]) -> 
     mean_sq = cv2.GaussianBlur(gray.astype(np.float32) ** 2, (0, 0), sigmaX=7.0)
     local_std = np.sqrt(np.maximum(mean_sq - mean**2, 0.0))
     glare = (mean >= 210.0) & (local_std <= 12.0)
+    # A smooth core identifies a broad reflection. Include the bright region
+    # connected to that core, since its sharp boundary otherwise resembles a
+    # broken fin. Isolated thin white defects have no smooth core and remain
+    # inspectable, even if they are brighter than the reflection.
+    count, labels, _stats, _centers = cv2.connectedComponentsWithStats((gray >= 210).astype(np.uint8), 8)
+    touching = np.unique(labels[glare])
+    touching = touching[touching != 0]
+    if touching.size:
+        glare |= np.isin(labels, touching)
     return cv2.dilate(glare.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
 
 
@@ -232,7 +246,12 @@ def broken_fin_mask(image: np.ndarray, output_shape: tuple[int, int]) -> np.ndar
     # Normal blower geometry creates repeated interruptions at the same x
     # coordinate across many fins. A real isolated broken fin affects only one
     # or two horizontal edge rows, so remove columns with repeated gaps.
-    repeated_gap_columns = np.count_nonzero(gaps, axis=0) >= max(3, int(height * 0.025))
+    # Count separate interrupted fins, rather than their edge pixels. A single
+    # break has upper and lower gradient edges spanning four or more rows; the
+    # former row-count threshold discarded that real break as repeated texture.
+    grouped = cv2.morphologyEx(gaps.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((3, 1), np.uint8)).astype(bool)
+    starts = grouped & ~np.vstack((np.zeros((1, width), bool), grouped[:-1]))
+    repeated_gap_columns = np.count_nonzero(starts, axis=0) >= 3
     repeated_gap_columns = cv2.dilate(
         repeated_gap_columns.astype(np.uint8)[None, :],
         cv2.getStructuringElement(cv2.MORPH_RECT, (max(3, width // 200), 1)),
@@ -248,6 +267,7 @@ def broken_fin_mask(image: np.ndarray, output_shape: tuple[int, int]) -> np.ndar
         cv2.getStructuringElement(cv2.MORPH_RECT, (max(3, width // 160), 1)),
     )[0].astype(bool)
     gaps[:, rib_columns] = False
+    gaps &= ~smooth_reflection_mask(image, gray.shape)
 
     count, labels, stats, _centroids = cv2.connectedComponentsWithStats(gaps.astype(np.uint8), 8)
     confirmed = np.zeros_like(gaps)

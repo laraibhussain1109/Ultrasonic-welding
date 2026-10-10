@@ -1,0 +1,69 @@
+{
+  "source": "synthetic 4K still; cloud CPU; one OpenCV thread; no physical camera or trained model",
+  "before": {
+    "pipeline": "legacy serial stages",
+    "image_resolution": [
+      3840,
+      2160
+    ],
+    "roi": [
+      307,
+      799,
+      2957,
+      475
+    ],
+    "iterations": 30,
+    "opencv_threads": 1,
+    "stages": {
+      "roi_copy": {
+        "mean_ms": 0.9293515720249464,
+        "p95_ms": 2.085309731774032
+      },
+      "motion": {
+        "mean_ms": 12.374123701980958,
+        "p95_ms": 16.225308223511085
+      },
+      "quality": {
+        "mean_ms": 68.73459669877775,
+        "p95_ms": 91.39807204483074
+      },
+      "preview_qt": {
+        "mean_ms": 110.61723320550907,
+        "p95_ms": 131.9707331509562
+      }
+    }
+  },
+  "after": {
+    "pipeline": "separate stages; bounded threaded acquisition",
+    "image_resolution": [
+      3840,
+      2160
+    ],
+    "roi": [
+      307,
+      799,
+      2957,
+      475
+    ],
+    "iterations": 30,
+    "opencv_threads": 1,
+    "stages": {
+      "roi_copy": {
+        "mean_ms": 1.4835799966628354,
+        "p95_ms": 4.377105424646285
+      },
+      "motion": {
+        "mean_ms": 21.78354682594848,
+        "p95_ms": 28.934144813683808
+      },
+      "quality": {
+        "mean_ms": 55.769976699957624,
+        "p95_ms": 65.58941667608451
+      },
+      "preview_qt": {
+        "mean_ms": 7.360385133263965,
+        "p95_ms": 9.182822160073556
+      }
+    }
+  }
+}
